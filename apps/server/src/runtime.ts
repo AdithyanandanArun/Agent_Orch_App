@@ -1,5 +1,5 @@
 import { existsSync, statSync } from 'node:fs';
-import type { AdapterEvent, Approval, Message, Session, ToolActivity, ToolCall } from '@relay/contracts';
+import type { AdapterEvent, Approval, Message, ProviderSkill, Session, ToolActivity, ToolCall } from '@relay/contracts';
 import type { Hub } from './hub.ts';
 import type { Store } from './store.ts';
 import type { TaskService } from './tasks.ts';
@@ -33,10 +33,11 @@ interface ActiveRun {
   baseOutput: number;
   baseCost: number | null;
   taskId: string | null;
+  skills: ProviderSkill[];
   promise: Promise<void>;
 }
 
-export interface StartOptions { taskId?: string; userMessage?: { content: string; kind?: string } }
+export interface StartOptions { taskId?: string; userMessage?: { content: string; kind?: string }; skills?: ProviderSkill[] }
 
 const MAX_TOOL_CHARS = 20_000;
 const MAX_APPROVAL_INPUT_CHARS = 20_000;
@@ -48,7 +49,7 @@ export class SessionRuntime {
 
   constructor(
     private readonly store: Store, private readonly hub: Hub, private readonly providers: ProviderRuntime, private readonly tasks: TaskService,
-    private readonly log: Logger, options: RuntimeOptions = {},
+    private readonly log: Logger, options: RuntimeOptions = {}, private readonly validateSession?: (session: Session) => void,
   ) {
     // Covers the supported adapters' interrupt grace and escalating process shutdown.
     this.abortGraceMs = options.abortGraceMs ?? 30_000;
@@ -71,13 +72,14 @@ export class SessionRuntime {
     if (!session) throw notFound('Session not found');
     if (this.active.has(sessionId) || session.status === 'running' || session.status === 'waiting') throw conflict('Session already has an active run or provider cleanup is still in progress');
     if (!existsSync(session.worktreePath) || !statSync(session.worktreePath).isDirectory()) throw conflict('The session worktree no longer exists on disk');
+    this.validateSession?.(session);
 
     const handoffs = this.store.unconsumedHandoffs(sessionId);
     const prompt = this.composePrompt(handoffs, content);
     const run: ActiveRun = {
       id: newId('run'), startedAt: nowIso(), tick: performance.now(), tools: new Map(), activityTimer: null,
       sessionId, controller: new AbortController(), closed: false, cleanupPending: false, approvals: new Map(), stream: null, flushTimer: null, consumedHandoffs: handoffs.map((h) => h.id), firstEvent: false,
-      baseInput: session.inputTokens, baseOutput: session.outputTokens, baseCost: session.costUsd, taskId: options.taskId ?? null, promise: Promise.resolve(),
+      baseInput: session.inputTokens, baseOutput: session.outputTokens, baseCost: session.costUsd, taskId: options.taskId ?? null, skills: options.skills ?? [], promise: Promise.resolve(),
     };
     this.store.tx(() => {
       const userMessage = this.store.insertMessage({ sessionId, role: 'user', content: options.userMessage?.content ?? content, kind: options.userMessage?.kind ?? null, runId: run.id });
@@ -106,7 +108,7 @@ export class SessionRuntime {
       const adapter = this.providers.createAdapter(startSession.provider);
       const session = this.store.getSession(run.sessionId) ?? startSession;
       const adapterRun = Promise.resolve().then(() => adapter.run({
-        session, prompt, signal: run.controller.signal, settings: this.store.getSettings(),
+        session, prompt, skills: run.skills, signal: run.controller.signal, settings: this.store.getSettings(),
         onEvent: (event) => this.handleEvent(run, event),
         requestApproval: (request) => this.requestApproval(run, request),
       }));

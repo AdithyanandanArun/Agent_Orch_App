@@ -15,7 +15,8 @@ import type { HandoffService } from './handoffs.ts';
 import type { WorkspaceService } from './workspace.ts';
 import type { ServerConfig } from './config.ts';
 import type { TerminalManager } from './terminal.ts';
-import { HttpError, badRequest, notFound } from './util.ts';
+import { HttpError, badRequest, conflict, notFound } from './util.ts';
+import { resolveRunConfig } from './session-config.ts';
 
 export interface Services {
   config: ServerConfig; store: Store; hub: Hub; workspace: WorkspaceService; runtime: SessionRuntime; tasks: TaskService; handoffs: HandoffService;
@@ -158,10 +159,28 @@ export function buildRouter(s: Services) {
     const query = parse(MessagesQuery, Object.fromEntries(ctx.url.searchParams));
     return s.store.listMessages(id, { limit: query.limit, beforeId: query.before });
   });
+  add('GET', '/api/sessions/:id/catalog', (ctx) => {
+    const session = s.store.getSession(param(ctx, 'id'));
+    if (!session) throw notFound('Session not found');
+    return s.providers.catalog(session, ctx.url.searchParams.get('refresh') === 'true');
+  });
   add('POST', '/api/sessions/:id/messages', async (ctx) => {
     const id = param(ctx, 'id');
-    const { content } = await ctx.body(SendMessageSchema);
-    s.runtime.start(id, content);
+    const { content, skills: selected } = await ctx.body(SendMessageSchema);
+    const session = s.store.getSession(id);
+    if (!session) throw notFound('Session not found');
+    if (s.runtime.isActive(id)) throw conflict('Session already has an active run or provider cleanup is still in progress');
+    const catalog = selected?.length ? await s.providers.catalog(session, true) : null;
+    const skills = [...new Set(selected ?? [])].map((key) => {
+      const skill = catalog?.skills.find((row) => row.id === key && row.enabled);
+      if (!skill) throw badRequest('A selected skill is no longer available. Refresh the skill picker and select it again.');
+      return skill;
+    });
+    if (session.provider === 'claude' && skills.length > 1) throw badRequest('Claude supports one explicitly selected skill per message.');
+    const latest = s.store.getSession(id);
+    if (!latest) throw notFound('Session not found');
+    if (latest.provider !== session.provider || latest.model !== session.model || latest.worktreePath !== session.worktreePath) throw conflict('Session settings changed while loading skills. Send the message again.');
+    s.runtime.start(id, content, { skills });
     return new Reply(202, { accepted: true });
   });
   add('POST', '/api/sessions/:id/interrupt', (ctx) => {
@@ -185,8 +204,17 @@ export function buildRouter(s: Services) {
 
   add('GET', '/api/settings', () => s.store.getSettings());
   add('PATCH', '/api/settings', async (ctx) => {
-    const patch = await ctx.body(SettingsPatch);
+    let patch = await ctx.body(SettingsPatch);
     const before = s.store.getSettings();
+    const proposed = { ...before, ...patch };
+    const selectedModelKey = proposed.defaultProvider === 'codex' ? 'defaultCodexModel' : 'defaultClaudeModel';
+    if (patch.defaultProvider !== undefined || patch[selectedModelKey] !== undefined || patch.defaultEffort !== undefined || patch.defaultPolicy !== undefined || patch.defaultServiceTier !== undefined) {
+      const resolved = resolveRunConfig(s.providers.cached()?.find((row) => row.id === proposed.defaultProvider), {
+        provider: proposed.defaultProvider, model: proposed[selectedModelKey], effort: proposed.defaultEffort,
+        policy: proposed.defaultPolicy, serviceTier: proposed.defaultServiceTier,
+      }, { effort: patch.defaultEffort !== undefined, policy: patch.defaultPolicy !== undefined, serviceTier: patch.defaultServiceTier !== undefined });
+      patch = { ...patch, defaultEffort: resolved.effort, defaultPolicy: resolved.policy, defaultServiceTier: resolved.serviceTier };
+    }
     const next = s.store.tx(() => {
       const updated = s.store.updateSettings(patch);
       s.store.recordEvent({ type: 'settings.updated', summary: 'Settings updated', payload: { fields: Object.keys(patch) } });

@@ -2,19 +2,21 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { CreateProjectSchema, CreateSessionSchema, UpdateSessionSchema } from '@relay/contracts';
-import type { Project, Session } from '@relay/contracts';
+import type { Project, ProviderInfo, Session } from '@relay/contracts';
 import type { z } from 'zod';
 import { addWorktree, repoInfo } from './git.ts';
 import type { RuntimeLike } from './app-types.ts';
 import type { Store } from './store.ts';
 import { badRequest, conflict, newId, notFound, slugify, unprocessable } from './util.ts';
+import { resolveRunConfig } from './session-config.ts';
 
 type CreateProject = z.infer<typeof CreateProjectSchema>;
 type CreateSession = z.infer<typeof CreateSessionSchema>;
 
 /** Project and session lifecycle: canonical paths, worktree isolation, archival. */
 export class WorkspaceService {
-  constructor(private readonly store: Store, private readonly dataDir: string, private readonly runtime: RuntimeLike) {}
+  constructor(private readonly store: Store, private readonly dataDir: string, private readonly runtime: RuntimeLike,
+    private readonly getProviders: () => ProviderInfo[] | null = () => null) {}
 
   async createProject(input: CreateProject): Promise<{ project: Project; created: boolean }> {
     let requested = input.path;
@@ -57,8 +59,10 @@ export class WorkspaceService {
     const provider = input.provider ?? settings.defaultProvider;
     const model = input.model ?? (provider === 'codex' ? settings.defaultCodexModel : settings.defaultClaudeModel);
     const name = input.name ?? `Session ${this.store.listSessions(project.id).length + 1}`;
-    const effort = input.effort ?? settings.defaultEffort;
-    const policy = input.policy ?? settings.defaultPolicy;
+    const { effort, policy, serviceTier } = resolveRunConfig(this.getProviders()?.find((row) => row.id === provider), {
+      provider, model, effort: input.effort ?? settings.defaultEffort, policy: input.policy ?? settings.defaultPolicy,
+      serviceTier: input.serviceTier ?? settings.defaultServiceTier ?? 'standard',
+    }, { effort: input.effort !== undefined, policy: input.policy !== undefined, serviceTier: input.serviceTier !== undefined });
     const isolated = input.isolated ?? settings.defaultIsolated;
     const id = newId('ses');
     let worktreePath = project.path;
@@ -76,7 +80,7 @@ export class WorkspaceService {
       branch = info.branch;
     }
     return this.store.tx(() => {
-      const session = this.store.insertSession({ id, projectId: project.id, name, provider, model, effort, policy, isolated, worktreePath, branch });
+      const session = this.store.insertSession({ id, projectId: project.id, name, provider, model, effort, policy, serviceTier, isolated, worktreePath, branch });
       this.store.recordEvent({ projectId: project.id, sessionId: id, type: 'session.created', summary: `Session created: ${session.name}`, payload: { provider: session.provider, model: session.model, isolated: session.isolated, branch } });
       return session;
     });
@@ -85,7 +89,7 @@ export class WorkspaceService {
   updateSession(id: string, patch: z.infer<typeof UpdateSessionSchema>): Session {
     const session = this.store.getSession(id);
     if (!session) throw notFound('Session not found');
-    const changingRun = (['provider', 'model', 'effort', 'policy'] as const).some((key) => patch[key] !== undefined && patch[key] !== session[key]);
+    const changingRun = (['provider', 'model', 'effort', 'policy', 'serviceTier'] as const).some((key) => patch[key] !== undefined && patch[key] !== session[key]);
     if (changingRun && (this.runtime.isActive(id) || session.status === 'running' || session.status === 'waiting')) {
       throw conflict('Wait for this run to finish or interrupt it before changing its model or effort');
     }
@@ -93,6 +97,12 @@ export class WorkspaceService {
       if (session.providerSessionId) throw conflict('This conversation belongs to its current provider. Start a new session to use another provider.');
       const settings = this.store.getSettings();
       patch = { ...patch, model: patch.model ?? (patch.provider === 'codex' ? settings.defaultCodexModel : settings.defaultClaudeModel) };
+    }
+    if (changingRun) {
+      const proposed = { ...session, ...patch };
+      const resolved = resolveRunConfig(this.getProviders()?.find((row) => row.id === proposed.provider), proposed,
+        { effort: patch.effort !== undefined, policy: patch.policy !== undefined, serviceTier: patch.serviceTier !== undefined });
+      patch = { ...patch, effort: resolved.effort, policy: resolved.policy, serviceTier: resolved.serviceTier };
     }
     const changes = Object.fromEntries(Object.entries(patch).filter(([key, value]) => value !== undefined && value !== session[key as keyof Session]));
     if (!Object.keys(changes).length) return session;

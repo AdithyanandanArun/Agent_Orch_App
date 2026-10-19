@@ -1,4 +1,4 @@
-import type { AppSettings, Provider, ProviderInfo } from '@relay/contracts';
+import type { AppSettings, Provider, ProviderCatalog, ProviderInfo, Session } from '@relay/contracts';
 import type { Logger, ProviderRuntime } from './types.ts';
 import { errorMessage } from './util.ts';
 
@@ -14,6 +14,8 @@ export class ProviderService {
   private cache: ProviderInfo[] | null = null;
   private inflight: Promise<ProviderInfo[]> | null = null;
   private generation = 0;
+  private readonly catalogs = new Map<string, { expires: number; value: ProviderCatalog }>();
+  private readonly catalogInflight = new Map<string, Promise<ProviderCatalog>>();
 
   constructor(private readonly providers: ProviderRuntime, private readonly getSettings: () => AppSettings, private readonly log: Logger) {}
 
@@ -49,6 +51,8 @@ export class ProviderService {
 
   invalidate(): void {
     this.cache = null;
+    this.catalogs.clear();
+    this.catalogInflight.clear();
     this.generation++;
     this.inflight = null;
     void this.probe();
@@ -74,5 +78,27 @@ export class ProviderService {
 
   cached(): ProviderInfo[] | null {
     return this.cache;
+  }
+
+  /** Discover commands and skills without submitting a model prompt. Cache briefly per session configuration. */
+  catalog(session: Session, force = false): Promise<ProviderCatalog> {
+    const settings = this.getSettings();
+    const key = JSON.stringify([session.id, session.provider, session.model, session.worktreePath, settings.codexExecutable, settings.claudeExecutable]);
+    const cached = this.catalogs.get(key);
+    if (!force && cached && cached.expires > Date.now()) return Promise.resolve(cached.value);
+    const inflight = this.catalogInflight.get(key);
+    if (inflight) return inflight;
+    if (!this.providers.getCatalog) return Promise.resolve({ commands: [], skills: [], warnings: ['This provider runtime does not expose a command or skill catalog.'] });
+    const generation = this.generation;
+    const pending = this.providers.getCatalog(session, settings).then((value) => {
+      if (generation === this.generation) {
+        // Bound metadata cache growth as the user opens sessions and changes models.
+        if (this.catalogs.size >= 100) this.catalogs.delete(this.catalogs.keys().next().value!);
+        this.catalogs.set(key, { value, expires: Date.now() + 30_000 });
+      }
+      return value;
+    }).finally(() => { if (this.catalogInflight.get(key) === pending) this.catalogInflight.delete(key); });
+    this.catalogInflight.set(key, pending);
+    return pending;
   }
 }
