@@ -20,6 +20,8 @@ import { HttpError, errorMessage } from './util.ts';
 import { WorkspaceService } from './workspace.ts';
 import { resolveRunConfig } from './session-config.ts';
 import { ImportService } from './imports.ts';
+import { DirectoryService } from './directories.ts';
+import { ProjectSources } from './project-sources.ts';
 
 export interface ApplicationOptions extends ConfigOptions {
   /** Provider adapters and detection. Inject a fake in tests; the CLI entry passes ./providers/index.ts. */
@@ -103,9 +105,10 @@ export function createApplication(options: ApplicationOptions): RelayApplication
     resolveRunConfig(providers.cached()?.find((row) => row.id === session.provider), session, { effort: true, policy: true, serviceTier: true });
   });
   const terminals = new TerminalManager(store, hub, log, options.terminal);
+  const workspace = new WorkspaceService(store, config.dataDir, runtime, () => providers.cached());
   const services: Services = {
-    config, store, hub, runtime, tasks, terminals, providers, handoffs: new HandoffService(store), workspace: new WorkspaceService(store, config.dataDir, runtime, () => providers.cached()),
-    imports: new ImportService(store, options.providers, providers, runtime), startedAt: Date.now(), getPort: () => boundPort,
+    config, store, hub, runtime, tasks, terminals, providers, handoffs: new HandoffService(store), workspace,
+    imports: new ImportService(store, options.providers, providers, runtime), directories: new DirectoryService(), projectSources: new ProjectSources(workspace), startedAt: Date.now(), getPort: () => boundPort,
   };
   hub.bind({ onMessage: (socket, raw) => terminals.handleMessage(socket, raw), onClose: (socket) => terminals.releaseSocket(socket) });
 

@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { z } from 'zod';
 import {
-  ApprovalDecisionSchema, ConversationIdSchema, ImportConversationSchema, ProviderSchema, CreateProjectSchema, CreateSessionSchema, CreateTaskSchema, HandoffSchema, SendMessageSchema, UpdateProjectSchema, UpdateSessionSchema, UpdateSettingsSchema, UpdateTaskSchema,
+  ApprovalDecisionSchema, ConversationIdSchema, ImportConversationSchema, ProviderSchema, CloneProjectSchema, NewProjectSchema, CreateProjectSchema, CreateSessionSchema, CreateTaskSchema, HandoffSchema, SendMessageSchema, UpdateProjectSchema, UpdateSessionSchema, UpdateSettingsSchema, UpdateTaskSchema,
 } from '@relay/contracts';
 import type { Bootstrap, SessionUsage } from '@relay/contracts';
 import { gitStatus } from './git.ts';
@@ -18,10 +18,12 @@ import type { TerminalManager } from './terminal.ts';
 import { HttpError, badRequest, conflict, notFound } from './util.ts';
 import { resolveRunConfig } from './session-config.ts';
 import type { ImportService } from './imports.ts';
+import type { DirectoryService } from './directories.ts';
+import type { ProjectSources } from './project-sources.ts';
 
 export interface Services {
   config: ServerConfig; store: Store; hub: Hub; workspace: WorkspaceService; runtime: SessionRuntime; tasks: TaskService; handoffs: HandoffService;
-  providers: ProviderService; imports: ImportService; terminals: TerminalManager; startedAt: number; getPort: () => number;
+  providers: ProviderService; imports: ImportService; directories: DirectoryService; projectSources: ProjectSources; terminals: TerminalManager; startedAt: number; getPort: () => number;
 }
 
 export class Reply {
@@ -73,6 +75,8 @@ const MessagesQuery = z.object({ limit: z.coerce.number().int().min(1).max(2000)
 const EventsQuery = z.object({ after: z.coerce.number().int().min(0).default(0), projectId: z.string().max(100).optional(), limit: z.coerce.number().int().min(1).max(5000).optional() });
 const WriteFile = z.object({ content: z.string() });
 const ImportsQuery = z.object({ provider: ProviderSchema, projectId: z.string().min(1).max(100).optional(), cursor: z.string().min(1).max(4096).optional() }).strict();
+const DirectoriesQuery = z.object({ path: z.string().min(1).max(4096).optional(), query: z.string().max(200).optional(), hidden: z.enum(['true', 'false']).optional() }).strict();
+const RevealDirectory = z.object({ path: z.string().min(1).max(4096) }).strict();
 
 export function buildRouter(s: Services) {
   const routes: Route[] = [];
@@ -128,6 +132,13 @@ export function buildRouter(s: Services) {
   });
 
   add('GET', '/api/projects', () => s.store.listProjects());
+  add('GET', '/api/directories', (ctx) => {
+    const query = parse(DirectoriesQuery, Object.fromEntries(ctx.url.searchParams));
+    return s.directories.list(query.path, query.query, query.hidden === 'true');
+  });
+  add('POST', '/api/directories/reveal', async (ctx) => s.directories.reveal((await ctx.body(RevealDirectory)).path));
+  add('POST', '/api/projects/new', async (ctx) => new Reply(201, await s.projectSources.create(await ctx.body(NewProjectSchema))));
+  add('POST', '/api/projects/clone', async (ctx) => new Reply(201, await s.projectSources.clone(await ctx.body(CloneProjectSchema))));
   add('GET', '/api/imports', (ctx) => {
     const query = parse(ImportsQuery, Object.fromEntries(ctx.url.searchParams));
     return s.imports.list(query.provider, query.projectId, query.cursor);
