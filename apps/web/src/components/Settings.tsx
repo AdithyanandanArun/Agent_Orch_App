@@ -1,144 +1,113 @@
-import { useState } from 'react';
-import { CheckCircle2, CircleSlash, RefreshCw } from 'lucide-react';
+import { useState, type ReactNode } from 'react';
+import { RefreshCw } from 'lucide-react';
 import type { AppSettings, ProviderInfo } from '@relay/contracts';
 import { useRelay } from '../store/store';
 import { api, errorMessage } from '../lib/api';
-import { Badge, Button, Field, InlineError, ProviderMark } from './ui';
+import { Button, InlineError } from './ui';
+import { SelectMenu } from './SelectMenu';
 
-function ProviderRow({ p }: { p: ProviderInfo }) {
-  return (
-    <div className="prow">
-      <ProviderMark provider={p.id} size={22} />
-      <div className="prow__main">
-        <div className="prow__title"><strong>{p.name}</strong>{p.available ? <Badge tone="ok"><CheckCircle2 size={11} /> Configured</Badge> : <Badge tone="warn"><CircleSlash size={11} /> {p.executable ? 'Setup needed' : 'Not available'}</Badge>}</div>
-        <p className="muted small">
-          {p.available ? `${p.version ?? 'version unknown'} · ${p.executable ?? 'path unknown'}` : p.reason ?? 'The executable could not be started.'}
-        </p>
-        {p.available ? <p className="muted small">{p.reason ?? `${p.models.length} models listed. Credentials are validated when a run starts.`}</p> : null}
-      </div>
-    </div>
-  );
+type Category = 'general' | 'providers' | 'appearance';
+const CATEGORIES: { id: Category; name: string }[] = [
+  { id: 'general', name: 'General' }, { id: 'providers', name: 'Providers' }, { id: 'appearance', name: 'Appearance' },
+];
+
+function SettingRow({ title, description, htmlFor, children }: { title: string; description?: string; htmlFor: string; children: ReactNode }) {
+  return <div className="settings-row">
+    <div className="settings-row__copy"><label htmlFor={htmlFor}>{title}</label>{description ? <p>{description}</p> : null}</div>
+    <div className="settings-row__control">{children}</div>
+  </div>;
+}
+
+function ProviderStatus({ provider }: { provider: ProviderInfo }) {
+  return <section className="settings-provider" aria-label={`${provider.name} status`}>
+    <div className="settings-provider__head"><h3>{provider.name}</h3><span className={provider.available ? 'settings-provider__state is-ready' : 'settings-provider__state'}><i aria-hidden="true" />{provider.available ? 'Configured' : 'Setup needed'}</span></div>
+    <p className="settings-provider__version">{provider.version ? `Version ${provider.version}` : 'Executable not detected'}</p>
+    {!provider.available ? <p className="settings-provider__reason">{provider.reason}</p> : null}
+    <details className="settings-provider__details"><summary>Connection details</summary><p>{provider.reason ?? 'Authentication and model access are checked when a session runs.'}</p>{provider.executable ? <code>{provider.executable}</code> : null}</details>
+  </section>;
 }
 
 export function SettingsPage() {
   const boot = useRelay((s) => s.boot);
   const settings = boot?.settings;
+  const [category, setCategory] = useState<Category>('general');
   const [claude, setClaude] = useState(settings?.claudeExecutable ?? '');
   const [codex, setCodex] = useState(settings?.codexExecutable ?? '');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
 
   if (!settings || !boot) return null;
-
   const update = async (patch: Partial<AppSettings>, key: string) => {
-    setBusy(key);
-    setError(null);
+    setBusy(key); setError(null);
     try {
       await api.updateSettings(patch);
       await useRelay.getState().refreshNow();
+      setSaved(true);
       return true;
-    } catch (e) {
-      setError(errorMessage(e));
-      return false;
-    } finally {
-      setBusy(null);
-    }
+    } catch (cause) { setError(errorMessage(cause)); return false; }
+    finally { setBusy(null); }
   };
   const refreshProviders = async () => {
-    setBusy('providers');
-    setError(null);
-    try {
-      await api.refreshProviders();
-      await useRelay.getState().refreshNow();
-    } catch (e) {
-      setError(errorMessage(e));
-    } finally {
-      setBusy(null);
-    }
+    setBusy('providers'); setError(null);
+    try { await api.refreshProviders(); await useRelay.getState().refreshNow(); }
+    catch (cause) { setError(errorMessage(cause)); }
+    finally { setBusy(null); }
   };
-  const pathsDirty = claude !== settings.claudeExecutable || codex !== settings.codexExecutable;
+  const disabled = busy !== null;
   const modelKey = settings.defaultProvider === 'codex' ? 'defaultCodexModel' : 'defaultClaudeModel';
   const defaultModel = settings[modelKey];
   const reportedModels = boot.providers.find((p) => p.id === settings.defaultProvider)?.models ?? [];
   const models = reportedModels.some((m) => m.id === defaultModel) ? reportedModels : [{ id: defaultModel, name: defaultModel }, ...reportedModels];
-  const disabled = busy !== null;
+  const pathsDirty = claude.trim() !== settings.claudeExecutable || codex.trim() !== settings.codexExecutable;
+  const status = busy === 'providers' ? 'Checking providers…' : busy ? 'Saving…' : error ? 'Could not complete change' : saved ? 'All changes saved' : 'Changes save automatically';
 
-  return (
-    <div className="settings-page" aria-labelledby="settings-title">
-      <div className="settings-page__inner">
-      <header className="settings-page__head"><h1 id="settings-title">Settings</h1><p>Make this workspace yours.</p></header>
-      <div className="settings">
-        {error ? <InlineError>{error}</InlineError> : null}
-        <section className="sec">
-          <header className="sec__head"><h3>New sessions</h3><span className="muted small" role="status">{error ? 'Not saved' : busy && busy !== 'providers' ? 'Saving…' : 'Saves automatically'}</span></header>
-          <p className="muted small">New Session opens immediately with these defaults. Existing sessions keep their own choices.</p>
-          <Field label="Default provider" htmlFor="st-provider">
-            <select id="st-provider" className="select" value={settings.defaultProvider} disabled={disabled}
-              onChange={(e) => void update({ defaultProvider: e.target.value as AppSettings['defaultProvider'] }, 'provider')}>
-              <option value="codex">Codex</option><option value="claude">Claude</option>
-            </select>
-          </Field>
-          <Field label="Default model" htmlFor="st-model">
-            <select id="st-model" className="select" value={defaultModel} disabled={disabled}
-              onChange={(e) => void update({ [modelKey]: e.target.value }, 'model')}>
-              {models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-            </select>
-          </Field>
-          <Field label="Default effort" htmlFor="st-effort">
-            <select id="st-effort" className="select" value={settings.defaultEffort} disabled={disabled}
-              onChange={(e) => void update({ defaultEffort: e.target.value as AppSettings['defaultEffort'] }, 'effort')}>
-              <option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option>
-            </select>
-          </Field>
-        </section>
-
-        <section className="sec">
-          <header className="sec__head"><h3>Appearance</h3></header>
-          <Field label="Theme" htmlFor="st-theme">
-            <select id="st-theme" className="select" value={settings.theme} disabled={disabled}
-              onChange={(e) => void update({ theme: e.target.value as AppSettings['theme'] }, 'theme')}>
-              <option value="dark">Dark</option><option value="light">Light</option>
-            </select>
-          </Field>
-        </section>
-
-        <details className="settings__advanced">
-          <summary>Session permissions and workspace</summary>
-          <Field label="Default approval policy" htmlFor="st-policy">
-            <select id="st-policy" className="select" value={settings.defaultPolicy} disabled={disabled}
-              onChange={(e) => void update({ defaultPolicy: e.target.value as AppSettings['defaultPolicy'] }, 'policy')}>
-              <option value="supervised">Supervised</option><option value="balanced">Balanced</option>
-            </select>
-          </Field>
-          <Field label="Default workspace" htmlFor="st-workspace" hint="A worktree keeps edits on a separate branch. Project folder edits the existing checkout directly.">
-            <select id="st-workspace" className="select" value={settings.defaultIsolated ? 'worktree' : 'project'} disabled={disabled}
-              onChange={(e) => void update({ defaultIsolated: e.target.value === 'worktree' }, 'workspace')}>
-              <option value="worktree">Isolated worktree</option><option value="project">Project folder</option>
-            </select>
-          </Field>
-        </details>
-
-        <details className="settings__advanced">
-          <summary>Providers and executables</summary>
-          <header className="sec__head"><h3>Provider status</h3><Button size="sm" disabled={disabled} busy={busy === 'providers'} onClick={() => void refreshProviders()}><RefreshCw size={13} /> Re-check</Button></header>
-          {boot.providers.length === 0 ? <p className="muted small">The server has not reported any providers yet. Use Re-check to probe the Codex and Claude executables.</p> : null}
-          {boot.providers.map((p) => <ProviderRow key={p.id} p={p} />)}
-          <p className="muted small">Claude uses your local Claude Code login; run <code>claude auth login</code> and Re-check if needed. An <code>ANTHROPIC_API_KEY</code> in the server environment takes precedence and uses API billing. Codex uses <code>codex login</code>. Relay stores no credentials.</p>
-          <form className="form" onSubmit={(e) => {
-            e.preventDefault();
-            void update({ claudeExecutable: claude.trim(), codexExecutable: codex.trim() }, 'paths').then((saved) => { if (saved) void refreshProviders(); });
-          }}>
-            <Field label="Claude executable" htmlFor="st-claude" hint="Leave empty to let the server choose.">
-              <input id="st-claude" className="input input--mono" value={claude} disabled={disabled} onChange={(e) => setClaude(e.target.value)} placeholder="claude" spellCheck={false} />
-            </Field>
-            <Field label="Codex executable" htmlFor="st-codex" hint="Path or command name for codex.">
-              <input id="st-codex" className="input input--mono" value={codex} disabled={disabled} onChange={(e) => setCodex(e.target.value)} placeholder="codex" spellCheck={false} />
-            </Field>
-            <div><Button type="submit" size="sm" busy={busy === 'paths'} disabled={!pathsDirty || disabled} why={!pathsDirty ? 'No changes' : undefined}>Save and re-check</Button></div>
+  return <div className="settings-page" aria-labelledby="settings-title">
+    <div className="settings-page__inner">
+      <header className="settings-page__head"><div><h1 id="settings-title">Settings</h1><p>Models, permissions and appearance.</p></div><span className="settings-page__save" role="status">{status}</span></header>
+      <nav className="settings-page__tabs" aria-label="Settings sections">
+        {CATEGORIES.map((item) => <button type="button" key={item.id} aria-current={category === item.id ? 'page' : undefined} onClick={() => setCategory(item.id)}>{item.name}</button>)}
+      </nav>
+      {error ? <InlineError>{error}</InlineError> : null}
+      {category === 'general' ? <div className="settings-page__section">
+        <div className="settings-page__section-head"><h2>New sessions</h2><p>Defaults for your next session. Existing conversations keep their own settings.</p></div>
+        <SettingRow title="Provider" description="The agent used when you start a session." htmlFor="st-provider">
+          <SelectMenu id="st-provider" label="Default provider" value={settings.defaultProvider} disabled={disabled} options={[{ value: 'codex', label: 'Codex' }, { value: 'claude', label: 'Claude' }]} onChange={(value) => void update({ defaultProvider: value as AppSettings['defaultProvider'] }, 'provider')} />
+        </SettingRow>
+        <SettingRow title="Model" description={`Default for ${settings.defaultProvider === 'codex' ? 'Codex' : 'Claude'} sessions.`} htmlFor="st-model">
+          <SelectMenu id="st-model" label="Default model" value={defaultModel} disabled={disabled} options={models.map((m) => ({ value: m.id, label: m.name }))} onChange={(value) => void update({ [modelKey]: value }, 'model')} />
+        </SettingRow>
+        <SettingRow title="Reasoning effort" description="How much reasoning to use for a response." htmlFor="st-effort">
+          <SelectMenu id="st-effort" label="Default effort" value={settings.defaultEffort} disabled={disabled} options={[{ value: 'low', label: 'Low' }, { value: 'medium', label: 'Medium' }, { value: 'high', label: 'High' }]} onChange={(value) => void update({ defaultEffort: value as AppSettings['defaultEffort'] }, 'effort')} />
+        </SettingRow>
+        <div className="settings-page__section-head settings-page__section-head--next"><h2>Workspace & permissions</h2></div>
+        <SettingRow title="Workspace" description="Use a separate Git worktree, or edit the existing project folder." htmlFor="st-workspace">
+          <SelectMenu id="st-workspace" label="Default workspace" value={settings.defaultIsolated ? 'worktree' : 'project'} disabled={disabled} options={[{ value: 'worktree', label: 'Isolated worktree' }, { value: 'project', label: 'Project folder' }]} onChange={(value) => void update({ defaultIsolated: value === 'worktree' }, 'workspace')} />
+        </SettingRow>
+        <SettingRow title="Approval policy" description="Supervised asks before changes. Balanced allows edits with fewer prompts." htmlFor="st-policy">
+          <SelectMenu id="st-policy" label="Default approval policy" value={settings.defaultPolicy} disabled={disabled} options={[{ value: 'supervised', label: 'Supervised' }, { value: 'balanced', label: 'Balanced' }]} onChange={(value) => void update({ defaultPolicy: value as AppSettings['defaultPolicy'] }, 'policy')} />
+        </SettingRow>
+      </div> : null}
+      {category === 'providers' ? <div className="settings-page__section">
+        <div className="settings-page__section-head settings-page__section-head--actions"><div><h2>Connected agents</h2><p>Local installations and login status.</p></div><Button size="sm" disabled={disabled} busy={busy === 'providers'} onClick={() => void refreshProviders()}><RefreshCw size={12} /> Re-check</Button></div>
+        {boot.providers.map((provider) => <ProviderStatus key={provider.id} provider={provider} />)}
+        {!boot.providers.length ? <p className="settings-page__hint">Provider information is loading. Re-check to request a fresh status.</p> : null}
+        <div className="settings-page__login"><p>Sign in on this machine with <code>claude auth login</code> or <code>codex login</code>, then re-check.</p><p>Claude uses its existing login. An <code>ANTHROPIC_API_KEY</code> in the server environment takes precedence and uses API billing. Relay stores no credentials.</p></div>
+        <details className="settings-page__advanced"><summary>Executable paths</summary><p className="settings-page__hint">Leave empty to use automatic discovery.</p>
+          <form className="settings-page__paths" onSubmit={(event) => { event.preventDefault(); void update({ claudeExecutable: claude.trim(), codexExecutable: codex.trim() }, 'paths').then((ok) => { if (ok) void refreshProviders(); }); }}>
+            <label htmlFor="st-claude">Claude executable</label><input id="st-claude" className="input input--mono" value={claude} disabled={disabled} onChange={(event) => setClaude(event.target.value)} placeholder="claude" spellCheck={false} />
+            <label htmlFor="st-codex">Codex executable</label><input id="st-codex" className="input input--mono" value={codex} disabled={disabled} onChange={(event) => setCodex(event.target.value)} placeholder="codex" spellCheck={false} />
+            <div><Button type="submit" size="sm" disabled={!pathsDirty || disabled} busy={busy === 'paths'}>Save paths and re-check</Button></div>
           </form>
         </details>
-      </div>
-      </div>
+      </div> : null}
+      {category === 'appearance' ? <div className="settings-page__section">
+        <div className="settings-page__section-head"><h2>Appearance</h2><p>Simple surfaces, readable text and quiet controls.</p></div>
+        <SettingRow title="Theme" description="Choose a dark or light workspace." htmlFor="st-theme">
+          <SelectMenu id="st-theme" label="Theme" value={settings.theme} disabled={disabled} options={[{ value: 'dark', label: 'Dark' }, { value: 'light', label: 'Light' }]} onChange={(value) => void update({ theme: value as AppSettings['theme'] }, 'theme')} />
+        </SettingRow>
+      </div> : null}
+      <footer className="settings-page__foot">Relay {boot.version}<span>Local workspace</span></footer>
     </div>
-  );
+  </div>;
 }
