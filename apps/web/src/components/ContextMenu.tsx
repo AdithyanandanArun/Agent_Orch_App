@@ -12,7 +12,7 @@ export type ContextMenuEntry =
 
 interface Point { left: number; top: number }
 
-const isSeparator = (item: ContextMenuEntry): item is Extract<ContextMenuEntry, { type: 'separator' }> => item.type === 'separator';
+const isSeparator = (item: ContextMenuEntry): item is Extract<ContextMenuEntry, { type: 'separator' }> => 'type' in item && item.type === 'separator';
 const enabledIndices = (items: ContextMenuEntry[]): number[] => items.flatMap((item, index) => !isSeparator(item) && !item.disabled ? [index] : []);
 const childrenOf = (item: ContextMenuEntry): ContextMenuEntry[] => !isSeparator(item) ? item.children ?? [] : [];
 
@@ -96,11 +96,21 @@ export function ContextMenu({ x, y, items, onClose, returnFocus }: {
       const target = event.target as Node;
       if (!root.current?.contains(target) && !submenu.current?.contains(target)) close(false);
     };
+    const onViewportChange = (): void => close(true);
+    const onScroll = (event: Event): void => {
+      const target = event.target;
+      if (target instanceof Node && (root.current?.contains(target) || submenu.current?.contains(target))) return;
+      close(false);
+    };
     window.addEventListener('pointerdown', outside, true);
     window.addEventListener('contextmenu', outsideContext, true);
+    window.addEventListener('resize', onViewportChange);
+    window.addEventListener('scroll', onScroll, true);
     return () => {
       window.removeEventListener('pointerdown', outside, true);
       window.removeEventListener('contextmenu', outsideContext, true);
+      window.removeEventListener('resize', onViewportChange);
+      window.removeEventListener('scroll', onScroll, true);
     };
   }, [onClose, returnFocus]);
 
@@ -126,6 +136,10 @@ export function ContextMenu({ x, y, items, onClose, returnFocus }: {
         setSubmenuIndex(null);
         mainButtons.current[submenuIndex]?.focus();
       } else close(true);
+      return;
+    }
+    if (event.key === 'Tab') {
+      close(true);
       return;
     }
     if (event.key === 'ArrowLeft' && inSubmenu && submenuIndex !== null) {
@@ -174,12 +188,22 @@ export function ContextMenu({ x, y, items, onClose, returnFocus }: {
       aria-expanded={hasChildren ? submenuIndex === index : undefined}
       disabled={item.disabled} tabIndex={-1}
       className={cx('menu__item', 'context-menu__item', item.danger && 'is-danger', hasChildren && 'has-submenu')}
-      onFocus={() => nested ? setActiveChildIndex(index) : setActiveIndex(index)}
-      onMouseEnter={() => {
-        if (item.disabled) return;
+      onFocus={() => {
         if (nested) setActiveChildIndex(index);
         else {
           setActiveIndex(index);
+          if (submenuIndex !== null && submenuIndex !== index) setSubmenuIndex(null);
+        }
+      }}
+      onMouseEnter={() => {
+        if (item.disabled) return;
+        if (nested) {
+          setActiveChildIndex(index);
+          childButtons.current[index]?.focus();
+        }
+        else {
+          setActiveIndex(index);
+          mainButtons.current[index]?.focus();
           if (hasChildren) openSubmenu(index, false);
           else setSubmenuIndex(null);
         }
@@ -198,14 +222,18 @@ export function ContextMenu({ x, y, items, onClose, returnFocus }: {
   const submenuStyle: CSSProperties = submenuPoint
     ? { left: submenuPoint.left, top: submenuPoint.top }
     : { visibility: 'hidden' };
+  const submenuLabel = submenuIndex === null ? 'More' : (() => {
+    const item = items[submenuIndex];
+    return item && !isSeparator(item) ? item.label : 'More';
+  })();
 
   return createPortal(
     <>
-      <div ref={root} role="menu" aria-label="Session actions" className="menu context-menu" style={rootStyle} onKeyDown={onKeyDown} onScroll={() => setSubmenuIndex(null)}>
+      <div ref={root} role="menu" aria-label="Session actions" className="menu context-menu" style={rootStyle} onKeyDown={onKeyDown}>
         {items.map((item, index) => renderEntry(item, index, false))}
       </div>
       {submenuIndex !== null ? (
-        <div ref={submenu} role="menu" aria-label={`${!isSeparator(items[submenuIndex]!) ? items[submenuIndex]!.label : 'More'} options`} className="menu context-menu context-menu--submenu" style={submenuStyle}
+        <div ref={submenu} role="menu" aria-label={`${submenuLabel} options`} className="menu context-menu context-menu--submenu" style={submenuStyle}
           onKeyDown={(event) => { event.stopPropagation(); onKeyDown(event); }}>
           {childrenOf(items[submenuIndex]!).map((item, index) => renderEntry(item, index, true))}
         </div>
