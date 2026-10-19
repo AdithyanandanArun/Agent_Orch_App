@@ -41,7 +41,7 @@ export class ImportService {
   }
 
   private async directory(value: string | null): Promise<string> {
-    if (!value || !path.isAbsolute(value) || /[\0\r\n]/.test(value)) throw badRequest('This conversation has no usable original folder.');
+    if (!value || value.length > 4096 || !path.isAbsolute(value) || /[\0\r\n]/.test(value)) throw badRequest('This conversation has no usable original folder.');
     let canonical: string;
     try {
       canonical = await fs.realpath(value);

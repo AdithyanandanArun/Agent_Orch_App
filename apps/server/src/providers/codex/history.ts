@@ -52,7 +52,7 @@ function mapThread(value: unknown): ExternalConversation | null {
   return {
     provider: 'codex', id,
     title: name ?? preview ?? 'Codex conversation',
-    directory: safeString(value.cwd, 4_096),
+    directory: typeof value.cwd === 'string' ? value.cwd : null,
     updatedAt: dateFromSeconds(value.updatedAt) ?? dateFromSeconds(value.recencyAt),
     createdAt: dateFromSeconds(value.createdAt),
     model: safeString(value.model, 150),
