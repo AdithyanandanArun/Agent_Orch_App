@@ -4,6 +4,7 @@ import { useRelay, useActiveSession, useProject } from '../store/store';
 import { api, errorMessage } from '../lib/api';
 import { basename } from '../lib/format';
 import { Button, Field, InlineError, Modal, PROVIDER_NAME } from './ui';
+import { SelectMenu } from './SelectMenu';
 
 function useSubmit(onDone: () => void) {
   const [busy, setBusy] = useState(false);
@@ -92,10 +93,7 @@ export function TaskDialog() {
         <Field label="Description" htmlFor="tf-desc"><textarea id="tf-desc" className="textarea" rows={3} value={description} onChange={(e) => setDescription(e.target.value)} /></Field>
         <Field label="Acceptance criteria" htmlFor="tf-ac" hint="How will you know it is done? Included when the task is run."><textarea id="tf-ac" className="textarea" rows={2} value={criteria} onChange={(e) => setCriteria(e.target.value)} /></Field>
         <Field label="Assigned session" htmlFor="tf-session">
-          <select id="tf-session" className="select" value={sessionId} onChange={(e) => setSessionId(e.target.value)}>
-            <option value="">Unassigned</option>
-            {sessions.map((s) => <option key={s.id} value={s.id}>{s.name} · {PROVIDER_NAME[s.provider]}</option>)}
-          </select>
+          <SelectMenu id="tf-session" label="Assigned session" value={sessionId} onChange={setSessionId} options={[{ value: '', label: 'Unassigned' }, ...sessions.map((s) => ({ value: s.id, label: `${s.name} · ${PROVIDER_NAME[s.provider]}` }))]} />
         </Field>
         {tasks.length > 0 ? (
           <fieldset className="fieldset">
@@ -152,20 +150,14 @@ export function HandoffDialog({ taskId, fromSessionId }: { taskId?: string; from
       <form id="handoff-form" className="form" onSubmit={submit}>
         <div className="form-row">
           <Field label="From session" htmlFor="hf-from">
-            <select id="hf-from" className="select" value={from} onChange={(e) => setFrom(e.target.value)}>{sessions.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select>
+            <SelectMenu id="hf-from" label="From session" value={from} onChange={(value) => { setFrom(value); if (value === to) setTo(''); }} options={sessions.map((s) => ({ value: s.id, label: s.name }))} />
           </Field>
           <Field label="To session" htmlFor="hf-to">
-            <select id="hf-to" className="select" value={to} onChange={(e) => setTo(e.target.value)}>
-              <option value="">Choose…</option>
-              {sessions.filter((s) => s.id !== from).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
+            <SelectMenu id="hf-to" label="To session" value={to} onChange={setTo} options={[{ value: '', label: 'Choose a session' }, ...sessions.filter((s) => s.id !== from).map((s) => ({ value: s.id, label: s.name }))]} />
           </Field>
         </div>
         <Field label="Task (optional)" htmlFor="hf-task">
-          <select id="hf-task" className="select" value={task} onChange={(e) => setTask(e.target.value)}>
-            <option value="">None</option>
-            {tasks.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}
-          </select>
+          <SelectMenu id="hf-task" label="Task" value={task} onChange={setTask} options={[{ value: '', label: 'None' }, ...tasks.map((t) => ({ value: t.id, label: t.title }))]} />
         </Field>
         <div className="form-row">
           <Field label="Artifact path" htmlFor="hf-path" hint="Relative to the source session’s repository.">
