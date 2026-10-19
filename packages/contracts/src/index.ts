@@ -116,6 +116,18 @@ export interface Bootstrap { projects: Project[]; sessions: Session[]; messages:
 export interface GitFile { path: string; status: string }
 export interface GitStatus { branch: string; files: GitFile[]; diff: string; isRepo: boolean }
 export interface FileEntry { path: string; name: string; type: 'file' | 'directory' }
+export interface LocalDirectory { name: string; path: string; symlink: boolean }
+export interface DirectoryListing {
+  path: string; displayPath: string; parentPath: string | null; homePath: string;
+  separator: string; platform: string; directories: LocalDirectory[];
+  roots: { name: string; path: string }[]; canSelect: boolean; truncated: boolean;
+}
+export const NewProjectSchema = z.object({
+  name: z.string().trim().min(1).max(100), parentPath: z.string().min(1).max(4096),
+}).strict();
+export const CloneProjectSchema = z.object({
+  url: z.string().trim().min(1).max(2048), name: z.string().trim().min(1).max(100), parentPath: z.string().min(1).max(4096),
+}).strict();
 export type ServerEvent =
   | { type: 'state.changed'; event?: WorkspaceEvent }
   | { type: 'session.delta'; sessionId: string; messageId: string; delta: string; offset?: number }
