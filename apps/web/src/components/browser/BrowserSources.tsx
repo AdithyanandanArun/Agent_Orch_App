@@ -21,7 +21,7 @@ export function ChromeSetupHelp({ open }: { open?: boolean }) {
       <summary>How to allow your browser to connect</summary>
       <ol>
         <li>In Chrome 144 or newer, open <code>{CHROME_INSPECT_URL}</code> <button type="button" className="link-btn" onClick={copy}><Copy size={11} aria-hidden="true" /> Copy</button> and turn on remote debugging.</li>
-        <li>Choose the browser below, then approve the prompt Chrome shows when Relay connects.</li>
+        <li>Choose the detected browser, then approve the prompt Chrome shows when Relay connects.</li>
       </ol>
       <p>Relay attaches to the running browser. It does not copy cookies, passwords or profiles, and disconnecting leaves the browser open.</p>
       <a href={CHROME_DOCS_URL} target="_blank" rel="noopener noreferrer">Chrome remote debugging guide <ExternalLink size={11} aria-hidden="true" /></a>
@@ -42,7 +42,7 @@ interface Props {
   idPrefix: string;
 }
 
-/** Detected running browsers plus a manual endpoint for anything discovery cannot find. */
+/** Detected browser profiles plus a manual endpoint for anything discovery cannot find. */
 export function BrowserSourcePicker({ discovery, loading, sourceId, endpoint, onSource, onEndpoint, onEndpointBlur, onRefresh, disabled, idPrefix }: Props) {
   const sources = discovery?.sources ?? [];
   const selected = sources.find((s) => s.id === sourceId);
@@ -51,12 +51,12 @@ export function BrowserSourcePicker({ discovery, loading, sourceId, endpoint, on
       <div className="browser-sources__row">
         {sources.length ? (
           <SelectMenu
-            id={`${idPrefix}-source`} label="Running browser" value={selected ? selected.id : ''} disabled={disabled}
+            id={`${idPrefix}-source`} label="Detected browser" value={selected ? selected.id : ''} disabled={disabled}
             displayValue={selected?.name ?? 'Choose a browser'}
-            options={sources.map((s) => ({ value: s.id, label: s.name, description: s.debuggingAvailable ? s.userDataDir : `Remote debugging is off · ${s.userDataDir}`, disabled: !s.debuggingAvailable }))}
-            onChange={onSource}
+            options={sources.map((s) => ({ value: s.id, label: s.name, description: s.debuggingAvailable ? `Debugging address found · ${s.userDataDir}` : `Enable remote debugging · ${s.userDataDir}`, disabled: !s.debuggingAvailable }))}
+            onChange={(id) => { onEndpoint(''); onSource(id); }}
           />
-        ) : <p className="browser-sources__none">{loading ? 'Looking for running browsers…' : 'No running browser with remote debugging was found.'}</p>}
+        ) : <p className="browser-sources__none">{loading ? 'Looking for Chromium browsers…' : 'No supported Chromium profile was found. You can enter a debugging endpoint.'}</p>}
         <Button size="sm" onClick={onRefresh} disabled={loading || disabled} busy={loading} aria-label="Refresh detected browsers"><RefreshCw size={12} aria-hidden="true" /> Refresh</Button>
       </div>
       <details className="browser-advanced" open={Boolean(endpoint)}>

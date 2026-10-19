@@ -35,7 +35,7 @@ export function BrowserSettings({ settings, disabled, update }: Props) {
 
   return <div className="settings-page__section">
     <div className="settings-page__section-head"><h2>Agent access</h2><p>Let sessions open and operate a shared browser that you can watch and take over. Relay never imports cookies or passwords.</p></div>
-    <SettingRow title="Let agents use the browser" description="When off, agents get no browser tools. You can still browse from a session’s Browser tab." htmlFor="st-browser-agent">
+    <SettingRow title="Let agents use the browser" description="Allow agents to inspect and operate shared tabs. Turning this off blocks their access immediately. You can still browse yourself." htmlFor="st-browser-agent">
       <button id="st-browser-agent" type="button" role="switch" aria-checked={agentEnabled} className={cx('switch', agentEnabled && 'is-on')} disabled={disabled} onClick={() => void update({ browserAgentEnabled: !agentEnabled }, 'browser-agent')}><i /></button>
     </SettingRow>
     <SettingRow title="Default browser" description="Preferred connection option. Existing browsers require an explicit connection." htmlFor="st-browser-mode">
@@ -63,7 +63,7 @@ export function BrowserSettings({ settings, disabled, update }: Props) {
     <div className="browser-settings-existing">
       <BrowserSourcePicker
         idPrefix="st" discovery={discovery} loading={loading} sourceId={settings.browserExistingSourceId ?? ''} endpoint={endpoint} disabled={disabled}
-        onSource={(id) => void update({ browserExistingSourceId: id }, 'browser-source')} onEndpoint={setEndpoint} onEndpointBlur={saveEndpoint} onRefresh={() => void refresh()}
+        onSource={(id) => { setEndpoint(''); void update({ browserExistingSourceId: id, browserCdpEndpoint: '' }, 'browser-source'); }} onEndpoint={setEndpoint} onEndpointBlur={saveEndpoint} onRefresh={() => void refresh()}
       />
       <ChromeSetupHelp />
     </div>

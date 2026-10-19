@@ -26,10 +26,3 @@ export function resolveTab(state: BrowserSessionState | undefined, selectedId: s
   if (!state || state.status !== 'connected') return null;
   return state.tabs.find((t) => t.id === selectedId) ?? state.tabs.find((t) => t.id === state.activeTabId) ?? state.tabs[0] ?? null;
 }
-
-/** Event sent on the workspace socket the first time an agent run uses the browser (not in the shared contract yet). */
-export interface BrowserOpenedEvent { type: 'browser.opened'; sessionId: string; tabId: string }
-export function isBrowserOpened(event: unknown): event is BrowserOpenedEvent {
-  const e = event as Partial<BrowserOpenedEvent> | null;
-  return typeof e === 'object' && e !== null && e.type === 'browser.opened' && typeof e.sessionId === 'string' && typeof e.tabId === 'string';
-}

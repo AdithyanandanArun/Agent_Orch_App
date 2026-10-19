@@ -3,7 +3,7 @@ import { mergeTextDelta } from '@relay/contracts/stream';
 import type { Approval, Bootstrap, Message, Project, ServerEvent, ClientEvent, Session, Task, WorkspaceEvent } from '@relay/contracts';
 import { api, errorMessage } from '../lib/api';
 import { terminalBus } from './terminalBus';
-import { isBrowserOpened } from './browser';
+import { resolveTab, useBrowserStore } from './browser';
 
 export type View = 'workspace' | 'tasks' | 'activity' | 'map' | 'settings';
 export type SettingsSection = 'general' | 'project' | 'providers' | 'browser' | 'appearance';
@@ -268,14 +268,18 @@ export const useRelay = create<RelayState>((set, get) => {
   };
 
   const handleServerEvent = (ev: ServerEvent): void => {
-    const raw: unknown = ev;
-    if (isBrowserOpened(raw)) {
-      // The agent started using the browser: surface the viewer for the session on screen, without changing focus.
-      const { activeProjectId, sessionByProject, view } = get();
-      if (view === 'workspace' && activeProjectId && sessionByProject[activeProjectId] === raw.sessionId) patch({ contextTab: 'browser', contextOpen: true });
-      return;
-    }
     switch (ev.type) {
+      case 'browser.opened': {
+        // Surface the run's actual tab without stealing focus or changing a human's current tab.
+        const { activeProjectId, sessionByProject, view } = get();
+        if (view === 'workspace' && activeProjectId && sessionByProject[activeProjectId] === ev.sessionId) {
+          const browser = useBrowserStore.getState();
+          const current = resolveTab(browser.states[ev.sessionId], browser.selected[ev.sessionId]);
+          if (!current?.controlOwner) browser.select(ev.sessionId, ev.tabId);
+          patch({ contextTab: 'browser', contextOpen: true });
+        }
+        break;
+      }
       case 'state.changed': {
         const incoming = ev.event;
         const boot = get().boot;

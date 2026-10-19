@@ -53,8 +53,9 @@ export function useBrowserState(sessionId: string | undefined, active: boolean):
       } catch (cause) {
         if (stopped || mine.signal.aborted) return;
         setError(errorMessage(cause));
+      } finally {
+        if (!stopped && controller === mine) timer = window.setTimeout(() => void tick(), POLL_MS);
       }
-      if (!stopped && controller === mine) timer = window.setTimeout(() => void tick(), POLL_MS);
     };
     kick.current = () => void tick();
     void tick();
