@@ -82,7 +82,21 @@ export class ImportService {
     const config = resolveRunConfig(metadata, { provider, model, effort: settings.defaultEffort, policy: 'supervised', serviceTier: 'standard' });
     const notices = [...details.notices];
     if (!known) notices.push('The original model was not reported or is no longer listed. This session uses your saved provider model.');
-    if (details.truncated) notices.push('The displayed transcript is limited. The provider retains the original conversation context.');
+    let remaining = 2_000_000;
+    let limited = details.truncated || details.messages.length > 200;
+    const prepared: typeof details.messages = [];
+    for (const message of details.messages.slice(-200).reverse()) {
+      if (remaining <= 0) { limited = true; break; }
+      const redacted = redactSecrets(message.content);
+      const maximum = Math.min(20_000, remaining);
+      const content = truncate(redacted, maximum);
+      if (redacted.length > maximum) limited = true;
+      if (!content.trim()) continue;
+      remaining -= content.length;
+      prepared.push({ ...message, content });
+    }
+    prepared.reverse();
+    if (limited) notices.push('The displayed transcript is limited. The provider retains the original conversation context.');
     return this.store.tx(() => {
       // Recheck inside the transaction so concurrent requests cannot create duplicate imports.
       const existing = this.store.findProviderSession(provider, id);
@@ -99,14 +113,9 @@ export class ImportService {
       const created = this.store.insertSession({ projectId: project.id, name: redactSecrets(details.conversation.title).trim().slice(0, 100) || 'Imported conversation',
         provider, model, effort: config.effort, policy: 'supervised', serviceTier: 'standard', isolated: false, worktreePath: directory, branch: info.isRepo ? info.branch : null });
       const session = this.store.updateSession(created.id, { providerSessionId: id });
-      let remaining = 2_000_000;
-      for (const message of details.messages.slice(-200)) {
-        if (remaining <= 0) break;
-        const content = truncate(redactSecrets(message.content), Math.min(20_000, remaining));
-        if (!content.trim()) continue;
-        remaining -= content.length;
+      for (const message of prepared) {
         const date = message.createdAt && Number.isFinite(Date.parse(message.createdAt)) ? new Date(message.createdAt).toISOString() : undefined;
-        this.store.insertMessage({ sessionId: session.id, role: message.role, content, kind: 'imported', createdAt: date });
+        this.store.insertMessage({ sessionId: session.id, role: message.role, content: message.content, kind: 'imported', createdAt: date });
       }
       this.store.insertMessage({ sessionId: session.id, role: 'system', kind: 'info', content: [
         `Imported ${provider === 'codex' ? 'Codex' : 'Claude'} conversation. Your next message resumes it in its original folder. This session works directly in that folder with Supervised permissions.`, ...notices,
