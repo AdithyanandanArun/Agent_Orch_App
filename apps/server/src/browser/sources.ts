@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { constants } from 'node:fs';
 import { lstat, open, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -78,11 +79,15 @@ export async function readActivePortEndpoint(source: BrowserSource): Promise<Res
   let info;
   try { info = await lstat(file); } catch { throw notEnabled; }
   if (!info.isFile() || info.size > MAX_ACTIVE_PORT_BYTES) throw notEnabled;
-  const handle = await open(file, 'r').catch(() => null);
+  const flags = constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW);
+  const handle = await open(file, flags).catch(() => null);
   if (!handle) throw notEnabled;
   try {
-    const buffer = Buffer.alloc(MAX_ACTIVE_PORT_BYTES);
-    const { bytesRead } = await handle.read(buffer, 0, MAX_ACTIVE_PORT_BYTES, 0);
+    const current = await handle.stat();
+    if (!current.isFile() || current.size > MAX_ACTIVE_PORT_BYTES) throw notEnabled;
+    const buffer = Buffer.alloc(MAX_ACTIVE_PORT_BYTES + 1);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    if (bytesRead > MAX_ACTIVE_PORT_BYTES) throw notEnabled;
     return parseActivePort(buffer.subarray(0, bytesRead).toString('utf8'));
   } finally {
     await handle.close().catch(() => undefined);
