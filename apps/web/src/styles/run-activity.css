@@ -1,8 +1,8 @@
 .run-activity {
   min-width: 0;
-  border: 1px solid var(--line-soft);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--bg-panel) 60%, transparent);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   color: var(--fg-2);
   font-size: 12px;
   overflow: hidden;
@@ -20,7 +20,7 @@
 }
 
 .run-activity__summary::-webkit-details-marker { display: none; }
-.run-activity__summary:hover { background: var(--bg-hover); color: var(--fg-1); }
+.run-activity__summary:hover { color: var(--fg-1); }
 .run-activity__summary:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
 .run-activity__chevron { flex: none; transition: transform 120ms ease; }
 .run-activity[open] > .run-activity__summary .run-activity__chevron { transform: rotate(90deg); }
@@ -40,9 +40,9 @@
 
 .run-tool {
   min-width: 0;
-  border: 1px solid var(--line-soft);
-  border-radius: 8px;
-  background: var(--bg-panel);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   overflow: hidden;
   color: var(--fg-2);
   font-size: 12px;
@@ -60,7 +60,7 @@
 }
 
 .run-tool__summary::-webkit-details-marker { display: none; }
-.run-tool__summary:hover { background: var(--bg-hover); }
+.run-tool__summary:hover .run-tool__title { color: var(--fg-0); }
 .run-tool__summary:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
 .run-tool__summary > svg:not(.run-tool__chevron) { flex: none; color: var(--fg-3); }
 .run-tool__chevron { flex: none; transition: transform 120ms ease; }
@@ -84,8 +84,10 @@
 .run-tool__spin { animation: spin 0.9s linear infinite; }
 .run-tool__children { display: grid; gap: 5px; padding-left: 12px; border-left: 1px solid var(--line); }
 
+.legacy-tool-group { border: 0; border-radius: 0; background: transparent; }
+.legacy-tool-group > .conversation-detail__summary:hover { background: transparent; }
 .legacy-tool-group__items { display: grid; gap: 5px; padding: 7px; border-top: 1px solid var(--line-soft); }
-.legacy-tool-item { min-width: 0; border: 1px solid var(--line-soft); border-radius: 7px; overflow: hidden; }
+.legacy-tool-item { min-width: 0; border: 0; border-radius: 0; background: transparent; overflow: hidden; }
 .legacy-tool-item > summary { display: flex; align-items: center; gap: 7px; min-height: 31px; padding: 5px 8px; list-style: none; cursor: pointer; }
 .legacy-tool-item > summary::-webkit-details-marker { display: none; }
 .legacy-tool-item > summary:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
