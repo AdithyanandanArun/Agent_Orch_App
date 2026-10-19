@@ -26,8 +26,9 @@ export function ImportDialog() {
   const state = useRelay();
   const close = useRelay.getState().closeDialog;
   const project = state.boot?.projects.find((item) => item.id === state.activeProjectId) ?? null;
-  const [provider, setProvider] = useState<Provider>('claude');
-  const [allFolders, setAllFolders] = useState(false);
+  const activeSession = state.activeProjectId ? state.boot?.sessions.find((item) => item.id === state.sessionByProject[state.activeProjectId!]) : undefined;
+  const [provider, setProvider] = useState<Provider>(() => activeSession?.provider ?? state.boot?.settings.defaultProvider ?? 'codex');
+  const [allFolders, setAllFolders] = useState(true);
   const [query, setQuery] = useState('');
   const [conversations, setConversations] = useState<ExternalConversation[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -60,6 +61,7 @@ export function ImportDialog() {
     listController.current = controller;
     const request = ++listRequest.current;
     setConversations([]); setNextCursor(null); setListNotices([]); setListError(null);
+    setLoadingMore(false);
     setSelected(null); setDetails(null); setDetailError(null); setImportError(null);
     setLoading(true);
     void api.imports(provider, folderProjectId, undefined, controller.signal).then((result) => {
@@ -119,11 +121,18 @@ export function ImportDialog() {
   };
 
   const importAndOpen = async () => {
-    if (!selected || !details || selected.unavailableReason || !selected.directory || importing) return;
+    if (!selected || !details || selected.provider !== provider || details.conversation.provider !== provider || details.conversation.id !== selected.id || selected.unavailableReason || details.conversation.unavailableReason || !details.conversation.directory || importing) return;
     setImporting(true); setImportError(null);
     try {
       const result = await api.importConversation(provider, selected.id);
       await useRelay.getState().refreshNow();
+      useRelay.setState((current) => current.boot ? ({
+        boot: {
+          ...current.boot,
+          projects: current.boot.projects.some((item) => item.id === result.project.id) ? current.boot.projects : [...current.boot.projects, result.project],
+          sessions: current.boot.sessions.some((item) => item.id === result.session.id) ? current.boot.sessions : [...current.boot.sessions, result.session],
+        },
+      }) : current);
       useRelay.getState().selectSession(result.session.id);
       close();
       useRelay.getState().toast('success', result.alreadyImported ? `Opened “${result.session.name}”` : `Imported “${result.session.name}”`);
@@ -135,8 +144,9 @@ export function ImportDialog() {
     }
   };
 
-  const picked = selected ? (details?.conversation.id === selected.id ? { ...selected, ...details.conversation } : conversations.find((item) => item.id === selected.id) ?? selected) : null;
-  const unavailableReason = picked && (!picked.directory ? 'The original conversation folder is unavailable.' : picked.unavailableReason);
+  const detailsMatchSelection = Boolean(selected && details?.conversation.provider === provider && details.conversation.provider === selected.provider && details.conversation.id === selected.id);
+  const picked = selected ? (detailsMatchSelection ? { ...selected, ...details!.conversation } : conversations.find((item) => item.id === selected.id) ?? selected) : null;
+  const unavailableReason = picked && (!detailsMatchSelection ? 'Wait for this conversation preview to load.' : !details!.conversation.directory ? 'The original conversation folder is unavailable.' : details!.conversation.unavailableReason ?? selected?.unavailableReason);
   const requestClose = () => { if (!importing) close(); };
   const footer = <>
     <p className="import-dialog__shared">Imported conversations continue in their original folder, which is shared with other programs.</p>
@@ -144,8 +154,8 @@ export function ImportDialog() {
       <span className="import-dialog__policy">New imported sessions start supervised with standard speed.</span>
       <Button variant="ghost" onClick={requestClose} disabled={importing}>Cancel</Button>
       <Button variant="primary" type="submit" form="import-form" busy={importing}
-        disabled={!picked || !details || detailLoading || Boolean(unavailableReason) || Boolean(importError) || importing}
-        why={!picked ? 'Select a conversation' : unavailableReason ?? (!details ? 'Wait for its transcript to load' : undefined)}>
+        disabled={!picked || !detailsMatchSelection || detailLoading || Boolean(unavailableReason) || Boolean(importError) || importing}
+        why={!picked ? 'Select a conversation' : unavailableReason ?? (detailLoading || !detailsMatchSelection ? 'Wait for its transcript to load' : undefined)}>
         {picked?.importedSessionId ? 'Open imported session' : 'Import and open'}
       </Button>
     </div>
@@ -166,7 +176,7 @@ export function ImportDialog() {
           <p className="import-dialog__scope" title={allFolders || !project ? 'Loaded conversation history across available folders' : project.path}>{allFolders || !project ? 'Across all folders' : `Folder: ${project.path}`}</p>
           <label className="import-dialog__search"><Search size={14} aria-hidden="true" /><input disabled={importing} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter loaded history…" aria-label="Filter loaded conversation history" /><span>Loaded only</span></label>
           {listNotices.map((notice, index) => <p className="import-dialog__notice" key={`${index}:${notice}`}>{notice}</p>)}
-          {listError ? <InlineError onRetry={() => setListRevision((value) => value + 1)}>{listError}</InlineError> : null}
+          {listError ? <InlineError onRetry={importing ? undefined : () => setListRevision((value) => value + 1)}>{listError}</InlineError> : null}
           {loading ? <div className="import-dialog__state"><Spinner label="Loading conversations" /><span>Reading local conversation history…</span></div> : null}
           {!loading && !listError && conversations.length === 0 ? <div className="import-dialog__state"><Folder size={20} /><strong>No conversations found</strong><span>Relay only reads history available from this machine.</span></div> : null}
           {!loading && conversations.length > 0 && visible.length === 0 ? <div className="import-dialog__state"><Search size={18} /><strong>No matches in loaded history</strong><span>Load more history to search older conversations.</span></div> : null}
@@ -177,18 +187,18 @@ export function ImportDialog() {
               {item.unavailableReason || !item.directory ? <span className="import-dialog__row-warning"><AlertTriangle size={12} />Unavailable to import</span> : null}
             </button>)}
           </div>
-          {nextCursor ? <Button className="import-dialog__more" onClick={() => void loadMore()} busy={loadingMore} disabled={loadingMore}>Load more</Button> : null}
+          {nextCursor ? <Button className="import-dialog__more" onClick={() => void loadMore()} busy={loadingMore} disabled={loadingMore || importing}>Load more</Button> : null}
         </section>
 
         <section className="import-dialog__preview" aria-label="Conversation preview" aria-live="polite">
           {!picked ? <div className="import-dialog__state import-dialog__state--preview"><ArrowDownToLine size={20} /><strong>Choose a conversation</strong><span>Review its transcript and original folder before importing.</span></div> : <>
-            <div className="import-dialog__preview-head"><div><h3>{picked.title || 'Untitled conversation'}</h3><p><Folder size={13} />{picked.directory ?? 'Original folder unavailable'}</p></div><button className="import-dialog__clear" type="button" aria-label="Clear selected conversation" onClick={() => setSelected(null)}><X size={15} /></button></div>
+            <div className="import-dialog__preview-head"><div><h3>{picked.title || 'Untitled conversation'}</h3><p><Folder size={13} />{picked.directory ?? 'Original folder unavailable'}</p></div><button className="import-dialog__clear" type="button" aria-label="Clear selected conversation" disabled={importing} onClick={() => setSelected(null)}><X size={15} /></button></div>
             <p className="import-dialog__resume-note">Import opens a Relay session without starting a model turn. Your next composer message resumes this conversation in its original folder.</p>
             {unavailableReason ? <div className="import-dialog__unavailable"><AlertTriangle size={15} /><span>{unavailableReason}</span></div> : null}
-            <p className="import-dialog__cli-note">Finish any active CLI run before continuing here. Native provider APIs do not reliably report whether another CLI owns this conversation.</p>
-            {detailError ? <InlineError onRetry={() => setDetailRevision((value) => value + 1)}>{detailError}</InlineError> : null}
+            <p className="import-dialog__cli-note">Finish any active CLI run before continuing here.</p>
+            {detailError ? <InlineError onRetry={importing ? undefined : () => setDetailRevision((value) => value + 1)}>{detailError}</InlineError> : null}
             {detailLoading ? <div className="import-dialog__state"><Spinner label="Loading transcript" /><span>Loading transcript…</span></div> : null}
-            {details ? <>
+            {details && detailsMatchSelection ? <>
               {details.notices.map((notice, index) => <p className="import-dialog__notice" key={`${index}:${notice}`}>{notice}</p>)}
               {details.truncated ? <p className="import-dialog__truncated">This preview is shortened. The source conversation remains unchanged.</p> : null}
               <div className="import-dialog__transcript">
@@ -198,7 +208,7 @@ export function ImportDialog() {
                 </article>) : <div className="import-dialog__state"><strong>No transcript preview</strong><span>The conversation can still be imported.</span></div>}
               </div>
             </> : null}
-            {importError ? <InlineError onRetry={() => void importAndOpen()}>{importError}</InlineError> : null}
+            {importError ? <InlineError onRetry={importing ? undefined : () => void importAndOpen()}>{importError}</InlineError> : null}
           </>}
         </section>
       </form>
