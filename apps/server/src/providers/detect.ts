@@ -6,7 +6,8 @@ import { CODEX_POLICIES, parseCodexModel } from './codex/capabilities.js';
 import { JsonRpcConnection, RpcError } from './codex/rpc.js';
 import { CLAUDE_DEFAULT_MODEL, CLAUDE_MODELS } from './claude/messages.js';
 import { claudeEnvironment } from './claude/auth.js';
-import { TextTail, cleanEnv, errorMessage, isRecord, truncate } from './common.js';
+import { CLAUDE_POLICIES, probeClaudeModels } from './claude/capabilities.js';
+import { TextTail, cleanEnv, errorMessage, isRecord, redactSecrets, truncate } from './common.js';
 import { bundledClaudeCandidates, resolveExecutable, type ResolvedExecutable } from './discovery.js';
 import { runProbe, shutdownChild, settlesWithin, type ChildLike, type ProbeFn } from './process.js';
 
@@ -32,7 +33,19 @@ function skippedNote(executable: ResolvedExecutable, label: string): string | nu
 
 export async function detectClaude(settings: AppSettings, deps: DetectDeps = {}): Promise<ProviderInfo> {
   const env = deps.env ?? process.env;
-  const base: ProviderInfo = { id: 'claude', name: 'Claude', available: false, version: null, executable: null, reason: null, models: CLAUDE_MODELS };
+  const baselinePolicies = CLAUDE_POLICIES.filter((policy) => policy !== 'auto');
+  const base: ProviderInfo = { id: 'claude', name: 'Claude', available: false, version: null, executable: null, reason: null,
+    models: CLAUDE_MODELS.map((model) => ({ ...model, policies: baselinePolicies })), policies: baselinePolicies };
+  const withModels = async (info: ProviderInfo): Promise<ProviderInfo> => {
+    // Injected probes own their entire environment; never escape them by launching a real SDK process.
+    if (deps.probe || deps.spawn || deps.env || deps.home) return info;
+    try {
+      const models = await probeClaudeModels(settings);
+      return models.length ? { ...info, models } : { ...info, reason: `${info.reason ?? ''} Model capabilities were not reported; showing baseline controls.`.trim() };
+    } catch (error) {
+      return { ...info, reason: `${info.reason ?? ''} Model capabilities unavailable: ${truncate(redactSecrets(errorMessage(error)), 250)}`.trim() };
+    }
+  };
   const resolved = await resolveExecutable({ name: 'claude', override: settings.claudeExecutable, env, home: deps.home, probe: deps.probe, extraCandidates: bundledClaudeCandidates() });
   if (!resolved.ok) return { ...base, reason: resolved.reason };
   const { executable } = resolved;
@@ -40,7 +53,7 @@ export async function detectClaude(settings: AppSettings, deps: DetectDeps = {})
   const note = skippedNote(executable, 'Claude');
   const childEnv = claudeEnvironment(env);
   if (childEnv.ANTHROPIC_API_KEY) {
-    return { ...info, available: true, reason: ['ANTHROPIC_API_KEY is set; the key is not validated until a session runs.', note].filter(Boolean).join(' ') };
+    return withModels({ ...info, available: true, reason: ['ANTHROPIC_API_KEY is set; the key is not validated until a session runs.', note].filter(Boolean).join(' ') });
   }
   // The CLI reports local login state without inference. Never inspect its credential files or expose account details.
   let status: unknown;
@@ -67,7 +80,7 @@ export async function detectClaude(settings: AppSettings, deps: DetectDeps = {})
   const method = status.authMethod === 'claude.ai' ? 'Claude subscription login'
     : status.authMethod === 'oauth_token' ? 'Claude Code OAuth token'
     : 'Claude Code login';
-  return { ...info, available: true, reason: [`${method} detected; account access and quota are checked when a session runs.`, note].filter(Boolean).join(' ') };
+  return withModels({ ...info, available: true, reason: [`${method} detected; account access and quota are checked when a session runs.`, note].filter(Boolean).join(' ') });
 }
 
 // ---- Codex -----------------------------------------------------------------------------------------------------

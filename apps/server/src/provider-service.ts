@@ -17,19 +17,20 @@ export class ProviderService {
   private readonly catalogs = new Map<string, { expires: number; value: ProviderCatalog }>();
   private readonly catalogInflight = new Map<string, Promise<ProviderCatalog>>();
 
-  constructor(private readonly providers: ProviderRuntime, private readonly getSettings: () => AppSettings, private readonly log: Logger) {}
+  constructor(private readonly providers: ProviderRuntime, private readonly getSettings: () => AppSettings, private readonly log: Logger,
+    private readonly onChange: () => void = () => {}) {}
 
   private probe(): Promise<ProviderInfo[]> {
     const generation = ++this.generation;
     const promise = this.providers.detectProviders(this.getSettings()).then(
       (result) => {
-        if (generation === this.generation) this.cache = result;
+        if (generation === this.generation) { this.cache = result; this.onChange(); }
         return result;
       },
       (error) => {
         this.log('error', 'Provider detection failed', error);
         const failed = placeholder(`Provider detection failed: ${errorMessage(error)}`);
-        if (generation === this.generation) this.cache = failed;
+        if (generation === this.generation) { this.cache = failed; this.onChange(); }
         return failed;
       },
     ).finally(() => {

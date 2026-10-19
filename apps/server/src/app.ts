@@ -97,7 +97,7 @@ export function createApplication(options: ApplicationOptions): RelayApplication
   const security = new Security({ getPort: () => boundPort, webDevPort: config.webDevPort, extraOrigins: config.allowedOrigins });
   const hub = new Hub(security, log);
   const tasks = new TaskService(store);
-  const providers = new ProviderService(options.providers, () => store.getSettings(), log);
+  const providers = new ProviderService(options.providers, () => store.getSettings(), log, () => store.touch());
   const runtime = new SessionRuntime(store, hub, options.providers, tasks, log, options.runtime, (session) => {
     resolveRunConfig(providers.cached()?.find((row) => row.id === session.provider), session, { effort: true, policy: true, serviceTier: true });
   });
