@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import type { AppSettings, Project, ProviderInfo } from '@relay/contracts';
 import { useRelay, type SettingsSection } from '../store/store';
@@ -6,18 +6,13 @@ import { api, errorMessage } from '../lib/api';
 import { Button, InlineError } from './ui';
 import { copyText } from '../lib/clipboard';
 import { SelectMenu } from './SelectMenu';
+import { SettingRow } from './SettingRow';
+import { BrowserSettings } from './browser/BrowserSettings';
 
 const CATEGORIES: { id: SettingsSection; name: string }[] = [
-  { id: 'general', name: 'General' }, { id: 'project', name: 'Project' }, { id: 'providers', name: 'Providers' }, { id: 'appearance', name: 'Appearance' },
+  { id: 'general', name: 'General' }, { id: 'project', name: 'Project' }, { id: 'providers', name: 'Providers' }, { id: 'browser', name: 'Browser' }, { id: 'appearance', name: 'Appearance' },
 ];
 const effortName = (id: string, label: string) => ({ low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra High', 'extra-high': 'Extra High', max: 'Max', ultra: 'Ultra' } as Record<string, string>)[id.toLowerCase()] ?? label;
-
-function SettingRow({ title, description, htmlFor, children }: { title: string; description?: string; htmlFor: string; children: ReactNode }) {
-  return <div className="settings-row">
-    <div className="settings-row__copy"><label htmlFor={htmlFor}>{title}</label>{description ? <p>{description}</p> : null}</div>
-    <div className="settings-row__control">{children}</div>
-  </div>;
-}
 
 function ProviderStatus({ provider }: { provider: ProviderInfo }) {
   return <section className="settings-provider" aria-label={`${provider.name} status`}>
@@ -104,6 +99,8 @@ export function SettingsPage() {
         <SettingRow title="Service tier" description="Request speed for the default model." htmlFor="st-tier">
           <SelectMenu id="st-tier" label="Default service tier" value={settings.defaultServiceTier ?? 'standard'} disabled={disabled} options={tiers.map((item) => ({ value: item.id, label: `${item.id === 'priority' ? 'Fast' : item.name}${item.id === (selectedModel?.defaultServiceTier ?? 'standard') ? ' · Default' : ''}`, description: item.description }))} onChange={(value) => void update({ defaultServiceTier: value }, 'tier')} />
         </SettingRow>
+        <div className="settings-page__section-head settings-page__section-head--next"><h2>Context</h2></div>
+        <AutoCompactSetting settings={settings} disabled={disabled} update={update} />
         <div className="settings-page__section-head settings-page__section-head--next"><h2>Workspace & permissions</h2></div>
         <SettingRow title="Workspace" description="Use a separate Git worktree, or edit the existing project folder." htmlFor="st-workspace">
           <SelectMenu id="st-workspace" label="Default workspace" value={settings.defaultIsolated ? 'worktree' : 'project'} disabled={disabled} options={[{ value: 'worktree', label: 'Isolated worktree' }, { value: 'project', label: 'Project folder' }]} onChange={(value) => void update({ defaultIsolated: value === 'worktree' }, 'workspace')} />
@@ -112,6 +109,7 @@ export function SettingsPage() {
           <SelectMenu id="st-policy" label="Default approval policy" value={settings.defaultPolicy} disabled={disabled || policies.length === 0} options={policies.map((value) => ({ value, label: value === 'balanced' ? 'Auto-accept edits' : value === 'full-access' ? 'Full access' : value[0]!.toUpperCase() + value.slice(1), description: value === 'supervised' ? 'Ask before taking actions that change files or run commands.' : value === 'balanced' ? 'Allow file edits while keeping command approvals.' : value === 'auto' ? 'Allow common actions automatically with safety checks.' : 'Allow all actions without approval prompts.' }))} onChange={(value) => void update({ defaultPolicy: value as AppSettings['defaultPolicy'] }, 'policy')} />
         </SettingRow>
       </div> : null}
+      {category === 'browser' ? <BrowserSettings settings={settings} disabled={disabled} update={update} /> : null}
       {category === 'project' && project ? <ProjectSettings key={`${project.id}:${project.name}`} project={project} /> : null}
       {category === 'providers' ? <div className="settings-page__section">
         <div className="settings-page__section-head settings-page__section-head--actions"><div><h2>Connected agents</h2><p>Local installations and login status.</p></div><Button size="sm" disabled={disabled} busy={busy === 'providers'} onClick={() => void refreshProviders()}><RefreshCw size={12} /> Re-check</Button></div>
@@ -135,6 +133,40 @@ export function SettingsPage() {
       <footer className="settings-page__foot">Relay {boot.version}<span>Local workspace</span></footer>
     </div>
   </div>;
+}
+
+const COMPACT_MIN = 1;
+const COMPACT_MAX = 95;
+
+/** Auto-compact threshold: the provider decides by default, or a custom share of the context window. */
+function AutoCompactSetting({ settings, disabled, update }: { settings: AppSettings; disabled: boolean; update: (patch: Partial<AppSettings>, key: string) => Promise<boolean> }) {
+  const saved = settings.autoCompactPercent ?? null;
+  const [mode, setMode] = useState<'default' | 'custom'>(saved === null ? 'default' : 'custom');
+  const [draft, setDraft] = useState(saved === null ? '' : String(saved));
+  useEffect(() => { setMode(saved === null ? 'default' : 'custom'); setDraft(saved === null ? '' : String(saved)); }, [saved]);
+  const value = Number(draft);
+  const valid = draft.trim() !== '' && Number.isInteger(value) && value >= COMPACT_MIN && value <= COMPACT_MAX;
+  const dirty = mode === 'custom' && valid && value !== saved;
+  const save = () => { if (dirty) void update({ autoCompactPercent: value }, 'compact'); };
+  return <>
+    <SettingRow
+      title="Auto-compact" htmlFor="st-compact"
+      description="Summarise older conversation automatically as it nears the model’s context limit. The provider’s own reserve may compact earlier, and Codex needs the model to report its context size. Running sessions use a change on their next turn."
+    >
+      <SelectMenu id="st-compact" label="Auto-compact" value={mode} disabled={disabled} options={[{ value: 'default', label: 'Provider default' }, { value: 'custom', label: 'Custom percent' }]} onChange={(next) => {
+        if (next === 'default') { setMode('default'); if (saved !== null) void update({ autoCompactPercent: null }, 'compact'); }
+        else { setMode('custom'); setDraft((d) => d || '80'); }
+      }} />
+    </SettingRow>
+    {mode === 'custom' ? <SettingRow title="Compact at" description={`Share of the context window used, from ${COMPACT_MIN} to ${COMPACT_MAX}.`} htmlFor="st-compact-percent">
+      <div className="settings-percent">
+        <input id="st-compact-percent" className="input" type="number" inputMode="numeric" min={COMPACT_MIN} max={COMPACT_MAX} step={1} value={draft} disabled={disabled} aria-invalid={draft !== '' && !valid ? true : undefined} onChange={(e) => setDraft(e.target.value)} onBlur={save} onKeyDown={(e) => { if (e.key === 'Enter') save(); }} />
+        <span aria-hidden="true">%</span>
+        <Button size="sm" disabled={!dirty || disabled} onClick={save}>Save</Button>
+      </div>
+      {draft !== '' && !valid ? <p className="settings-percent__error" role="alert">Enter a whole number from {COMPACT_MIN} to {COMPACT_MAX}.</p> : null}
+    </SettingRow> : null}
+  </>;
 }
 
 function ProjectSettings({ project }: { project: Project }) {

@@ -1,5 +1,5 @@
 import type {
-  Approval, AppSettings, Bootstrap, DirectoryListing, ExternalConversationDetails, ExternalConversationList, FileEntry, GitStatus, ImportConversationResult, Project, ProviderCatalog, ProviderInfo, RunChanges, Session, SessionUsage, ToolCall, Task, TaskStatus, WorkspaceEvent,
+  Approval, AppSettings, Bootstrap, BrowserAction, BrowserConnect, BrowserDiscovery, BrowserSessionState, BrowserTab, DirectoryListing, ExternalConversationDetails, ExternalConversationList, FileEntry, GitStatus, ImportConversationResult, Project, ProviderCatalog, ProviderInfo, RunChanges, Session, SessionUsage, ToolCall, Task, TaskStatus, WorkspaceEvent,
 } from '@relay/contracts';
 export type { ProviderCatalog } from '@relay/contracts';
 
@@ -94,6 +94,8 @@ async function readFile(projectId: string, path: string, sessionId: string | nul
   return { content: text, path };
 }
 
+const browserBase = (sessionId: string): string => `/api/sessions/${encodeURIComponent(sessionId)}/browser`;
+
 export const api = {
   bootstrap: (signal?: AbortSignal) => json<Bootstrap>('/api/bootstrap', 'GET', undefined, signal),
   createProject: (input: { name: string; path: string }) => json<Project>('/api/projects', 'POST', input),
@@ -134,6 +136,16 @@ export const api = {
   decideApproval: (id: string, decision: 'approved' | 'denied') => json<Approval>(`/api/approvals/${encodeURIComponent(id)}`, 'POST', { decision }),
   updateSettings: (patch: Partial<AppSettings>) => json<AppSettings>('/api/settings', 'PATCH', patch),
   refreshProviders: () => json<ProviderInfo[]>('/api/providers/refresh', 'POST'),
+  browserDiscovery: (signal?: AbortSignal) => json<BrowserDiscovery>('/api/browser/discovery', 'GET', undefined, signal),
+  /** Downloads the managed Chromium; can take up to about two minutes. */
+  installBrowser: () => json<BrowserDiscovery>('/api/browser/install', 'POST', {}),
+  browserState: (sessionId: string, signal?: AbortSignal) => json<BrowserSessionState>(`${browserBase(sessionId)}`, 'GET', undefined, signal),
+  browserConnect: (sessionId: string, input: BrowserConnect) => json<BrowserSessionState>(`${browserBase(sessionId)}/connect`, 'POST', input),
+  browserDisconnect: (sessionId: string) => json<BrowserSessionState>(`${browserBase(sessionId)}/disconnect`, 'POST', {}),
+  browserNewTab: (sessionId: string, url?: string) => json<BrowserTab>(`${browserBase(sessionId)}/tabs`, 'POST', url ? { url } : {}),
+  /** `clientId` is the viewer id from the stream's hello message; the server checks it against the tab's control owner. */
+  browserAction: (sessionId: string, tabId: string, action: BrowserAction, clientId?: string) =>
+    json<unknown>(`${browserBase(sessionId)}/tabs/${encodeURIComponent(tabId)}/action`, 'POST', clientId ? { action, clientId } : { action }),
 };
 
 export const errorMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e));

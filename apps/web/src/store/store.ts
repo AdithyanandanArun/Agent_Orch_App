@@ -3,10 +3,11 @@ import { mergeTextDelta } from '@relay/contracts/stream';
 import type { Approval, Bootstrap, Message, Project, ServerEvent, ClientEvent, Session, Task, WorkspaceEvent } from '@relay/contracts';
 import { api, errorMessage } from '../lib/api';
 import { terminalBus } from './terminalBus';
+import { isBrowserOpened } from './browser';
 
 export type View = 'workspace' | 'tasks' | 'activity' | 'map' | 'settings';
-export type SettingsSection = 'general' | 'project' | 'providers' | 'appearance';
-export type ContextTab = 'overview' | 'files' | 'changes' | 'preview';
+export type SettingsSection = 'general' | 'project' | 'providers' | 'browser' | 'appearance';
+export type ContextTab = 'overview' | 'files' | 'changes' | 'browser';
 export type Scope = 'session' | 'project';
 export type Connection = 'connecting' | 'online' | 'offline';
 export type TerminalStatus = 'idle' | 'starting' | 'running' | 'exited' | 'lost';
@@ -40,10 +41,13 @@ interface Persisted {
   activeProjectId?: string; sessionByProject?: Record<string, string>; view?: View; contextTab?: ContextTab;
   contextOpen?: boolean; terminalOpen?: boolean; terminalHeight?: number; scope?: Scope;
 }
+/** The Preview tab became the shared Browser tab; keep a saved selection pointing at it. */
+const migratePersisted = (saved: Persisted): Persisted =>
+  (saved.contextTab as string | undefined) === 'preview' ? { ...saved, contextTab: 'browser' } : saved;
 const loadPersisted = (): Persisted => {
   try {
     const current = localStorage.getItem(LS);
-    if (current) return JSON.parse(current) as Persisted;
+    if (current) return migratePersisted(JSON.parse(current) as Persisted);
     const previous = JSON.parse(localStorage.getItem('relay.ui.v1') ?? '{}') as Persisted;
     // Keep the user's project/session selection while starting the simpler layout with optional panels closed.
     return { activeProjectId: previous.activeProjectId, sessionByProject: previous.sessionByProject, scope: previous.scope };
@@ -264,6 +268,13 @@ export const useRelay = create<RelayState>((set, get) => {
   };
 
   const handleServerEvent = (ev: ServerEvent): void => {
+    const raw: unknown = ev;
+    if (isBrowserOpened(raw)) {
+      // The agent started using the browser: surface the viewer for the session on screen, without changing focus.
+      const { activeProjectId, sessionByProject, view } = get();
+      if (view === 'workspace' && activeProjectId && sessionByProject[activeProjectId] === raw.sessionId) patch({ contextTab: 'browser', contextOpen: true });
+      return;
+    }
     switch (ev.type) {
       case 'state.changed': {
         const incoming = ev.event;

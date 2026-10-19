@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Activity, ArrowDownToLine, ArrowRightLeft, CornerDownLeft, FolderOpen, FolderPlus, Kanban, LayoutPanelLeft, ListPlus, Moon, Network, PanelRight, Pencil, Plus, RefreshCw, Search, Settings, Square, SquareTerminal, Keyboard } from 'lucide-react';
+import { Activity, ArrowDownToLine, ArrowRightLeft, CornerDownLeft, FolderOpen, FolderPlus, Kanban, LayoutPanelLeft, ListPlus, Moon, Network, PanelRight, Pencil, Plus, RefreshCw, Search, Settings, Square, SquareTerminal, Keyboard, Globe } from 'lucide-react';
 import { useRelay } from '../store/store';
 import { api, errorMessage } from '../lib/api';
 import { cx, fuzzy } from '../lib/format';
@@ -30,7 +30,7 @@ export function Palette() {
       { id: 'v-map', group: 'Go to', label: 'Agent map', icon: <Network size={15} />, run: go(() => st.setView('map')) },
       { id: 'tab-files', group: 'Workspace', label: 'Show files', icon: <PanelRight size={15} />, run: go(() => { st.setView('workspace'); st.setContextTab('files'); }) },
       { id: 'tab-changes', group: 'Workspace', label: 'Show changes', icon: <PanelRight size={15} />, run: go(() => { st.setView('workspace'); st.setContextTab('changes'); }) },
-      { id: 'tab-preview', group: 'Workspace', label: 'Show preview', icon: <PanelRight size={15} />, run: go(() => { st.setView('workspace'); st.setContextTab('preview'); }) },
+      { id: 'tab-browser', group: 'Workspace', label: 'Show browser', keywords: 'preview web page chromium', icon: <Globe size={15} />, run: go(() => { st.setView('workspace'); st.setContextTab('browser'); }) },
       { id: 'terminal', group: 'Workspace', label: st.terminalOpen ? 'Hide terminal' : 'Show terminal', icon: <SquareTerminal size={15} />, hint: `${MOD} J`, run: go(() => st.toggleTerminal()) },
       { id: 'context', group: 'Workspace', label: st.contextOpen ? 'Hide context pane' : 'Show context pane', icon: <PanelRight size={15} />, run: go(() => st.toggleContext()) },
     ];
