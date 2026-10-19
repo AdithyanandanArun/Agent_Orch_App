@@ -1,7 +1,7 @@
 import { build } from 'esbuild';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { access, chmod, copyFile, cp, mkdir, readdir, readFile, readlink, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { access, chmod, copyFile, cp, mkdir, readdir, readFile, readlink, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 import { dirname, join, relative, resolve, delimiter } from 'node:path';
@@ -113,6 +113,10 @@ async function removeBrokenLinks(directory) {
   }
 }
 await removeBrokenLinks(join(server, 'node_modules'));
+// Installer bookkeeping and command shims are not runtime inputs and may contain builder paths.
+for (const file of ['node_modules/.modules.yaml', 'node_modules/.pnpm-workspace-state-v1.json', 'node_modules/.pnpm/lock.yaml', 'node_modules/.bin', 'node_modules/.pnpm/node_modules/.bin']) {
+  await rm(join(server, file), { recursive: true, force: true });
+}
 // Bundle our TypeScript and shared contracts; native modules and the provider SDK remain external.
 await build({
   entryPoints: [join(root, 'apps/server/src/index.ts')], outfile: join(server, 'dist/index.mjs'),
@@ -135,7 +139,19 @@ await copyFile(join(nodeDir, 'LICENSE'), join(licenses, 'Node-LICENSE'));
 await copyFile(join(stage, 'LICENSE'), join(licenses, 'Electron-LICENSE'));
 await writeFile(join(licenses, 'Relay-NOTICE'), 'Relay source: https://github.com/AdithyanandanArun/Agent_Orch_App\nThe project owner has not selected a license for Relay source code. This package does not grant a new license.\nThird-party components retain their own licenses, reproduced alongside their packages and in this directory.\n');
 const inventory = [];
-// Preserve each deployed package's declared license and copy its license/notice files into an inventory.
+const inventoried = new Set();
+async function inventoryPackage(packageDir) {
+  const info = JSON.parse(await readFile(join(packageDir, 'package.json'), 'utf8'));
+  const key = `${info.name}@${info.version}`;
+  if (inventoried.has(key)) return;
+  inventoried.add(key);
+  const destination = join(licenses, key.replaceAll('/', '+'));
+  const files = (await readdir(packageDir)).filter((file) => /^(licen[cs]e|notice|copying|thirdpartynotices)(\.|$)/i.test(file));
+  await mkdir(destination, { recursive: true });
+  for (const file of files) await cp(join(packageDir, file), join(destination, file), { recursive: true });
+  inventory.push({ name: info.name, version: info.version, license: info.license ?? 'unspecified', files });
+}
+// Preserve notices for deployed backend dependencies.
 for (const versioned of await readdir(virtualStore)) {
   const modules = join(virtualStore, versioned, 'node_modules');
   if (!(await present(modules))) continue;
@@ -147,20 +163,36 @@ for (const versioned of await readdir(virtualStore)) {
   for (const entry of names) {
     const packageDir = join(modules, entry);
     try {
-      const resolved = await realpath(packageDir);
-      if (resolved !== resolve(packageDir)) continue; // Dependency symlink; its own package is inventoried separately.
-      const info = JSON.parse(await readFile(join(packageDir, 'package.json'), 'utf8'));
-      if (!info.name) continue;
-      const destination = join(licenses, `${info.name.replaceAll('/', '+')}@${info.version}`);
-      const files = (await readdir(packageDir)).filter((file) => /^(licen[cs]e|notice|copying)(\.|$)/i.test(file));
-      await mkdir(destination, { recursive: true });
-      for (const file of files) if ((await stat(join(packageDir, file))).isFile()) await copyFile(join(packageDir, file), join(destination, file));
-      inventory.push({ name: info.name, version: info.version, license: info.license ?? 'unspecified', files });
-    } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
-    }
+      if (await realpath(packageDir) !== resolve(packageDir)) continue;
+      await inventoryPackage(packageDir);
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
 }
+// The UI bundles its dependency code, so its notices must accompany the binary too.
+const visitedFrontend = new Set();
+async function resolveDependency(from, name) {
+  for (let current = from; ; current = dirname(current)) {
+    const candidate = join(current, 'node_modules', name);
+    if (await present(join(candidate, 'package.json'))) return realpath(candidate);
+    if (current === dirname(current)) return null;
+  }
+}
+async function frontendLicenses(packageDir, includePackage = true) {
+  const resolved = await realpath(packageDir);
+  if (visitedFrontend.has(resolved)) return;
+  visitedFrontend.add(resolved);
+  if (includePackage) await inventoryPackage(resolved);
+  const info = JSON.parse(await readFile(join(resolved, 'package.json'), 'utf8'));
+  for (const [name, optional] of [
+    ...Object.keys(info.dependencies ?? {}).map((name) => [name, false]),
+    ...Object.keys(info.optionalDependencies ?? {}).map((name) => [name, true]),
+  ]) {
+    const dependency = await resolveDependency(resolved, name);
+    if (dependency) await frontendLicenses(dependency);
+    else if (!optional) throw new Error(`Missing frontend dependency for license inventory: ${name}`);
+  }
+}
+await frontendLicenses(join(root, 'apps/web'), false);
 await writeFile(join(licenses, 'dependencies.json'), JSON.stringify(inventory.sort((a, b) => a.name.localeCompare(b.name)), null, 2) + '\n');
 await writeFile(join(stage, 'resources/build-info.json'), JSON.stringify({ version: pkg.version, target, node: runtime.version, nodeArchiveSha256: runtime[target].sha256, electron: JSON.parse(await readFile(require.resolve('electron/package.json'), 'utf8')).version }, null, 2) + '\n');
 // Stable metadata keeps archive ordering, owners and timestamps independent of the build machine.
