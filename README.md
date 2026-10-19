@@ -29,9 +29,11 @@ pnpm start
 
 **Codex:** install the supported Codex CLI and authenticate it yourself with `codex login`. Relay talks to its documented app-server protocol, using the conversation identifier for later turns.
 
-**Claude:** the product adapter uses the official Claude Agent SDK and API authentication. Set `ANTHROPIC_API_KEY` in the environment that starts Relay. Credentials stay on the server and are not entered into the browser. A copied `.env` file is not automatically loaded; export the variable in your shell or use your process manager's environment configuration.
+**Claude:** the adapter uses the official Claude Agent SDK with your existing local Claude Code login. Run `claude auth login` in a terminal on the same machine and as the same OS user that starts Relay, then use **Settings → Re-check**. Relay asks `claude auth status --json` for login status; it never reads, copies or stores credential files. If Settings selects a different executable than your shell, use that full executable path for login.
 
-An installed executable does not establish authentication or access to every model. Settings show executable diagnostics and allow path overrides. Provider errors remain visible in the session. The developer's own Claude CLI sessions used to build this repository are distinct from the authentication offered by the product.
+Alternatively, set `ANTHROPIC_API_KEY` in the environment that starts Relay. An explicit API key takes precedence over the saved login and uses API billing. Credentials are not entered into the browser. A copied `.env` file is not automatically loaded; export the variable in your shell or use your process manager's environment configuration.
+
+An installed executable does not establish authentication or access to every model. Settings show executable and login diagnostics and allow path overrides. Model access, expired credentials and quota errors remain visible when a session runs.
 
 See [provider research](docs/provider-research.md) for the T3 architecture investigation, protocol sources and provider access assumptions.
 

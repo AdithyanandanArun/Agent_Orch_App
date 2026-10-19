@@ -72,7 +72,7 @@ export function SettingsSheet() {
           {boot.providers.length === 0 ? <p className="muted small">The server has not reported any providers yet. Use Re-check to probe the Codex and Claude executables.</p> : null}
           {boot.providers.map((p) => <ProviderRow key={p.id} p={p} />)}
           <div className="note"><KeyRound size={14} />
-            <p>Claude runs use <code>ANTHROPIC_API_KEY</code> from the server’s environment; Codex uses its own CLI login. Relay stores no credentials. A configured provider can still return authentication or quota errors when a run starts.</p>
+            <p>Claude uses your existing Claude Code login. Run <code>claude auth login</code> in a terminal on this machine, then Re-check. You can also set <code>ANTHROPIC_API_KEY</code> in the server’s environment; an API key takes precedence and uses API billing. Codex uses its own CLI login. Relay stores no credentials. A configured provider can still return authentication or quota errors when a run starts.</p>
           </div>
           <form className="form" onSubmit={(e) => { e.preventDefault(); void update({ claudeExecutable: claude.trim(), codexExecutable: codex.trim() }, 'paths').then(refreshProviders); }}>
             <Field label="Claude executable" htmlFor="st-claude" hint="Leave empty to let the server choose.">

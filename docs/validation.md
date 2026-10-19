@@ -45,6 +45,6 @@ The Electron 44.9.0 development launcher was smoke-tested under a temporary Xvfb
 
 ## Remaining limits
 
-The Claude product adapter was checked against SDK fixtures, not a live API turn: `ANTHROPIC_API_KEY` was absent. Personal Claude CLI workers used while developing the repository do not validate product API authentication. Claude subscription login requires a separately resolved provider access path.
+The initial Claude adapter was checked against SDK fixtures, not a live API turn: `ANTHROPIC_API_KEY` was absent. The subsequent local-login correction removes that API-key requirement and delegates authentication to Claude Code. A read-only CLI auth-status check found an existing Claude subscription login on the development machine. The running server's provider-refresh endpoint returned HTTP 200 and Claude `available: true` using `/home/adithyan/.npm-global/bin/claude` 2.1.292. Workspace type checking and the web production build passed. Existing authentication expectations were updated; the test suite and live model turns were not run for this correction. Remaining quota is unverified.
 
 Remote computer membership, distributed delivery, voice, browser control leases, automatic scheduling, automatic integration and signed desktop releases remain future milestones. Real multi-agent speedup, quality and total task cost have not yet been benchmarked. The next decisive product test remains an integrated feature built by two independent providers against a versioned contract.

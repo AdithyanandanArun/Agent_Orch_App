@@ -15,12 +15,24 @@ Both use the types in `@relay/contracts` unchanged. `AgentAdapter.run()` perform
 | --- | --- | --- |
 | Codex app-server documentation (local copy `/tmp/relay-codex-app-server.md`, from learn.chatgpt.com/docs) | Lifecycle, methods, approvals, items, errors | Example wire values in the prose are not all current (see next row). |
 | `codex app-server generate-json-schema` run against the installed `codex-cli 0.160.1` | Authoritative wire shapes | `AskForApproval` is kebab-case (`untrusted`, `on-request`, `never`), `SandboxMode` is kebab-case, `SandboxPolicy.type` is camelCase. The docs show `unlessTrusted`/`workspaceWrite` in places; the binary's schema wins. Request shapes were also exercised against the real app-server without inference (thread/start, thread/resume, malformed-thread turn/start) on 2026-10-19. |
-| Claude Agent SDK docs (`code.claude.com/docs/en/agent-sdk/*`), TypeScript reference, CLI reference (local copies `/tmp/relay-claude-*.md`) | `query()`, options, permissions, auth policy | The overview states that third-party developers may not offer claude.ai login or its rate limits without prior approval; API-key auth is required. |
+| Claude Agent SDK docs (`code.claude.com/docs/en/agent-sdk/*`), TypeScript reference, CLI reference (local copies `/tmp/relay-claude-*.md`) | `query()`, options, permissions | The SDK uses Claude Code's authentication. See the authentication update below for the distinction between this local CLI integration and offering login in a hosted product. |
 | Installed `@anthropic-ai/claude-agent-sdk@0.3.302` type declarations (`sdk.d.ts`) | Exact option names, message and result shapes, `canUseTool` signature | Checked rather than trusting the docs prose. Command line produced by the SDK was verified against a stub executable (no network). |
-| `claude --help` of Claude Code 2.1.292 | `--bare` semantics (OAuth/keychain never read) | Relay does not use bare mode (it would drop CLAUDE.md); it verifies the credential source instead, see below. |
+| `claude --help` and `claude auth status --help` of Claude Code 2.1.292 | CLI discovery and local login diagnostics | Relay does not use bare mode (it would drop CLAUDE.md). Authentication remains owned by Claude Code. |
 | T3 Code, upstream `7e7e6d8240858d19d8e72dbcd0f0117e3d0a7f56` (main), inspected 2026-10-19 (`/tmp/relay-t3-claude.ts`, `/tmp/relay-t3-codex.ts`) | Architecture only | Takeaways: one driver per provider behind a common adapter interface; capability/status probing is separate from running a session; provider processes are isolated from the UI/Node layers; provider status is cached and re-probed. No code, names or structure were copied; Relay's adapters are written from the protocol documents above. |
 
 ## Module layout
+
+### Authentication update, 2026-10-19
+
+The initial implementation imposed API-key-only authentication. That prevented the local developer's existing Claude Code login from working and has been removed. Relay now lets the official SDK launch Claude Code with its normal local authentication. An explicit `ANTHROPIC_API_KEY` takes precedence; otherwise the CLI can use its saved login or configured OAuth token. Relay neither reads credential files nor implements a login/token exchange.
+
+Sources rechecked for this correction:
+
+- [Anthropic's subscription help article](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan), updated October 7, 2026, explicitly describes continued Agent SDK, `claude -p` and third-party app use with subscription limits.
+- [Claude Code CLI reference](https://code.claude.com/docs/en/cli-reference) documents `claude auth login` and `claude auth status`, including JSON login state and authentication methods.
+- The [SDK overview](https://code.claude.com/docs/en/agent-sdk/overview) still contains a restriction on developers offering claude.ai login/rate limits without approval. These pages are not fully aligned. This implementation delegates to the user's already authenticated local CLI; it does not establish approval for a future hosted product's subscription login offering. Hosted authentication remains outside this milestone.
+
+### Files
 
 ```
 providers/
@@ -28,11 +40,12 @@ providers/
   common.ts           ProviderError, AbortError helpers, secret redaction, bounded stderr tail
   process.ts          probe runner (argv, timeout), ChildLike, escalating shutdown (stdin EOF -> SIGTERM -> SIGKILL)
   discovery.ts        executable resolution (override > PATH > ~/.local/bin > ~/.npm-global/bin > SDK-bundled)
-  detect.ts           detectProviders: version probe + Codex app-server account/model probe + Claude env check
+  detect.ts           detectProviders: version probe + Codex app-server account/models + Claude CLI auth status
   codex/rpc.ts        newline-delimited JSON-RPC client over a child's stdio
   codex/mapping.ts    policy/approval/item/usage mapping (pure)
   codex/adapter.ts    one process, one thread, one turn
   claude/messages.ts  SDK message -> AdapterEvent mapper, models, policy mapping (pure)
+  claude/auth.ts      common CLI environment, API-key precedence without credential storage
   claude/adapter.ts   query() wrapper: options, canUseTool, abort
   testing/            fake child, fixture `codex` process, helpers (tests only)
 ```
@@ -93,20 +106,20 @@ Each `run()` spawns `codex app-server` (stdio is the default transport, so no `-
 | `settingSources` | `['project']` | User-level settings (allow rules, `defaultMode`) cannot pre-approve tools or override the policy. Project CLAUDE.md is still read. |
 | `settings` | `{disableAllHooks: true}` | Hooks from a checked-out repository are not run. |
 | `systemPrompt` | `claude_code` preset | |
-| `env` | process env minus `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`, plus `ANTHROPIC_API_KEY` | |
+| `env` | process env without OpenAI/Codex API keys; preserves local Claude login and token configuration | A nonblank `ANTHROPIC_API_KEY` is trimmed and takes precedence; OAuth/auth-token variables are removed only in that case. Blank API keys are removed to allow CLI login. |
 | `abortController` | linked to `RunOptions.signal` | The SDK terminates the CLI process; `Query.close()` runs in `finally`. |
 
 Message mapping (`claude/messages.ts`): `stream_event` text deltas -> `text` (blank line between text blocks); the complete `assistant` message supplies `tool_use` blocks as `tool` events and supplies text only when that message was not streamed (no duplicates); `user` `tool_result` blocks -> `tool` events named `<Tool>:result`; `system/init` -> `session` (`session_id`); `api_retry` and `model_refusal_no_fallback` -> `info`; `result` -> one `usage` event (input = input + cache read + cache creation tokens summed over `modelUsage`, output tokens, `total_cost_usd`) and either completion or an error built from `subtype`, `errors` and `result`. A run whose stream ends without a `result` fails with `no_result` and the redacted stderr tail. Sub-agent text is not shown; sub-agent tool calls are prefixed `subagent:`.
 
 ## Detection (`detectProviders`)
 
-Runs `--version` probes (6s timeout, no shell) and, for Codex, a short app-server session that only calls `account/read` (no token refresh) and `model/list`. No inference is requested, so nothing is billed. The two providers are probed in parallel (about 0.6s on the development machine); concurrent calls with identical settings share one probe.
+Runs `--version` probes (6s timeout, no shell), a Claude `auth status --json` probe when no API key is supplied (6s timeout), and, for Codex, a short app-server session that only calls `account/read` (no token refresh) and `model/list`. No inference is requested. Concurrent calls with identical settings share one probe.
 
 Executable choice (`discovery.ts`): a non-empty `codexExecutable`/`claudeExecutable` setting is authoritative: if it fails `--version` the provider is reported unavailable with that reason and nothing else is tried. Otherwise every `claude`/`codex` on `PATH` in order, then `~/.local/bin`, then `~/.npm-global/bin`, then (Claude only) the binary bundled with the Agent SDK; the first one that exits 0 and prints a version wins, and skipped candidates are listed in `reason`. On the development machine `/usr/bin/claude` (a broken npm shim: "native binary not installed") is skipped and `~/.npm-global/bin/claude` 2.1.292 is used.
 
 `available` means "a session can be attempted", not "credentials are valid":
 
-* **Claude:** `available` requires a working executable and `ANTHROPIC_API_KEY` in the server environment. The key is never validated without a run; `reason` says so. Without a key the entry is unavailable and explains that Relay does not use claude.ai subscription login.
+* **Claude:** `available` requires a working executable plus either a nonblank `ANTHROPIC_API_KEY` or a CLI auth-status response with `loggedIn: true`. The key/login is not validated against a model without a run; `reason` says so. A missing login gives the resolved executable's `auth login` command and an optional API-key path. Failed, timed-out or unrecognized auth-status output is shown as a setup diagnostic. Only known authentication-method labels are exposed; email, account identifiers, raw auth-status output and credentials never enter the public result.
 * **Codex:** `available` requires a working executable, a responding app-server and an account from `account/read` (the account type is reported; the email is not read into the result). `account: null` with `requiresOpenaiAuth` yields unavailable plus a `codex login` hint. If `account/read` itself fails the provider stays available with a note that login could not be verified.
 * **Models:** Codex lists come from `model/list` (non-hidden, using the `model` id); if that call fails only the documented default `gpt-6.1-sol` is shown. Claude lists are the official identifiers `claude-sonnet-5-5` (default), `claude-opus-5-5`, `claude-fable-5-1`, `claude-haiku-4-5-20251001`; Relay does not call the Models API.
 
@@ -121,8 +134,8 @@ Both forward every approval request to `requestApproval`; neither disables a san
 
 ## Restrictions and security posture
 
-* **No subscription login.** Claude runs only with `ANTHROPIC_API_KEY`. The run is refused up front without it. The `system/init` message is checked: if Claude Code reports any credential source other than `ANTHROPIC_API_KEY` (for example `oauth`) the run stops before output is forwarded. OAuth/auth-token variables are removed from the child environment. Relay never reads, copies or stores Claude or Codex credential files; Codex authenticates with its own existing CLI login. Cloud-provider variables (`CLAUDE_CODE_USE_BEDROCK` etc.) are not stripped but are not a supported or documented Relay path.
-* **No secrets in output.** Error messages, stderr summaries and probe diagnostics pass through `redactSecrets` (API key shapes, bearer tokens, JWTs, `*_KEY/TOKEN/SECRET=` pairs, plus the literal key value). `ANTHROPIC_API_KEY` is removed from the Codex child's environment.
+* **CLI-owned authentication.** Relay never reads, copies or stores Claude or Codex credential files. Both use their local CLI authentication. Claude's init credential-source metadata is accepted, including OAuth; authentication failures are surfaced from the provider. An explicit API key takes precedence over Claude OAuth environment variables. Cloud-provider variables (`CLAUDE_CODE_USE_BEDROCK` etc.) are not stripped but are not a supported or documented Relay path.
+* **No secrets in diagnostics.** Error messages, stderr summaries and probe diagnostics pass through `redactSecrets` (API key shapes, bearer tokens, JWTs, `*_KEY/TOKEN/SECRET=` pairs, plus literal Claude key/token values from the environment). `ANTHROPIC_API_KEY` is removed from the Codex child's environment.
 * **No model substitution.** Neither adapter configures a fallback. If Claude reports `model_refusal_fallback` or Codex reports `model/rerouted`, the run is stopped with `model_substitution` and an `info` event, rather than continuing on a different model. A differing model in `system/init` or `thread/start` is reported as `info`.
 * **Fail closed.** Approval callbacks that throw or are aborted mean "deny". Unknown server requests are rejected, never auto-approved.
 * **No shell strings.** Every process is started with an argv array.
@@ -130,7 +143,7 @@ Both forward every approval request to `requestApproval`; neither disables a san
 
 ## Contract notes for the runtime
 
-* `run()` resolves when the turn completes successfully. It rejects with `name === 'AbortError'` when `signal` aborted (a rejection rather than a quiet resolve so an interrupted run cannot be mistaken for success); check `signal.aborted` before recording an error. Other failures reject with `ProviderError` (`code` is a stable tag such as `missing_api_key`, `executable_unavailable`, `resume_failed`, `process_exited`, `timeout`, `turn_failed`, `model_substitution`, `credential_source`).
+* `run()` resolves when the turn completes successfully. It rejects with `name === 'AbortError'` when `signal` aborted (a rejection rather than a quiet resolve so an interrupted run cannot be mistaken for success); check `signal.aborted` before recording an error. Other failures reject with `ProviderError` (`code` is a stable tag such as `executable_unavailable`, `resume_failed`, `process_exited`, `timeout`, `turn_failed`, `model_substitution`).
 * `requestApproval` may stay pending for a long time. On abort the adapters stop waiting for it; the host should still resolve it with `false`.
 * `session` events can repeat the same id; persist it as `providerSessionId` the first time it is seen.
 * `usage` is per run (not cumulative); the host should add it to the session totals.
@@ -142,7 +155,7 @@ Both forward every approval request to `requestApproval`; neither disables a san
 
 * Codex adapter against an in-memory fake child: handshake and parameters, policy mapping, streaming and de-duplication, tool events, every approval type, resume and resume failure, interrupt, SIGTERM/SIGKILL escalation, abort during setup, process exit with redacted stderr, initialize timeout, spawn failure, failed turns, model reroute, foreign threads and malformed lines.
 * Codex adapter against a real fixture process (`testing/fake-codex.mjs`): real spawn and stdio framing, approvals round trip, exit mid-turn, a process that ignores interrupt and SIGTERM is killed (checked by pid).
-* Claude adapter against a fake `query()` generator: options and environment, de-duplicated streaming, tool and usage mapping, `canUseTool` outcomes, abort propagation, missing key, wrong credential source, error results, fallback model, missing result.
+* Claude adapter against a fake `query()` generator: options and environment, de-duplicated streaming, tool and usage mapping, `canUseTool` outcomes, abort propagation, existing CLI login without a key, OAuth credential source, error results, fallback model, missing result. The existing authentication expectations were updated with the local-login correction; the suite was not rerun during that correction.
 * Discovery and detection with throwaway executables: broken PATH shim, precedence, override authority, timeouts, and Codex detection through the fixture app-server.
 
 Not covered automatically: real model turns, real approvals from the live CLIs and Windows process groups. Those need a manual run with credentials.

@@ -4,9 +4,10 @@ import type { AppSettings, ProviderInfo } from '@relay/contracts';
 import { CODEX_CLIENT_INFO } from './codex/adapter.js';
 import { JsonRpcConnection, RpcError } from './codex/rpc.js';
 import { CLAUDE_DEFAULT_MODEL, CLAUDE_MODELS } from './claude/messages.js';
+import { claudeEnvironment } from './claude/auth.js';
 import { TextTail, cleanEnv, errorMessage, isRecord, truncate } from './common.js';
 import { bundledClaudeCandidates, resolveExecutable, type ResolvedExecutable } from './discovery.js';
-import { shutdownChild, settlesWithin, type ChildLike, type ProbeFn } from './process.js';
+import { runProbe, shutdownChild, settlesWithin, type ChildLike, type ProbeFn } from './process.js';
 
 export const CODEX_DEFAULT_MODEL = 'gpt-6.1-sol';
 const CODEX_DEFAULT_MODEL_ENTRY = { id: CODEX_DEFAULT_MODEL, name: 'GPT-6.1 Sol' };
@@ -35,15 +36,37 @@ export async function detectClaude(settings: AppSettings, deps: DetectDeps = {})
   if (!resolved.ok) return { ...base, reason: resolved.reason };
   const { executable } = resolved;
   const info = { ...base, version: executable.version, executable: executable.path };
-  if (!env.ANTHROPIC_API_KEY?.trim()) {
-    return { ...info, reason: `Claude Code ${executable.version} is installed at ${executable.path}, but ANTHROPIC_API_KEY is not set in the Relay server environment. Relay uses API-key authentication only and does not use claude.ai subscription login.` };
-  }
   const note = skippedNote(executable, 'Claude');
-  return {
-    ...info,
-    available: true,
-    reason: ['ANTHROPIC_API_KEY is set; the key is not validated until a session runs.', note].filter(Boolean).join(' '),
-  };
+  const childEnv = claudeEnvironment(env);
+  if (childEnv.ANTHROPIC_API_KEY) {
+    return { ...info, available: true, reason: ['ANTHROPIC_API_KEY is set; the key is not validated until a session runs.', note].filter(Boolean).join(' ') };
+  }
+  // The CLI reports local login state without inference. Never inspect its credential files or expose account details.
+  let status: unknown;
+  let authStatusOk = false;
+  try {
+    const result = await (deps.probe ?? runProbe)(executable.path, ['auth', 'status', '--json'], { timeoutMs: 6_000, env: childEnv, cwd: tmpdir() });
+    if (result.timedOut || result.spawnError) {
+      return { ...info, reason: 'Claude Code login check could not complete. Run `claude auth status` in the server environment, then Re-check in Settings.' };
+    }
+    authStatusOk = result.ok;
+    status = JSON.parse(result.stdout);
+  } catch {
+    return { ...info, reason: 'Claude Code login status could not be read. Run `claude auth status` in the server environment, or set ANTHROPIC_API_KEY, then Re-check in Settings.' };
+  }
+  if (!isRecord(status) || typeof status.loggedIn !== 'boolean') {
+    return { ...info, reason: 'Claude Code returned an unrecognized login status. Update Claude Code or set ANTHROPIC_API_KEY, then Re-check in Settings.' };
+  }
+  if (!status.loggedIn) {
+    return { ...info, reason: `Claude Code ${executable.version} is installed, but no login was found. Run \`"${executable.path}" auth login\` in a terminal on this machine, or set ANTHROPIC_API_KEY in the Relay server environment, then Re-check in Settings.` };
+  }
+  if (!authStatusOk) {
+    return { ...info, reason: 'Claude Code login check failed. Run `claude auth status` in the server environment, then Re-check in Settings.' };
+  }
+  const method = status.authMethod === 'claude.ai' ? 'Claude subscription login'
+    : status.authMethod === 'oauth_token' ? 'Claude Code OAuth token'
+    : 'Claude Code login';
+  return { ...info, available: true, reason: [`${method} detected; account access and quota are checked when a session runs.`, note].filter(Boolean).join(' ') };
 }
 
 // ---- Codex -----------------------------------------------------------------------------------------------------

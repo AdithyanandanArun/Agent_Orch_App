@@ -134,17 +134,21 @@ describe('claude adapter', () => {
     expect(closes).toHaveBeenCalled();
   });
 
-  it('requires ANTHROPIC_API_KEY and never calls the SDK without it', async () => {
-    const { adapter, calls } = adapterFor([init(), success()], { PATH: '/usr/bin', CLAUDE_CODE_OAUTH_TOKEN: 'abc' });
-    await expect(adapter.run(makeRun().options)).rejects.toMatchObject({ code: 'missing_api_key', message: expect.stringContaining('ANTHROPIC_API_KEY') });
-    expect(calls).toHaveLength(0);
+  it('passes an existing Claude Code OAuth token to the SDK without requiring an API key', async () => {
+    const { adapter, calls } = adapterFor([init({ apiKeySource: 'oauth' }), success()], { PATH: '/usr/bin', CLAUDE_CODE_OAUTH_TOKEN: 'existing-cli-token' });
+    await adapter.run(makeRun().options);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.options.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe('existing-cli-token');
+    expect(calls[0]!.options.env?.ANTHROPIC_API_KEY).toBeUndefined();
   });
 
-  it('refuses to continue if Claude Code is not authenticating with the API key', async () => {
+  it('lets Claude Code use its saved login and accepts the OAuth credential source', async () => {
     const run = makeRun();
-    const { adapter } = adapterFor([init({ apiKeySource: 'oauth' }), ...streamText('should not appear'), success()]);
-    await expect(adapter.run(run.options)).rejects.toMatchObject({ code: 'credential_source' });
-    expect(text(run.events)).toBe('');
+    const { adapter, calls } = adapterFor([init({ apiKeySource: 'oauth' }), ...streamText('Hello'), success()], { PATH: '/usr/bin', HOME: '/home/x', ANTHROPIC_API_KEY: '  ' });
+    await adapter.run(run.options);
+    expect(calls[0]!.options.env?.HOME).toBe('/home/x');
+    expect(calls[0]!.options.env?.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(text(run.events)).toBe('Hello');
   });
 
   it('turns error results into errors with the SDK detail', async () => {

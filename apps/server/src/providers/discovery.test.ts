@@ -71,12 +71,16 @@ describe.skipIf(posixOnly)('provider detection', () => {
   afterEach(async () => { await box.dispose(); });
 
   it('does not treat an installed Claude binary as authenticated', async () => {
-    const claude = await box.script('home/.npm-global/bin/claude', 'echo "2.1.292 (Claude Code)"');
+    const claude = await box.script('home/.npm-global/bin/claude', `if [ "$1" = "auth" ]; then
+  echo '{"loggedIn":false,"authMethod":"none"}'
+  exit 1
+fi
+echo "2.1.292 (Claude Code)"`);
     const base = { settings: { ...settings, claudeExecutable: claude }, deps: { home: join(box.root, 'home') } };
     const noKey = await detectClaude(base.settings, { ...base.deps, env: { PATH: '' } });
     expect(noKey).toMatchObject({ id: 'claude', available: false, version: '2.1.292', executable: claude });
-    expect(noKey.reason).toContain('ANTHROPIC_API_KEY is not set');
-    expect(noKey.reason).toContain('subscription');
+    expect(noKey.reason).toContain('no login was found');
+    expect(noKey.reason).toContain('auth login');
     const withKey = await detectClaude(base.settings, { ...base.deps, env: { PATH: '', ANTHROPIC_API_KEY: 'sk-ant-secret-value-0000' } });
     expect(withKey.available).toBe(true);
     expect(withKey.reason).toContain('not validated');

@@ -105,12 +105,6 @@ export class ClaudeMessageMapper {
     switch (message.subtype) {
       case 'init': {
         this.noteSession(message.session_id);
-        if (message.apiKeySource !== 'ANTHROPIC_API_KEY') {
-          throw new ProviderError(
-            `Claude Code reported its credential source as "${String(message.apiKeySource)}". Relay only runs Claude with ANTHROPIC_API_KEY and does not use claude.ai subscription login, so the run was stopped.`,
-            { code: 'credential_source' },
-          );
-        }
         const model = str(message.model);
         if (model && model !== this.requestedModel && !model.startsWith(this.requestedModel) && !this.requestedModel.startsWith(model)) {
           this.emit({ type: 'info', content: `Claude is running model ${model} although ${this.requestedModel} was requested.` });

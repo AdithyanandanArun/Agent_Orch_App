@@ -9,7 +9,7 @@ function placeholder(reason: string): ProviderInfo[] {
   return PROVIDERS.map((p) => ({ id: p.id, name: p.name, available: false, version: null, executable: null, reason, models: [] }));
 }
 
-/** Caches provider diagnostics; probing is read-only (version checks), never a model call. */
+/** Caches provider diagnostics; probes check CLI versions, login state and models without inference. */
 export class ProviderService {
   private cache: ProviderInfo[] | null = null;
   private inflight: Promise<ProviderInfo[]> | null = null;

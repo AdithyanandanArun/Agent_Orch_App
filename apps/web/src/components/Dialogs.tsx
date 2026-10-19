@@ -103,9 +103,9 @@ export function SessionDialog() {
           />
           {info ? (
             info.available ? (
-              <p className="field__hint">{info.name} executable found{info.version ? ` (${info.version})` : ''}. This only means the program exists — sign-in or API credentials are checked when a run starts.</p>
+              <p className="field__hint">{info.name} is configured{info.version ? ` (${info.version})` : ''}. Model access, authentication and quota are checked when a run starts. View login details in Settings.</p>
             ) : (
-              <p className="field__hint field__hint--warn"><AlertTriangle size={12} /> {info.name} executable unavailable{info.reason ? `: ${info.reason}` : ''}. You can still create the session, but runs will fail until this is fixed in Settings.</p>
+              <p className="field__hint field__hint--warn"><AlertTriangle size={12} /> {info.name} {info.executable ? 'setup needed' : 'executable unavailable'}{info.reason ? `: ${info.reason}` : ''} You can still create the session; complete provider setup and Re-check in Settings before running it.</p>
             )
           ) : (
             <p className="field__hint">Provider availability has not been reported by the server yet. You can still create the session; check Settings if runs fail.</p>

@@ -1,8 +1,9 @@
 import type { AgentAdapter, AppSettings, RunOptions } from '@relay/contracts';
 import type { Options, PermissionResult, Query } from '@anthropic-ai/claude-agent-sdk';
-import { ProviderError, TextTail, abortError, cleanEnv, errorMessage, isAbortError, redactSecrets } from '../common.js';
+import { ProviderError, TextTail, abortError, errorMessage, isAbortError, redactSecrets } from '../common.js';
 import { bundledClaudeCandidates, resolveExecutableCached, type ResolveResult } from '../discovery.js';
 import { ClaudeMessageMapper, claudePermissionMode, describeToolUse, previewInput } from './messages.js';
+import { claudeEnvironment } from './auth.js';
 
 export type QueryFn = (params: { prompt: string; options: Options }) => Query | AsyncGenerator<unknown, void>;
 
@@ -11,9 +12,6 @@ export interface ClaudeAdapterDeps {
   env?: NodeJS.ProcessEnv;
   resolveExecutable?: (settings: AppSettings, env: NodeJS.ProcessEnv) => Promise<ResolveResult>;
 }
-
-/** Credentials that would let Claude Code authenticate some way other than the API key Relay requires. */
-export const CLAUDE_STRIPPED_ENV = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN', 'OPENAI_API_KEY'];
 
 export function resolveClaudeExecutable(settings: AppSettings, env: NodeJS.ProcessEnv): Promise<ResolveResult> {
   return resolveExecutableCached({ name: 'claude', override: settings.claudeExecutable, env, extraCandidates: bundledClaudeCandidates() });
@@ -31,10 +29,8 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): AgentAdapter 
     async run(run: RunOptions): Promise<void> {
       const { session, prompt, signal, onEvent, requestApproval, settings } = run;
       if (signal.aborted) throw abortError();
-      const apiKey = env.ANTHROPIC_API_KEY?.trim();
-      if (!apiKey) {
-        throw new ProviderError('ANTHROPIC_API_KEY is not set in the Relay server environment. Relay runs Claude with API-key authentication only and does not use claude.ai subscription login.', { code: 'missing_api_key' });
-      }
+      const childEnv = claudeEnvironment(env);
+      const secrets = [childEnv.ANTHROPIC_API_KEY, childEnv.CLAUDE_CODE_OAUTH_TOKEN, childEnv.ANTHROPIC_AUTH_TOKEN];
       const resolved = await resolveBinary(settings, env);
       if (!resolved.ok) throw new ProviderError(resolved.reason, { code: 'executable_unavailable' });
       if (signal.aborted) throw abortError();
@@ -83,7 +79,7 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): AgentAdapter 
         systemPrompt: { type: 'preset', preset: 'claude_code' },
         settingSources: ['project'],
         settings: { disableAllHooks: true },
-        env: { ...cleanEnv(env, CLAUDE_STRIPPED_ENV), ANTHROPIC_API_KEY: apiKey, CLAUDE_AGENT_SDK_CLIENT_APP: 'relay/0.1.0' },
+        env: { ...childEnv, CLAUDE_AGENT_SDK_CLIENT_APP: 'relay/0.1.0' },
         stderr: (data: string) => stderr.push(data),
         ...(session.providerSessionId ? { resume: session.providerSessionId } : {}),
       };
@@ -101,14 +97,14 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): AgentAdapter 
         }
         if (signal.aborted) throw abortError();
         if (!mapper.finished) {
-          const detail = stderr.summary(1_200, [apiKey]);
+          const detail = stderr.summary(1_200, secrets);
           throw new ProviderError(`Claude Code ended without a result.${detail ? ` stderr: ${detail}` : ''}`, { code: 'no_result' });
         }
       } catch (error) {
         if (signal.aborted || isAbortError(error)) throw abortError();
-        if (error instanceof ProviderError) throw error;
-        const detail = stderr.summary(1_200, [apiKey]);
-        throw new ProviderError(`${redactSecrets(errorMessage(error), [apiKey])}${detail ? ` — stderr: ${detail}` : ''}`, { code: 'claude_failed', cause: error });
+        if (error instanceof ProviderError) throw new ProviderError(redactSecrets(error.message, secrets), { code: error.code, cause: error });
+        const detail = stderr.summary(1_200, secrets);
+        throw new ProviderError(`${redactSecrets(errorMessage(error), secrets)}${detail ? ` — stderr: ${detail}` : ''}`, { code: 'claude_failed', cause: error });
       } finally {
         signal.removeEventListener('abort', onAbort);
         try { (stream as Query | undefined)?.close?.(); } catch { /* process already closed */ }
