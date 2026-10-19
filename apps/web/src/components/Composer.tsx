@@ -24,6 +24,7 @@ export function Composer({ session }: { session: Session }) {
   const [error, setError] = useState<string | null>(null);
   const [catalog, setCatalog] = useState<ProviderCatalog | null>(null);
   const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [catalogRevision, setCatalogRevision] = useState(0);
   const [suggestion, setSuggestion] = useState<{ kind: 'command' | 'skill'; start: number; query: string } | null>(null);
   const [activeSuggestion, setActiveSuggestion] = useState(0);
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
@@ -44,11 +45,14 @@ export function Composer({ session }: { session: Session }) {
     const controller = new AbortController();
     setCatalog(null); setCatalogError(null);
     setSuggestion(null); setSelectedSkills([]); dismissedSuggestion.current = null;
-    void api.sessionCatalog(session.id, controller.signal).then(setCatalog).catch((cause) => {
+    if (connection !== 'online') return () => controller.abort();
+    void api.sessionCatalog(session.id, controller.signal, catalogRevision > 0).then((value) => {
+      if (!controller.signal.aborted) setCatalog(value);
+    }).catch((cause) => {
       if (!controller.signal.aborted) setCatalogError(errorMessage(cause));
     });
     return () => controller.abort();
-  }, [catalogKey, connection]);
+  }, [catalogKey, connection, catalogRevision]);
 
   useEffect(() => {
     const el = ref.current;
@@ -345,8 +349,8 @@ export function Composer({ session }: { session: Session }) {
       {blocker || error ? (
         <p className={cx('composer__note', error && 'is-error')} role={error ? 'alert' : 'status'}>{error ?? blocker}{!error && provider && !provider.available ? <> <button type="button" className="link-btn" onClick={() => useRelay.getState().openDialog({ kind: 'settings' })}>Open Settings</button></> : null}</p>
       ) : null}
-      {catalogError && (trigger.startsWith('/') || trigger.startsWith('$')) ? <p className="composer__note" role="status">Command and skill suggestions unavailable: {catalogError}</p> : null}
-      {catalog?.warnings.length && (suggestion || trigger.startsWith('/') || trigger.startsWith('$')) ? <details className="composer__catalog-note"><summary>{catalog.warnings.length} command or skill source{catalog.warnings.length === 1 ? '' : 's'} unavailable</summary><ul>{catalog.warnings.map((warning, index) => <li key={`${index}:${warning}`}>{warning}</li>)}</ul></details> : null}
+      {catalogError && (trigger.startsWith('/') || trigger.startsWith('$')) ? <p className="composer__note" role="status">Command and skill suggestions unavailable: {catalogError} <button type="button" className="link-btn" onClick={() => setCatalogRevision((value) => value + 1)}>Retry</button></p> : null}
+      {catalog?.warnings.length && (suggestion || trigger.startsWith('/') || trigger.startsWith('$')) ? <details className="composer__catalog-note"><summary>Command and skill details · {catalog.warnings.length} notice{catalog.warnings.length === 1 ? '' : 's'}</summary><ul>{catalog.warnings.map((warning, index) => <li key={`${index}:${warning}`}>{warning}</li>)}</ul><button type="button" className="link-btn" onClick={() => setCatalogRevision((value) => value + 1)}>Refresh</button></details> : null}
     </div>
   );
 }

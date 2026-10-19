@@ -1,6 +1,7 @@
 import type {
-  Approval, AppSettings, Bootstrap, FileEntry, GitStatus, Project, ProviderInfo, Session, ToolCall, Task, TaskStatus, WorkspaceEvent,
+  Approval, AppSettings, Bootstrap, FileEntry, GitStatus, Project, ProviderCatalog, ProviderInfo, Session, ToolCall, Task, TaskStatus, WorkspaceEvent,
 } from '@relay/contracts';
+export type { ProviderCatalog } from '@relay/contracts';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -61,7 +62,7 @@ const q = (params: Record<string, string | number | null | undefined>): string =
 
 export interface NewSessionInput {
   projectId: string; name?: string; provider?: Session['provider']; model?: string;
-  effort?: Session['effort']; policy?: Session['policy']; isolated?: boolean;
+  effort?: Session['effort']; policy?: Session['policy']; serviceTier?: string; isolated?: boolean;
 }
 export type SessionPatch = Partial<Pick<Session, 'name' | 'provider' | 'model' | 'effort' | 'policy' | 'serviceTier' | 'pinned' | 'unread'>>;
 export interface NewTaskInput {
@@ -75,12 +76,6 @@ export interface HandoffInput {
 }
 
 export interface FileDoc { path: string; content: string }
-export interface ProviderCatalog {
-  commands: { id: string; name: string; description: string; argumentHint?: string; source: string; kind: 'prompt' | 'action' }[];
-  skills: { id: string; name: string; description: string; path?: string; source: string; enabled: boolean }[];
-  warnings: string[];
-}
-
 /** The file endpoint is documented as `{content, path}`, but tolerate a raw text body as well. */
 async function readFile(projectId: string, path: string, sessionId: string | null): Promise<FileDoc> {
   const res = await request(`/api/projects/${encodeURIComponent(projectId)}/file${q({ path, sessionId })}`);
@@ -117,7 +112,7 @@ export const api = {
   renameSession: (id: string, name: string) => json<Session>(`/api/sessions/${encodeURIComponent(id)}`, 'PATCH', { name }),
   archiveSession: (id: string) => json<unknown>(`/api/sessions/${encodeURIComponent(id)}`, 'DELETE'),
   sendMessage: (id: string, content: string, skills?: string[]) => json<{ accepted: boolean }>(`/api/sessions/${encodeURIComponent(id)}/messages`, 'POST', { content, ...(skills?.length ? { skills } : {}) }),
-  sessionCatalog: (id: string, signal?: AbortSignal) => json<ProviderCatalog>(`/api/sessions/${encodeURIComponent(id)}/catalog`, 'GET', undefined, signal),
+  sessionCatalog: (id: string, signal?: AbortSignal, refresh = false) => json<ProviderCatalog>(`/api/sessions/${encodeURIComponent(id)}/catalog${refresh ? '?refresh=true' : ''}`, 'GET', undefined, signal),
   interrupt: (id: string) => json<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(id)}/interrupt`, 'POST'),
   createTask: (input: NewTaskInput) => json<Task>('/api/tasks', 'POST', input),
   updateTask: (id: string, patch: TaskPatch) => json<Task>(`/api/tasks/${encodeURIComponent(id)}`, 'PATCH', patch),
