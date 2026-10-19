@@ -235,7 +235,12 @@ export async function readCodexConversation(settings: AppSettings, id: string): 
           truncated = true;
           break;
         }
-        throw error;
+        // Valid metadata is enough to resume later, even when this version cannot load an item page.
+        result = {
+          conversation, messages: messages.reverse(), truncated: true,
+          notices: [`Transcript preview could not be fully read: ${truncate(redactSecrets(error instanceof Error ? error.message : String(error)), 300)}. The original conversation can still be resumed.`],
+        };
+        break;
       }
       pages += 1;
       const rows = Array.isArray(page.data) ? page.data : [];
