@@ -3,7 +3,7 @@ import {
   type ButtonHTMLAttributes, type ErrorInfo, type ReactNode, type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { AlertTriangle, Loader2, X } from 'lucide-react';
+import { AlertTriangle, Check, Loader2, X } from 'lucide-react';
 import type { Provider, SessionStatus } from '@relay/contracts';
 import { cx } from '../lib/format';
 
@@ -247,13 +247,13 @@ interface MenuCtx { close: () => void }
 const MenuContext = createContext<MenuCtx>({ close: () => undefined });
 
 export function Menu({ trigger, children, align = 'start', width }: {
-  trigger: (props: { onClick: () => void; 'aria-haspopup': 'menu'; 'aria-expanded': boolean; ref: (el: HTMLButtonElement | null) => void }) => ReactNode;
+  trigger: (props: { onClick: () => void; onKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>) => void; 'aria-haspopup': 'menu'; 'aria-expanded': boolean; ref: (el: HTMLButtonElement | null) => void }) => ReactNode;
   children: ReactNode; align?: 'start' | 'end'; width?: number;
 }) {
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLButtonElement | null>(null);
   const pop = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState<{ left: number; top: number; minWidth: number } | null>(null);
+  const [pos, setPos] = useState<{ left: number; top: number; width: number; maxHeight: number } | null>(null);
 
   const close = useCallback(() => {
     setOpen(false);
@@ -261,13 +261,19 @@ export function Menu({ trigger, children, align = 'start', width }: {
   }, []);
 
   useLayoutEffect(() => {
-    if (!open || !anchor.current) return;
+    if (!open || !anchor.current || !pop.current) return;
     const r = anchor.current.getBoundingClientRect();
-    const w = width ?? Math.max(220, r.width);
-    const left = align === 'end' ? Math.max(8, r.right - w) : Math.min(r.left, window.innerWidth - w - 8);
-    const below = r.bottom + 6;
-    const top = below + 320 > window.innerHeight ? Math.max(8, r.top - 6 - Math.min(320, window.innerHeight - 16)) : below;
-    setPos({ left, top, minWidth: w });
+    const w = Math.min(width ?? Math.max(220, r.width), window.innerWidth - 24);
+    pop.current.style.width = `${w}px`;
+    const below = window.innerHeight - r.bottom - 20;
+    const above = r.top - 20;
+    const contentHeight = Math.min(pop.current.scrollHeight + 2, 340);
+    const useTop = below < contentHeight && above > below;
+    const maxHeight = Math.max(40, Math.min(340, useTop ? above : below));
+    const height = Math.min(contentHeight, maxHeight);
+    const left = Math.max(12, Math.min(align === 'end' ? r.right - w : r.left, window.innerWidth - w - 12));
+    const top = useTop ? Math.max(12, r.top - height - 8) : r.bottom + 8;
+    setPos({ left, top, width: w, maxHeight });
   }, [open, align, width]);
 
   useEffect(() => {
@@ -276,8 +282,12 @@ export function Menu({ trigger, children, align = 'start', width }: {
     const down = (e: MouseEvent) => {
       if (!pop.current?.contains(e.target as Node) && !anchor.current?.contains(e.target as Node)) setOpen(false);
     };
+    const resized = () => setOpen(false);
+    const scrolled = (event: Event) => { if (!pop.current?.contains(event.target as Node)) setOpen(false); };
     document.addEventListener('mousedown', down);
-    return () => document.removeEventListener('mousedown', down);
+    window.addEventListener('resize', resized);
+    window.addEventListener('scroll', scrolled, true);
+    return () => { document.removeEventListener('mousedown', down); window.removeEventListener('resize', resized); window.removeEventListener('scroll', scrolled, true); };
   }, [open, pos]);
 
   const onKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -289,10 +299,10 @@ export function Menu({ trigger, children, align = 'start', width }: {
     else if (e.key === 'Tab') setOpen(false);
   };
 
-  const ctx = useMemo(() => ({ close: () => setOpen(false) }), []);
+  const ctx = useMemo(() => ({ close }), [close]);
   return (
     <>
-      {trigger({ onClick: () => setOpen((o) => !o), 'aria-haspopup': 'menu', 'aria-expanded': open, ref: (el) => { anchor.current = el; } })}
+      {trigger({ onClick: () => setOpen((o) => !o), onKeyDown: (event) => { if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setOpen(true); } }, 'aria-haspopup': 'menu', 'aria-expanded': open, ref: (el) => { anchor.current = el; } })}
       {open ? createPortal(
         <MenuContext.Provider value={ctx}>
           <div ref={pop} role="menu" className="menu" style={pos ?? { visibility: 'hidden' }} onKeyDown={onKey}>{children}</div>
@@ -316,6 +326,7 @@ export function MenuItem({ children, onSelect, icon, hint, disabled, why, select
       {icon ? <span className="menu__icon" aria-hidden="true">{icon}</span> : null}
       <span className="menu__label">{children}</span>
       {hint ? <span className="menu__hint">{hint}</span> : null}
+      {selected ? <Check size={13} aria-label="Selected" /> : null}
     </button>
   );
 }

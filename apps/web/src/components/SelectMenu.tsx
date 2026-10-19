@@ -33,6 +33,7 @@ export function SelectMenu({ id, label, value, onChange, options, disabled, clas
     if (!effectiveOpen || !anchor.current || !popup.current) return;
     const rect = anchor.current.getBoundingClientRect();
     const width = Math.min(Math.max(224, rect.width), window.innerWidth - 24);
+    popup.current.style.width = `${width}px`;
     const above = Math.max(40, rect.top - 20);
     const below = Math.max(40, window.innerHeight - rect.bottom - 20);
     const preferTop = placement === 'top';
