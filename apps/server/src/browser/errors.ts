@@ -1,7 +1,7 @@
 /**
  * Browser errors carry an HTTP-style status so routes can map them directly:
  * 400 invalid input, 403 policy or ownership, 404 unknown session/tab, 409 state conflict,
- * 422 the action itself failed in the page, 503 the browser is unavailable.
+ * 422 the action itself failed in the page, 502 a page or debugging endpoint could not be reached, 503 the browser is unavailable.
  */
 export class BrowserError extends Error {
   constructor(readonly status: number, message: string) {
@@ -27,6 +27,8 @@ export function toBrowserError(error: unknown): BrowserError {
   if (name === 'TimeoutError' || /Timeout \d+ms exceeded/u.test(message)) {
     return new BrowserError(422, `${message.split('\n')[0]} The element may be missing, hidden, disabled or covered. Take a fresh snapshot and retry.`);
   }
+  const network = /net::(ERR_[A-Z_]+)/u.exec(message);
+  if (network) return new BrowserError(502, `The page could not be loaded (${network[1]}). Check the address and the network connection.`);
   if (/strict mode violation/iu.test(message)) {
     return new BrowserError(422, 'The target matched more than one element. Use a more specific selector, a role with a name, or a ref from a fresh snapshot.');
   }

@@ -31,17 +31,33 @@ export class ScreencastViewer {
   constructor(private readonly entry: TabEntry, private readonly sink: FrameSink, private readonly onViewport: () => void) {}
 
   async start(): Promise<void> {
-    const cdp = await this.entry.page.context().newCDPSession(this.entry.page);
+    const pending = this.entry.page.context().newCDPSession(this.entry.page);
+    let cdp: CDPSession;
+    try {
+      cdp = await withTimeout(pending, 5000, 'Attaching the live view timed out.');
+    } catch (error) {
+      // A session that arrives after we gave up (or after stop) must not stay attached to the tab.
+      void pending.then((late) => late.detach()).catch(() => undefined);
+      if (this.stopped) return;
+      throw error;
+    }
     if (this.stopped) return void (await cdp.detach().catch(() => undefined));
     this.cdp = cdp;
     cdp.on('Page.screencastFrame', (frame) => this.onFrame({ data: frame.data, chromeSession: frame.sessionId, width: frame.metadata.deviceWidth, height: frame.metadata.deviceHeight }));
     try {
       await cdp.send('Page.startScreencast', { format: 'jpeg', quality: STREAM_JPEG_QUALITY, everyNthFrame: 1 });
     } catch (error) {
+      // stop() may have detached the session while this was in flight; that failure is expected, not an error to report.
+      const wasStopped = this.stopped;
       await this.stop();
+      if (wasStopped) return;
       throw error;
     }
-    if (this.stopped) return;
+    if (this.stopped) {
+      // stop() ran during startScreencast and already sent stopScreencast and detach; repeat the detach in case it was cut short.
+      await cdp.detach().catch(() => undefined);
+      return;
+    }
     // An idle page may never produce a frame; push one still so the viewer is not blank.
     this.fallbackTimer = setTimeout(() => void this.stillFrame(), FALLBACK_FRAME_DELAY_MS);
     this.fallbackTimer.unref();

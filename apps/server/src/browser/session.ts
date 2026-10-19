@@ -10,7 +10,7 @@ import {
   CONNECT_TIMEOUT_MS, DEFAULT_VIEWPORT, DETACH_TIMEOUT_MS, LAUNCH_TIMEOUT_MS, MAX_DIALOG_MESSAGE, MAX_NOTICES, MAX_TABS_GLOBAL, MAX_TABS_PER_SESSION,
 } from './limits.ts';
 import { diagnoseConnectError, diagnoseLaunchError, loadPlaywright, resolveManagedExecutable } from './playwright.ts';
-import type { Browser, BrowserContext, Page } from './playwright.ts';
+import type { Browser, BrowserContext, Dialog, Download, Page } from './playwright.ts';
 import { TabEntry } from './tab.ts';
 import type { TargetRegistry } from './targets.ts';
 import { isEligibleTabUrl, normalizeNavigationUrl } from './url-policy.ts';
@@ -175,8 +175,18 @@ export class BrowserSessionRuntime {
 
   async act(entry: TabEntry, action: BrowserAction, actor: Actor): Promise<unknown> {
     this.requireConnected();
+    this.assertShareable(entry);
     try {
-      return await entry.control.run(actor, () => runAction(entry, action));
+      // Waiting only observes the page, so it is allowed (and bounded) even while a person holds control.
+      const result = action.type === 'wait'
+        ? await runAction(entry, action)
+        : await entry.control.run(actor, () => {
+          // The page may have navigated while this write was queued.
+          this.assertShareable(entry);
+          return runAction(entry, action);
+        });
+      if (actor.kind === 'agent' && action.type !== 'close') this.markActive(entry);
+      return result;
     } catch (error) {
       throw toBrowserError(error);
     } finally {
@@ -185,9 +195,28 @@ export class BrowserSessionRuntime {
     }
   }
 
+  /** Metadata only: lets the UI follow the tab the agent is working in. Never focuses or raises a browser window. */
+  markActive(entry: TabEntry): void {
+    if (this.tabs.get(entry.id) !== entry || this.activeTabId === entry.id) return;
+    this.activeTabId = entry.id;
+    this.deps.notify();
+  }
+
+  /** Runs when control changes hands: lets an action a dialog interrupted land and releases any pressed mouse buttons. */
+  private handoffCleanup(entry: TabEntry): () => Promise<void> {
+    return async () => {
+      if (entry.begun && entry.dialog) {
+        this.addNotice('An action started before the hand-off is waiting behind a JavaScript dialog. It cannot be cancelled and will finish when the dialog is accepted or dismissed.');
+      }
+      await entry.settleBegun(2000);
+      await entry.releaseInput();
+    };
+  }
+
   async takeControl(entry: TabEntry, clientId: string): Promise<void> {
     this.requireConnected();
-    await entry.control.take(clientId, () => entry.releaseInput());
+    this.assertShareable(entry);
+    await entry.control.take(clientId, this.handoffCleanup(entry));
     // Only an explicit takeover may raise the tab; merely watching never steals window focus.
     await withTimeout(entry.page.bringToFront(), 3000, 'bringToFront timed out').catch(() => undefined);
     entry.touch();
@@ -195,7 +224,7 @@ export class BrowserSessionRuntime {
   }
 
   async releaseControl(entry: TabEntry, clientId: string): Promise<void> {
-    await entry.control.release(clientId, () => entry.releaseInput());
+    await entry.control.release(clientId, this.handoffCleanup(entry));
     entry.touch();
     this.deps.notify();
   }
@@ -204,7 +233,7 @@ export class BrowserSessionRuntime {
   async dropClient(tabId: string, clientId: string): Promise<void> {
     const entry = this.tabs.get(tabId);
     if (!entry) return;
-    await entry.control.releaseIfOwner(clientId, () => entry.releaseInput());
+    await entry.control.releaseIfOwner(clientId, this.handoffCleanup(entry));
     entry.touch();
     this.deps.notify();
   }
@@ -356,27 +385,23 @@ export class BrowserSessionRuntime {
       this.watchForEligibility(page, generation);
       return null;
     }
-    if (this.tabs.size >= MAX_TABS_PER_SESSION || this.deps.totalTabs() >= MAX_TABS_GLOBAL) {
-      if (this.mode === 'managed') {
-        await page.close().catch(() => undefined);
-        this.addNotice(`A new page was closed because the tab limit (${MAX_TABS_PER_SESSION} per session, ${MAX_TABS_GLOBAL} overall) was reached.`);
-      } else {
-        this.skippedForLimit++;
-      }
-      this.deps.notify();
-      return null;
-    }
+    if (this.limitReached()) return this.refuseForLimit(page);
     let targetId: string | null = null;
     if (this.mode === 'existing' && this.endpoint) {
       targetId = await this.targetIdOf(page);
       if (!targetId || !live()) return null;
       if (!options.created) await this.deps.targets.idle(this.endpoint);
       if (!live()) return null;
+      // The awaits above let other pages and sessions in: check the limits again, right before claiming and inserting.
+      // Nothing below may await before the tab is inserted, so the limit cannot be overtaken by another adoption.
+      if (this.limitReached()) return this.refuseForLimit(page);
       if (!this.deps.targets.claim(this.endpoint, targetId, this.deps.sessionId)) {
         this.skippedOwned++;
         this.deps.notify();
         return null;
       }
+    } else if (!live()) {
+      return null;
     }
     const entry = new TabEntry(page, this.mode === 'managed', targetId);
     // A blank tab may be recycled by open() only if Relay made it; never one the user already had open.
@@ -389,6 +414,22 @@ export class BrowserSessionRuntime {
     void refreshViewport(entry).then(() => { entry.touch(); this.deps.notify(); });
     this.deps.notify();
     return entry;
+  }
+
+  private limitReached(): boolean {
+    return this.tabs.size >= MAX_TABS_PER_SESSION || this.deps.totalTabs() >= MAX_TABS_GLOBAL;
+  }
+
+  /** Deals with a page that does not fit under the tab limits: a managed page is closed, an existing one is left alone and counted. */
+  private refuseForLimit(page: Page): null {
+    if (this.mode === 'managed') {
+      void page.close().catch(() => undefined);
+      this.addNotice(`A new page was closed because the tab limit (${MAX_TABS_PER_SESSION} per session, ${MAX_TABS_GLOBAL} overall) was reached.`);
+    } else {
+      this.skippedForLimit++;
+    }
+    this.deps.notify();
+    return null;
   }
 
   private async targetIdOf(page: Page): Promise<string | null> {
@@ -423,40 +464,77 @@ export class BrowserSessionRuntime {
 
   private wire(entry: TabEntry, generation: number): void {
     const { page } = entry;
-    page.on('close', () => this.removeTab(entry, generation));
-    page.on('framenavigated', (frame) => {
+    type Listener = (...args: any[]) => void; // eslint-disable-line @typescript-eslint/no-explicit-any
+    const emitter = page as unknown as { on(name: string, listener: Listener): void; off(name: string, listener: Listener): void };
+    const listeners: Array<[string, Listener]> = [];
+    const on = (event: string, handler: Listener) => {
+      listeners.push([event, handler]);
+      emitter.on(event, handler);
+    };
+    entry.unwire = () => {
+      for (const [event, handler] of listeners) emitter.off(event, handler);
+      listeners.length = 0;
+    };
+    on('close', () => this.removeTab(entry, generation));
+    on('framenavigated', (frame: ReturnType<Page['mainFrame']>) => {
       if (frame !== page.mainFrame()) return;
+      // Natively navigating into file:, chrome:, devtools: and the like ends sharing: no snapshot, evaluate or stream from here on.
+      if (!isEligibleTabUrl(page.url())) return this.unshare(entry, generation);
       if (entry.dialog) entry.setDialog(null);
       void this.refreshTitle(entry);
       entry.touch();
       this.deps.notify();
     });
-    page.on('load', () => { void this.refreshTitle(entry); void refreshViewport(entry).then(() => entry.touch()); });
-    page.on('dialog', (dialog) => {
+    on('load', () => { void this.refreshTitle(entry); void refreshViewport(entry).then(() => entry.touch()); });
+    on('dialog', (dialog: Dialog) => {
       // Never answered automatically: the dialog stays pending until an explicit dialog action accepts or dismisses it.
       entry.setDialog({ type: dialog.type(), message: truncate(dialog.message(), MAX_DIALOG_MESSAGE), handle: dialog });
       this.deps.notify();
     });
-    page.on('crash', () => { this.addNotice('A browser tab crashed. Close it and open it again.'); this.deps.notify(); });
-    page.on('download', (download) => {
-      if (entry.managed) void download.cancel().catch(() => undefined);
-      this.addNotice('Downloads are not supported in Relay\'s shared browser yet; the download was not saved.');
+    on('crash', () => { this.addNotice('A browser tab crashed. Close it and open it again.'); this.deps.notify(); });
+    on('download', (download: Download) => {
+      if (entry.managed) {
+        void download.cancel().catch(() => undefined);
+        this.addNotice('Downloads are not supported in Relay\'s shared browser yet; the download was cancelled and not saved.');
+      } else {
+        // Relay never intercepted it: the user's own browser handles the file as it normally does.
+        this.addNotice('A download started in your browser. Relay does not manage downloads, so your browser may still save the file as usual.');
+      }
       this.deps.notify();
     });
     // A file chooser listener makes Playwright intercept the native picker, so only a headless (managed) tab gets one.
     if (entry.managed) {
-      page.on('filechooser', () => {
+      on('filechooser', () => {
         this.addNotice('File uploads are not supported in Relay\'s shared browser yet.');
         this.deps.notify();
       });
     }
   }
 
-  private removeTab(entry: TabEntry, generation: number): void {
+  /** Stops sharing a tab that natively navigated somewhere Relay must not touch; it is picked up again if it returns to http(s). */
+  private unshare(entry: TabEntry, generation: number): void {
+    if (generation !== this.generation) return;
+    const { page } = entry;
+    this.removeTab(entry, generation, 'The tab is no longer shared with Relay.');
+    if (!page.isClosed()) this.watchForEligibility(page, generation);
+    this.addNotice('A tab was navigated to a browser-internal page and is no longer shared with Relay.');
+    this.deps.notify();
+  }
+
+  /** Throws when `entry` currently shows a page Relay must not read or drive (it also drops the tab from sharing). */
+  assertShareable(entry: TabEntry): void {
+    if (isEligibleTabUrl(entry.page.url())) return;
+    this.unshare(entry, this.generation);
+    throw new BrowserError(403, 'This tab is showing a browser-internal page (file:, chrome:, devtools: or similar) and is no longer shared with Relay.');
+  }
+
+  private removeTab(entry: TabEntry, generation: number, reason = 'The tab was closed.'): void {
     if (generation !== this.generation || !this.tabs.delete(entry.id)) return;
     this.pages.delete(entry.page);
     if (entry.targetId && this.endpoint) this.deps.targets.release(this.endpoint, entry.targetId, this.deps.sessionId);
-    void entry.end('The tab was closed.');
+    entry.unwire?.();
+    entry.unwire = null;
+    void entry.end(reason);
     if (this.activeTabId === entry.id) this.activeTabId = [...this.tabs.keys()].at(-1) ?? null;
     this.deps.notify();
   }

@@ -25,6 +25,15 @@ export class TabEntry {
   viewport: { width: number; height: number } = { ...DEFAULT_VIEWPORT };
   dialog: { type: string; message: string; handle: Dialog } | null = null;
   readonly pressed = new Set<MouseButton>();
+  /** Counter for snapshots of this tab; scoped refs carry the number of the snapshot they came from. */
+  snapshotCounter = 0;
+  /** Number of the latest completed snapshot whose refs may be used; null while one is running or after one failed. */
+  liveSnapshot: number | null = null;
+  /** An action that had already begun when a JavaScript dialog interrupted it; it finishes once the dialog is answered. */
+  begun: Promise<void> | null = null;
+  /** Removes the page listeners installed for this entry (set by the session runtime). */
+  unwire: (() => void) | null = null;
+  private snapshotTail: Promise<unknown> = Promise.resolve();
   private readonly subscribers = new Set<TabSubscriber>();
   private readonly viewers = new Set<ViewerHandle>();
   private readonly dialogWaiters = new Set<() => void>();
@@ -45,6 +54,23 @@ export class TabEntry {
       controlOwner: this.control.ownerId,
       dialog: this.dialog ? { type: this.dialog.type, message: this.dialog.message } : null,
     };
+  }
+
+  /** Snapshots of one tab run one at a time so the refs of the newest snapshot are unambiguous. */
+  serializeSnapshot<T>(task: () => Promise<T>): Promise<T> {
+    const result = this.snapshotTail.then(task);
+    this.snapshotTail = result.catch(() => undefined);
+    return result;
+  }
+
+  /** Waits (bounded) for an action that a dialog interrupted. Nothing to wait for while the dialog is still open. */
+  async settleBegun(ms: number): Promise<void> {
+    const begun = this.begun;
+    if (!begun || this.dialog) return;
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([begun, new Promise((resolve) => { timer = setTimeout(resolve, ms); })]);
+    clearTimeout(timer);
+    if (this.begun === begun) this.begun = null;
   }
 
   setViewport(width: number, height: number): boolean {

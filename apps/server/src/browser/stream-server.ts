@@ -6,7 +6,7 @@ import { WebSocketServer, type RawData, type WebSocket } from 'ws';
 import type { Security } from '../security.ts';
 import type { Logger } from '../types.ts';
 import type { Actor } from './control.ts';
-import { BrowserError } from './errors.ts';
+import { BrowserError, toBrowserError } from './errors.ts';
 import {
   ID_PATTERN, STREAM_MAX_BUFFERED, STREAM_MAX_CONNECTIONS, STREAM_MAX_PAYLOAD, STREAM_MAX_PENDING_INPUTS, STREAM_MAX_PENDING_MOVES,
   STREAM_MAX_VIEWERS_PER_TAB, STREAM_PATH,
@@ -44,6 +44,8 @@ export class BrowserStreamServer {
   private readonly wss = new WebSocketServer({ noServer: true, maxPayload: STREAM_MAX_PAYLOAD, perMessageDeflate: false });
   private readonly sockets = new Set<WebSocket>();
   private readonly alive = new WeakSet<WebSocket>();
+  /** Live viewers by client id. A client id only exists here while its socket is open. */
+  private readonly clients = new Map<string, { sessionId: string; tabId: string }>();
   private readonly heartbeat: NodeJS.Timeout;
 
   constructor(private readonly host: StreamHost, private readonly log: Logger) {
@@ -80,6 +82,12 @@ export class BrowserStreamServer {
     this.wss.handleUpgrade(req, socket, head, (ws) => this.accept(ws, sessionId, tabId, entry));
   }
 
+  /** True while `clientId` is a connected viewer of exactly this session's tab. */
+  hasViewer(sessionId: string, tabId: string, clientId: string): boolean {
+    const client = this.clients.get(clientId);
+    return client !== undefined && client.sessionId === sessionId && client.tabId === tabId;
+  }
+
   async close(): Promise<void> {
     clearInterval(this.heartbeat);
     for (const socket of this.sockets) socket.close(1001, 'server shutting down');
@@ -92,6 +100,8 @@ export class BrowserStreamServer {
 
   private accept(ws: WebSocket, sessionId: string, tabId: string, entry: TabEntry): void {
     const clientId = `cli_${randomBytes(8).toString('hex')}`;
+    // Registered before any host callback can run, removed on close: only live viewers can claim control.
+    this.clients.set(clientId, { sessionId, tabId });
     this.sockets.add(ws);
     this.alive.add(ws);
     ws.on('pong', () => this.alive.add(ws));
@@ -129,7 +139,8 @@ export class BrowserStreamServer {
     let pending = 0;
     let pendingHighRate = 0;
     let invalid = 0;
-    const fail = (error: unknown) => send({ type: 'error', message: error instanceof BrowserError ? error.message : 'The browser action failed.' });
+    // The message keeps the real reason (policy, ownership, timeout, closed tab); the status shapes it but is not exposed on the socket.
+    const fail = (error: unknown) => send({ type: 'error', message: toBrowserError(error).message });
 
     ws.on('message', (data, isBinary) => {
       if (isBinary) return;
@@ -160,6 +171,7 @@ export class BrowserStreamServer {
     });
 
     ws.on('close', () => {
+      this.clients.delete(clientId);
       this.sockets.delete(ws);
       unsubscribe();
       detach();

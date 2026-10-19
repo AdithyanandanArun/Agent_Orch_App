@@ -3,7 +3,7 @@ import path from 'node:path';
 import { BrowserError, cleanMessage } from './errors.ts';
 
 export type PlaywrightModule = typeof import('playwright');
-export type { Browser, BrowserContext, CDPSession, Dialog, Locator, Page } from 'playwright';
+export type { Browser, BrowserContext, CDPSession, Dialog, Download, Locator, Page } from 'playwright';
 
 let loaded: Promise<PlaywrightModule> | null = null;
 

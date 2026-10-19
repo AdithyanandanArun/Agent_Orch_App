@@ -1,7 +1,20 @@
 /**
- * Tracks which Relay session owns each tab of an externally controlled browser, keyed by the browser endpoint
- * and the native CDP target id, so two sessions attached to the same Chrome never share a tab. Several sessions
- * can create pages concurrently; `beginCreate` lets observers wait until a freshly created page has been claimed.
+ * Identity of a browser endpoint independent of how it was reached: the port plus the browser's WebSocket path
+ * (which embeds the browser's unique id). `127.0.0.1`, `localhost` and `[::1]` therefore name the same browser.
+ * Anything that does not parse falls back to the raw string.
+ */
+export function canonicalEndpoint(endpoint: string): string {
+  try {
+    const url = new URL(endpoint);
+    if (url.port && url.pathname.length > 1) return `${url.port}${url.pathname.toLowerCase()}`;
+  } catch { /* use the raw value */ }
+  return endpoint;
+}
+
+/**
+ * Tracks which Relay session owns each tab of an externally controlled browser, keyed by the canonical browser
+ * endpoint and the native CDP target id, so two sessions attached to the same Chrome never share a tab. Several
+ * sessions can create pages concurrently; `beginCreate` lets observers wait until a freshly created page has been claimed.
  */
 export class TargetRegistry {
   private readonly claims = new Map<string, string>();
@@ -9,7 +22,7 @@ export class TargetRegistry {
   private readonly waiters = new Map<string, Array<() => void>>();
 
   private static key(endpoint: string, targetId: string): string {
-    return `${endpoint}\u0000${targetId}`;
+    return `${canonicalEndpoint(endpoint)}\u0000${targetId}`;
   }
 
   /** Claims a tab for `sessionId`; false when another session already owns it. */
@@ -32,26 +45,29 @@ export class TargetRegistry {
 
   /** Marks that a session is about to create a page on `endpoint`; call the returned function once it is claimed. */
   beginCreate(endpoint: string): () => void {
-    this.creating.set(endpoint, (this.creating.get(endpoint) ?? 0) + 1);
+    const id = canonicalEndpoint(endpoint);
+    this.creating.set(id, (this.creating.get(id) ?? 0) + 1);
     let done = false;
     return () => {
       if (done) return;
       done = true;
-      const left = (this.creating.get(endpoint) ?? 1) - 1;
-      if (left > 0) return void this.creating.set(endpoint, left);
-      this.creating.delete(endpoint);
-      for (const wake of this.waiters.get(endpoint) ?? []) wake();
-      this.waiters.delete(endpoint);
+      const left = (this.creating.get(id) ?? 1) - 1;
+      if (left > 0) return void this.creating.set(id, left);
+      this.creating.delete(id);
+      for (const wake of this.waiters.get(id) ?? []) wake();
+      this.waiters.delete(id);
     };
   }
 
-  /** Resolves when no session is in the middle of creating a page on `endpoint`. */
-  idle(endpoint: string): Promise<void> {
-    if (!this.creating.has(endpoint)) return Promise.resolve();
-    return new Promise((resolve) => {
-      const list = this.waiters.get(endpoint) ?? [];
-      list.push(resolve);
-      this.waiters.set(endpoint, list);
-    });
+  /** Resolves when no session is in the middle of creating a page on `endpoint` (re-checked after every wake-up). */
+  async idle(endpoint: string): Promise<void> {
+    const id = canonicalEndpoint(endpoint);
+    while (this.creating.has(id)) {
+      await new Promise<void>((resolve) => {
+        const list = this.waiters.get(id) ?? [];
+        list.push(resolve);
+        this.waiters.set(id, list);
+      });
+    }
   }
 }

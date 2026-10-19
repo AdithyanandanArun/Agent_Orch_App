@@ -2,16 +2,15 @@ import type { BrowserSnapshot } from '@relay/contracts';
 import { refreshViewport } from './actions.ts';
 import { withTimeout } from './errors.ts';
 import { ACTION_TIMEOUT_MS, MAX_SCREENSHOT_WIDTH, MAX_TEXT_CHARS } from './limits.ts';
+import { scopeRefs } from './refs.ts';
 import type { TabEntry } from './tab.ts';
 
 type SnapshotBody = Omit<BrowserSnapshot, 'tab'>;
 
-const MAX_FRAMES = 16;
-const MAX_PASSWORD_FIELDS_PER_FRAME = 8;
-/** Field names that usually hold secrets even when the input type is plain text. */
+/** Names that usually mark secrets even when a field is not a textbox (a custom widget, an input given another role). */
 const SENSITIVE_NAME = /pass(?:word|code|phrase)|\bpin\b|\bcvv\b|\bcvc\b|security code|one-time|\botp\b|\bsecret\b/iu;
-const TEXTBOX_LINE = /^(\s*)- textbox((?: "(?:[^"\\]|\\.)*")?)((?:\s*\[[^\]]*\])*)\s*(:.*)?$/u;
-const REF_ATTR = /\[ref=([A-Za-z0-9_-]+)\]/gu;
+const FIELD_LINE = /^(\s*)- ([a-z]+)((?: "(?:[^"\\]|\\.)*")?)((?:\s*\[[^\]]*\])*)\s*(:.*)?$/u;
+const TEXT_ROLES = new Set(['textbox', 'searchbox']);
 
 function clip(text: string, max: number): { text: string; truncated: boolean } {
   const marker = '\n… [truncated]';
@@ -19,35 +18,28 @@ function clip(text: string, max: number): { text: string; truncated: boolean } {
 }
 
 /**
- * Finds the snapshot refs of password inputs. Their accessible value would otherwise be printed in the tree, so the
- * refs are used only to hide it; the probe snapshot is discarded and values never leave this function.
+ * Hides the value payload of every textbox (the label, ref and attributes stay, so the agent can still find and fill
+ * the field). Redacting all of them is deliberate: a password input is a textbox too, with or without an accessible
+ * name, in any frame, and no per-field probing is needed. Any other role whose name looks like a secret is hidden as well.
  */
-async function passwordRefs(entry: TabEntry): Promise<Set<string>> {
-  const refs = new Set<string>();
-  await Promise.all(entry.page.frames().slice(0, MAX_FRAMES).map(async (frame) => {
-    const fields = frame.locator('input[type="password"]');
-    const count = await withTimeout(fields.count(), 2000, 'Counting fields timed out.').catch(() => 0);
-    for (let index = 0; index < Math.min(count, MAX_PASSWORD_FIELDS_PER_FRAME); index++) {
-      const probe = await fields.nth(index).ariaSnapshot({ mode: 'ai', timeout: 2000 }).catch(() => '');
-      for (const match of probe.matchAll(REF_ATTR)) refs.add(match[1]!);
-    }
-  }));
-  return refs;
-}
-
-/** Replaces the value of password-like textboxes with a marker (value hidden, structure kept). */
-export function redactSecretValues(aria: string, secretRefs: ReadonlySet<string>): string {
+export function redactFieldValues(aria: string): string {
   const lines = aria.split('\n');
   const out: string[] = [];
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index]!;
-    const match = TEXTBOX_LINE.exec(line);
-    if (!match) { out.push(line); continue; }
-    const [, indent = '', name = '', attrs = '', value] = match;
-    const ref = /\[ref=([A-Za-z0-9_-]+)\]/u.exec(attrs)?.[1];
-    const sensitive = (ref !== undefined && secretRefs.has(ref)) || SENSITIVE_NAME.test(name);
-    if (!sensitive || value === undefined) { out.push(line); continue; }
-    out.push(`${indent}- textbox${name}${attrs}: [hidden]`);
+    const match = FIELD_LINE.exec(line);
+    if (!match) {
+      // An unexpected textbox layout must not leak its value: keep only the role and ref.
+      const odd = /^(\s*)- (textbox|searchbox)\b/u.exec(line);
+      if (!odd) { out.push(line); continue; }
+      const ref = /\[ref=[A-Za-z0-9_-]+\]/u.exec(line)?.[0];
+      out.push(`${odd[1]}- ${odd[2]}${ref ? ` ${ref}` : ''}: [hidden]`);
+      while (index + 1 < lines.length && /^\s/u.test(lines[index + 1]!) && lines[index + 1]!.search(/\S/u) > odd[1]!.length) index++;
+      continue;
+    }
+    const [, indent = '', role = '', name = '', attrs = '', value] = match;
+    if (value === undefined || !(TEXT_ROLES.has(role) || SENSITIVE_NAME.test(name))) { out.push(line); continue; }
+    out.push(`${indent}- ${role}${name}${attrs}: [hidden]`);
     // A value rendered as nested children ends the line with a bare colon; drop those deeper lines too.
     if (value.trim() === ':') while (index + 1 < lines.length && /^\s/u.test(lines[index + 1]!) && lines[index + 1]!.search(/\S/u) > indent.length) index++;
   }
@@ -88,20 +80,28 @@ async function screenshot(entry: TabEntry): Promise<NonNullable<BrowserSnapshot[
   }
 }
 
-/** Public-page snapshot: accessibility tree with refs, visible text and an optional bounded PNG. */
-export async function captureSnapshot(entry: TabEntry, includeImage: boolean): Promise<SnapshotBody> {
-  if (entry.dialog) {
-    const note = `The page is blocked by a JavaScript ${entry.dialog.type} dialog: "${entry.dialog.message}". Use the dialog action to accept or dismiss it before reading the page.`;
-    return { accessibility: note, text: '', truncated: false };
-  }
-  const secrets = await passwordRefs(entry);
-  const [aria, text] = await Promise.all([
-    entry.page.ariaSnapshot({ mode: 'ai', timeout: ACTION_TIMEOUT_MS }),
-    visibleText(entry),
-  ]);
-  const accessibility = clip(redactSecretValues(aria, secrets), MAX_TEXT_CHARS);
-  const visible = clip(text, MAX_TEXT_CHARS);
-  const body: SnapshotBody = { accessibility: accessibility.text, text: visible.text, truncated: accessibility.truncated || visible.truncated };
-  if (includeImage) body.screenshot = await screenshot(entry);
-  return body;
+/**
+ * Public-page snapshot: accessibility tree with refs scoped to this tab and snapshot, visible text and an optional
+ * bounded PNG. Textbox values are redacted before anything leaves this function.
+ */
+export function captureSnapshot(entry: TabEntry, includeImage: boolean): Promise<SnapshotBody> {
+  return entry.serializeSnapshot(async () => {
+    const snapshot = ++entry.snapshotCounter;
+    // Native refs are replaced by the new snapshot, so the previous ones are unusable from this moment on.
+    entry.liveSnapshot = null;
+    if (entry.dialog) {
+      const note = `The page is blocked by a JavaScript ${entry.dialog.type} dialog: "${entry.dialog.message}". Use the dialog action to accept or dismiss it before reading the page.`;
+      return { accessibility: note, text: '', truncated: false };
+    }
+    const [aria, text] = await Promise.all([
+      entry.page.ariaSnapshot({ mode: 'ai', timeout: ACTION_TIMEOUT_MS }),
+      visibleText(entry),
+    ]);
+    const accessibility = clip(scopeRefs(redactFieldValues(aria), entry.id, snapshot), MAX_TEXT_CHARS);
+    const visible = clip(text, MAX_TEXT_CHARS);
+    entry.liveSnapshot = snapshot;
+    const body: SnapshotBody = { accessibility: accessibility.text, text: visible.text, truncated: accessibility.truncated || visible.truncated };
+    if (includeImage) body.screenshot = await screenshot(entry);
+    return body;
+  });
 }

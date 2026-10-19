@@ -1,6 +1,4 @@
-import { rm } from 'node:fs/promises';
 import type { IncomingMessage } from 'node:http';
-import path from 'node:path';
 import type { Duplex } from 'node:stream';
 import {
   BrowserActionSchema, BrowserConnectSchema, type AppSettings, type BrowserAction, type BrowserConnect, type BrowserDiscovery, type BrowserSessionState,
@@ -100,7 +98,7 @@ export class BrowserService {
     try {
       await runtime.connect(request.mode, () => (request.mode === 'managed' ? Promise.resolve(null) : this.resolveExisting(request)));
     } catch (error) {
-      if (runtime.state().status === 'error') return runtime.state();
+      // The failure stays visible in status(); the caller also gets the real status and a public message.
       throw toBrowserError(error);
     }
     return runtime.state();
@@ -118,15 +116,6 @@ export class BrowserService {
       await leaving;
     }
     return this.status(sessionId);
-  }
-
-  /** Disconnects a session and deletes its managed Chromium profile; call when a session is deleted. */
-  async purge(sessionId: string): Promise<void> {
-    await this.disconnect(sessionId);
-    const base = path.resolve(this.options.dataDir, 'browser', 'profiles');
-    const target = path.resolve(base, sessionId);
-    if (path.dirname(target) !== base) throw new BrowserError(400, 'That session id is not valid.');
-    await rm(target, { recursive: true, force: true });
   }
 
   async open(sessionId: string, url?: string): Promise<BrowserTab> {
@@ -150,8 +139,11 @@ export class BrowserService {
   async snapshot(sessionId: string, tabId: string, includeImage = false): Promise<BrowserSnapshot> {
     const { runtime, entry } = this.locate(sessionId, tabId);
     runtime.requireConnected();
+    runtime.assertShareable(entry);
     try {
-      return { tab: entry.describe(), ...(await captureSnapshot(entry, includeImage)) };
+      const body = await captureSnapshot(entry, includeImage);
+      runtime.markActive(entry);
+      return { tab: entry.describe(), ...body };
     } catch (error) {
       throw toBrowserError(error);
     }
@@ -163,6 +155,9 @@ export class BrowserService {
       const parsed = BrowserActionSchema.safeParse(action);
       if (!parsed.success) throw new BrowserError(400, parsed.error.issues[0]?.message ?? 'Invalid browser action.');
       if ((actor.kind !== 'agent' && actor.kind !== 'human') || !actor.id || actor.id.length > 200) throw new BrowserError(400, 'Invalid actor.');
+      if (actor.kind === 'human' && !this.stream.hasViewer(sessionId, tabId, actor.id)) {
+        throw new BrowserError(403, 'Open the live view of this tab first; only a connected viewer can send input.');
+      }
       return runtime.act(entry, parsed.data, { kind: actor.kind, id: actor.id });
     } catch (error) {
       return Promise.reject(toBrowserError(error));
@@ -172,6 +167,10 @@ export class BrowserService {
   async control(sessionId: string, tabId: string, owner: 'agent' | 'human', clientId: string): Promise<BrowserTab> {
     const { runtime, entry } = this.locate(sessionId, tabId);
     if (!clientId || clientId.length > 200) throw new BrowserError(400, 'Invalid client id.');
+    // Only a connected viewer of this very tab may take control. Releasing stays possible for the holder so a stale lock can always be cleared.
+    if (owner === 'human' && !this.stream.hasViewer(sessionId, tabId, clientId)) {
+      throw new BrowserError(403, 'Open the live view of this tab first; only a connected viewer can take control.');
+    }
     try {
       if (owner === 'human') await runtime.takeControl(entry, clientId);
       else await runtime.releaseControl(entry, clientId);
