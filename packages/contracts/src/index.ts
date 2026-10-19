@@ -26,6 +26,7 @@ export interface FileEntry { path: string; name: string; type: 'file' | 'directo
 export type ServerEvent =
   | { type: 'state.changed'; event?: WorkspaceEvent }
   | { type: 'session.delta'; sessionId: string; messageId: string; delta: string }
+  | { type: 'terminal.ready'; terminalId: string }
   | { type: 'terminal.output'; terminalId: string; data: string }
   | { type: 'terminal.exit'; terminalId: string; exitCode: number };
 export type ClientEvent =
