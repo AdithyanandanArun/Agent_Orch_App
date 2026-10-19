@@ -74,6 +74,8 @@ Git worktrees are the default; a repository needs an initial commit before Relay
 
 New runs show a live elapsed timer and tool/category summaries, followed by a final worked duration. Expand the activity row for commands, inputs/output, exit codes and provider-reported child calls. Activity and timing survive reloads; older text-only history retains its available details.
 
+Finished runs also show a compact changed-files card below their response, with added/deleted line totals, expandable folders and **Open diff**. The viewer displays that run's saved, read-only patch, including edits committed during the run. These are net workspace changes between run start and finish; concurrent edits in a shared folder may be included. Existing history without a captured snapshot is left unchanged. Unavailable snapshots and truncated lists/patches are identified explicitly.
+
 Tasks include an owner, prerequisites and acceptance criteria. A successful assigned run enters review. Artifact handoffs identify a committed file and revision, record an event and add context for the receiving session's next turn. Handoffs do not merge branches or silently launch inference.
 
 Use the file pane to inspect and edit permitted project files, the changes pane for Git diffs, and the terminal for an interactive shell in the selected local workspace. The app is intended for a trusted local user and binds to loopback; exposing it through a network tunnel is not a supported team collaboration mode.

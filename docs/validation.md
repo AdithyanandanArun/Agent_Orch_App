@@ -122,3 +122,20 @@ Added the local `/usage` action, a read-only session usage endpoint, native Code
 - The final `pnpm package:arch` rebuild completed after the last display/focus changes. Both artifact checksum files passed verification, and the staged UI contains the final credit reset wording. The checked-in Arch recipe and `.SRCINFO` were refreshed to the new archive checksum; Bash syntax, metadata generation and Git whitespace checks passed.
 
 No automated tests, inference, reset redemption, package installation or packaged application launch were performed for this change. Existing controls were retained; Fast-mode turns, automatic review, and native skill execution remain unverified end to end. Attachments, mentions, planning, interactive questions, personal Claude settings/skills and MCP/plugin management remain outside this pass.
+
+## Live website workflow — 2026-10-20
+
+At the user's explicit request, created a separate Basic website project and an isolated Relay session using Codex `gpt-6-luna` at low effort, Standard tier and Supervised permissions. Submitted a real website request through Relay's composer. Two turns used the same provider conversation, wrote the website files, handled file/command approvals and finished with local commit `cc09a38` in the website worktree. Git metadata writes required approval outside the provider's read-only sandbox; the resumed turn requested that approval and committed successfully. Both runs completed and the worktree was clean.
+
+Opened the resulting static site in the native collaborative browser. It loaded without external asset requests, had no horizontal overflow at 1280px or 390px, and its mobile menu opened through the actual button. The active working/tool shimmer stopped after completion. No tests, interruption/restart exercise, native skill execution, Fast-mode request or automatic review was performed in this workflow.
+
+## Saved run change summaries — 2026-10-20
+
+Implemented before/after workspace checkpoints, SQLite migration 5, saved diff retrieval and a compact response card with file counts, added/deleted line totals, compressed folder groups and a read-only diff dialog. Existing history is not reconstructed. Captures describe net workspace state, including committed edits and any concurrent shared-folder edits, without attributing unrelated activity to a particular provider tool.
+
+- Workspace type checking and the production web/server build passed after final integration; Git whitespace checks passed.
+- A direct read of actual repository changes through the checkpoint helper returned a native per-file summary and patch. A temporary, explicitly labeled visual preview used that real summary to inspect the card in the collaborative browser; the preview was removed and no conversation/run data was fabricated.
+- The settled application returned healthy schema-5 state with zero active runs. A historical run without a snapshot returned HTTP 404 from the new endpoint, preserving its unknown history.
+- Review corrected deleted-parent handling, symlink/denied-path boundaries, bounded reads, submodule handling, eager loading of large patches, truncation notices, card placement, folder defaults and dialog focus behavior. Snapshot code writes Git objects only, leaves the real index/refs untouched and disables clean filters/external diff/textconv commands.
+
+No automated tests or additional provider runs were started for this feature, and the new checkpoint-to-persistence path was not exercised by a live inference turn. Desktop packages were not rebuilt or installed for this change. Capture/patch/viewer limits and crash-recovery limitations are recorded in implementation-contract.md.
