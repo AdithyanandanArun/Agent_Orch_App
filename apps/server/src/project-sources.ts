@@ -1,11 +1,12 @@
 import fsp from 'node:fs/promises';
+import { isIP } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import type { CloneProjectSchema, NewProjectSchema, Project } from '@relay/contracts';
 import type { z } from 'zod';
 import type { WorkspaceService } from './workspace.ts';
 import { git } from './git.ts';
-import { badRequest, conflict, unprocessable } from './util.ts';
+import { badRequest, conflict, HttpError, unprocessable } from './util.ts';
 
 type NewProject = z.infer<typeof NewProjectSchema>;
 type CloneProject = z.infer<typeof CloneProjectSchema>;
@@ -42,11 +43,7 @@ export class ProjectSources {
       throw unprocessable(`The new folder was created at ${destination}, but Git repository setup failed. The folder was kept; inspect it or remove it before trying again.`);
     }
 
-    try {
-      return (await this.workspace.createProject({ name, path: destination })).project;
-    } catch (error) {
-      throw error;
-    }
+    return (await this.workspace.createProject({ name, path: destination })).project;
   }
 
   async clone(input: CloneProject): Promise<Project> {
@@ -77,8 +74,8 @@ function validateProjectName(value: string): string {
   const name = value.trim();
   if (!name || name.length > 100) throw badRequest('Project name must contain 1 to 100 characters');
   if (name.startsWith('-')) throw badRequest('Project name cannot start with a dash');
-  if (name === '.' || name === '..' || name.includes('..')) throw badRequest('Project name cannot contain dot-dot');
-  if (/\s|[\u0000-\u001f\u007f]/u.test(name)) throw badRequest('Project name cannot contain whitespace or control characters');
+  if (name === '.' || name === '..') throw badRequest('Project name cannot be . or ..');
+  if (/[\u0000-\u001f\u007f]/u.test(name)) throw badRequest('Project name cannot contain control characters');
   if (/[\\/:<>"|?*]/u.test(name)) throw badRequest('Project name must be a single safe folder name');
   if (/[. ]$/u.test(name)) throw badRequest('Project name cannot end with a dot or space');
   const deviceName = name.split('.')[0]!.toUpperCase();
@@ -87,23 +84,33 @@ function validateProjectName(value: string): string {
 }
 
 async function canonicalParent(value: string): Promise<string> {
+  if (!value || value.length > 4096 || /[\u0000-\u001f\u007f]/u.test(value)) throw badRequest('Parent folder must be a valid path of at most 4096 characters');
   let requested = value.trim();
   if (requested === '~') requested = os.homedir();
-  else if (/^~[\\/]/u.test(requested)) {
+  else if (path.sep === '/' && requested.startsWith('~/')) {
+    const remainder = requested.slice(2);
+    requested = path.join(os.homedir(), remainder);
+  } else if (path.sep === '\\' && /^~[\\/]/u.test(requested)) {
     const remainder = requested.slice(2).split(/[\\/]/u).join(path.sep);
     requested = path.join(os.homedir(), remainder);
   }
-  if (!path.isAbsolute(requested)) throw badRequest('Parent folder must be an absolute path or start with ~/');
+  if (!isFullyQualifiedAbsolutePath(requested)) throw badRequest('Parent folder must be a fully qualified absolute path or start with ~/');
 
   let real: string;
   try {
     real = await fsp.realpath(requested);
-  } catch {
-    throw badRequest('Parent folder does not exist');
+    const stat = await fsp.stat(real);
+    if (!stat.isDirectory()) throw badRequest('Parent path is not a directory');
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    throw pathError(error, 'Parent folder does not exist or cannot be accessed');
   }
-  const stat = await fsp.stat(real);
-  if (!stat.isDirectory()) throw badRequest('Parent path is not a directory');
   return real;
+}
+
+function isFullyQualifiedAbsolutePath(value: string): boolean {
+  if (path.sep !== '\\') return path.isAbsolute(value);
+  return /^[A-Za-z]:[\\/]/u.test(value) || /^\\\\[^\\/]+[\\/][^\\/]+(?:[\\/]|$)/u.test(value) || /^\/\/[^/]+\/[^/]+(?:\/|$)/u.test(value);
 }
 
 async function reserveDirectory(destination: string): Promise<void> {
@@ -113,6 +120,7 @@ async function reserveDirectory(destination: string): Promise<void> {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw conflict('A folder with that project name already exists');
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw badRequest('Parent folder does not exist');
+    if (['EACCES', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '')) throw new HttpError(403, 'Permission denied while creating the project folder');
     throw error;
   }
 }
@@ -121,12 +129,12 @@ function validateCloneUrl(value: string): string {
   const raw = value.trim();
   if (!raw || raw.length > 2048 || /[\u0000-\u0020\u007f]/u.test(raw)) throw badRequest('Enter a valid HTTPS or SSH Git URL');
 
-  // GitHub-style SCP notation. Restrict the user to Git's conventional SSH account and
-  // a plain repository path; no options, local paths, or shell syntax can enter argv.
-  const scp = /^git@([A-Za-z0-9.-]+):([A-Za-z0-9._/-]+)$/u.exec(raw);
+  // SCP notation is limited to a safe account/host/repository path; no options, local
+  // paths, or shell syntax can enter argv.
+  const scp = /^([A-Za-z0-9_][A-Za-z0-9._-]*)@([A-Za-z0-9.-]+):([A-Za-z0-9._/-]+)$/u.exec(raw);
   if (scp) {
-    validateRemoteHost(scp[1]!);
-    validateRemotePath(scp[2]!);
+    validateRemoteHost(scp[2]!);
+    validateRemotePath(scp[3]!);
     return raw;
   }
 
@@ -138,19 +146,22 @@ function validateCloneUrl(value: string): string {
   }
   if (parsed.protocol !== 'https:' && parsed.protocol !== 'ssh:') throw badRequest('Only HTTPS and SSH Git URLs are supported');
   if (parsed.protocol === 'https:' && /^https:\/\/[^/]*@/iu.test(raw)) throw badRequest('Credential-bearing Git URLs are not supported');
-  if (parsed.username && (parsed.protocol !== 'ssh:' || parsed.username !== 'git')) throw badRequest('Credential-bearing Git URLs are not supported');
+  if (parsed.username && (parsed.protocol !== 'ssh:' || !/^[A-Za-z0-9_][A-Za-z0-9._-]*$/u.test(parsed.username))) throw badRequest('Git URL has an invalid SSH account or includes credentials');
   if (parsed.password || parsed.search || parsed.hash) throw badRequest('Git URLs cannot include passwords, query strings, or fragments');
-  if (parsed.port && (parsed.protocol !== 'ssh:' || parsed.port !== '22')) throw badRequest('Custom Git URL ports are not supported');
+  if (parsed.port && (Number(parsed.port) < 1 || Number(parsed.port) > 65_535)) throw badRequest('Git URL port must be between 1 and 65535');
   validateRemoteHost(parsed.hostname);
   validateRemotePath(parsed.pathname.replace(/^\//u, ''));
   return raw;
 }
 
 function validateRemoteHost(host: string): void {
-  if (host.length > 253 || host.toLowerCase() === 'localhost' || !host.includes('.') ||
-      !/^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/u.test(host) || host.includes('..')) {
-    throw badRequest('Git URL must use a public DNS host name');
-  }
+  const normalized = host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
+  if (normalized.length > 253 || (isIP(normalized) === 0 && !isValidDnsHost(normalized))) throw badRequest('Git URL must contain a valid host name or IP address');
+}
+
+function isValidDnsHost(host: string): boolean {
+  if (!host || host.length > 253 || host.startsWith('.') || host.endsWith('.') || host.includes('..')) return false;
+  return host.split('.').every((label) => label.length <= 63 && /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/u.test(label));
 }
 
 function validateRemotePath(remotePath: string): void {
@@ -162,4 +173,11 @@ function validateRemotePath(remotePath: string): void {
 function isGitIdentityError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : '';
   return /user\.name|user\.email|unable to auto-detect email|Author identity unknown/iu.test(message);
+}
+
+function pathError(error: unknown, fallback: string): Error {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (code === 'EACCES' || code === 'EPERM') return new HttpError(403, 'Permission denied while opening the parent folder');
+  if (code === 'ENOENT' || code === 'ENOTDIR') return badRequest(fallback);
+  return badRequest(fallback);
 }
