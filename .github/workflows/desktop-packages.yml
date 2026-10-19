@@ -1,0 +1,54 @@
+name: Build desktop packages
+
+# Builds downloadable workflow artifacts. Creating a public release or AUR entry remains manual.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26.8.2
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm package:linux
+      - uses: actions/upload-artifact@v4
+        with:
+          name: relay-linux-x64
+          compression-level: 0
+          path: |
+            release/*.tar.gz
+            release/*.tar.gz.sha256
+
+  arch:
+    needs: linux
+    runs-on: ubuntu-24.04
+    container: archlinux:base-devel
+    steps:
+      - name: Install packaging tools in the disposable container
+        run: pacman -Syu --noconfirm --needed nodejs git
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: relay-linux-x64
+          path: release
+      - name: Build Arch package as an ordinary user
+        run: |
+          useradd --create-home relaybuild
+          chown -R relaybuild:relaybuild "$GITHUB_WORKSPACE"
+          runuser -u relaybuild -- node scripts/package-arch.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: relay-arch-x86_64
+          compression-level: 0
+          path: |
+            release/*.pkg.tar.zst
+            release/*.pkg.tar.zst.sha256
+            release/arch-build/PKGBUILD
