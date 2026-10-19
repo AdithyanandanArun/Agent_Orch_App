@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { z } from 'zod';
 import {
-  ApprovalDecisionSchema, ConversationIdSchema, ImportConversationSchema, ProviderSchema, CloneProjectSchema, NewProjectSchema, CreateProjectSchema, CreateSessionSchema, CreateTaskSchema, HandoffSchema, SendMessageSchema, UpdateProjectSchema, UpdateSessionSchema, UpdateSettingsSchema, UpdateTaskSchema,
+  BrowserConnectSchema, BrowserActionSchema, ApprovalDecisionSchema, ConversationIdSchema, ImportConversationSchema, ProviderSchema, CloneProjectSchema, NewProjectSchema, CreateProjectSchema, CreateSessionSchema, CreateTaskSchema, HandoffSchema, SendMessageSchema, UpdateProjectSchema, UpdateSessionSchema, UpdateSettingsSchema, UpdateTaskSchema,
 } from '@relay/contracts';
 import type { Bootstrap, SessionUsage } from '@relay/contracts';
 import { gitStatus } from './git.ts';
@@ -20,10 +20,11 @@ import { resolveRunConfig } from './session-config.ts';
 import type { ImportService } from './imports.ts';
 import type { DirectoryService } from './directories.ts';
 import type { ProjectSources } from './project-sources.ts';
+import type { BrowserService } from './browser/service.ts';
 
 export interface Services {
   config: ServerConfig; store: Store; hub: Hub; workspace: WorkspaceService; runtime: SessionRuntime; tasks: TaskService; handoffs: HandoffService;
-  providers: ProviderService; imports: ImportService; directories: DirectoryService; projectSources: ProjectSources; terminals: TerminalManager; startedAt: number; getPort: () => number;
+  browser: BrowserService; providers: ProviderService; imports: ImportService; directories: DirectoryService; projectSources: ProjectSources; terminals: TerminalManager; startedAt: number; getPort: () => number;
 }
 
 export class Reply {
@@ -70,7 +71,10 @@ export function parse<T>(schema: z.ZodType<T>, value: unknown): T {
 }
 
 const executable = z.string().max(4096).refine((v) => !/[\0\r\n]/.test(v), 'Executable path contains control characters');
-const SettingsPatch = UpdateSettingsSchema.extend({ claudeExecutable: executable.optional(), codexExecutable: executable.optional() });
+const SettingsPatch = UpdateSettingsSchema.extend({ claudeExecutable: executable.optional(), codexExecutable: executable.optional(), browserExecutable: executable.optional(), browserCdpEndpoint: z.string().max(2048).refine((value) => {
+  if (!value) return true;
+  try { const url = new URL(value); return ['http:', 'ws:'].includes(url.protocol) && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) && Boolean(url.port) && !url.username && !url.password && !url.search && !url.hash; } catch { return false; }
+}, 'Use a loopback HTTP or WebSocket endpoint with an explicit port').optional() });
 const MessagesQuery = z.object({ limit: z.coerce.number().int().min(1).max(2000).optional(), before: z.string().max(100).optional() });
 const EventsQuery = z.object({ after: z.coerce.number().int().min(0).default(0), projectId: z.string().max(100).optional(), limit: z.coerce.number().int().min(1).max(5000).optional() });
 const WriteFile = z.object({ content: z.string() });
@@ -87,6 +91,33 @@ export function buildRouter(s: Services) {
     if (!ID.test(value)) throw notFound('Not found');
     return value;
   };
+
+  const browserSession = (ctx: Ctx) => {
+    const id = param(ctx, 'id');
+    if (!s.store.getSession(id)) throw notFound('Session not found');
+    return id;
+  };
+  const emptyBrowserBody = z.object({}).strict();
+  add('GET', '/api/browser/discovery', () => s.browser.discovery());
+  add('POST', '/api/browser/install', async (ctx) => { await ctx.body(emptyBrowserBody); return s.browser.install(); });
+  add('GET', '/api/sessions/:id/browser', (ctx) => s.browser.status(browserSession(ctx)));
+  add('POST', '/api/sessions/:id/browser/connect', async (ctx) => s.browser.connect(browserSession(ctx), await ctx.body(BrowserConnectSchema)));
+  add('POST', '/api/sessions/:id/browser/disconnect', async (ctx) => { const id = browserSession(ctx); await ctx.body(emptyBrowserBody); return s.browser.disconnect(id); });
+  add('POST', '/api/sessions/:id/browser/tabs', async (ctx) => s.browser.open(browserSession(ctx), (await ctx.body(z.object({ url: z.string().min(1).max(4096).optional() }).strict())).url));
+  add('GET', '/api/sessions/:id/browser/tabs/:tabId/snapshot', (ctx) => {
+    const query = parse(z.object({ image: z.enum(['true', 'false']).optional() }).strict(), Object.fromEntries(ctx.url.searchParams));
+    return s.browser.snapshot(browserSession(ctx), param(ctx, 'tabId'), query.image === 'true');
+  });
+  add('POST', '/api/sessions/:id/browser/tabs/:tabId/action', async (ctx) => {
+    const id = browserSession(ctx);
+    const body = await ctx.body(z.object({ action: BrowserActionSchema, clientId: z.string().min(1).max(100) }).strict());
+    return s.browser.act(id, param(ctx, 'tabId'), body.action, { kind: 'human', id: body.clientId });
+  });
+  add('POST', '/api/sessions/:id/browser/tabs/:tabId/control', async (ctx) => {
+    const id = browserSession(ctx);
+    const body = await ctx.body(z.object({ owner: z.enum(['human', 'agent']), clientId: z.string().min(1).max(100) }).strict());
+    return s.browser.control(id, param(ctx, 'tabId'), body.owner, body.clientId);
+  });
 
   add('GET', '/api/health', () => {
     const counts = s.store.counts();
@@ -180,8 +211,10 @@ export function buildRouter(s: Services) {
   add('POST', '/api/sessions', async (ctx) => new Reply(201, await s.workspace.createSession(await ctx.body(CreateSessionSchema))));
   add('PATCH', '/api/projects/:id', async (ctx) => s.workspace.renameProject(param(ctx, 'id'), (await ctx.body(UpdateProjectSchema)).name));
   add('PATCH', '/api/sessions/:id', async (ctx) => s.workspace.updateSession(param(ctx, 'id'), await ctx.body(UpdateSessionSchema)));
-  add('DELETE', '/api/sessions/:id', (ctx) => {
-    s.workspace.archiveSession(param(ctx, 'id'));
+  add('DELETE', '/api/sessions/:id', async (ctx) => {
+    const id = param(ctx, 'id');
+    s.workspace.archiveSession(id);
+    await s.browser.disconnect(id);
     return { ok: true };
   });
   add('GET', '/api/sessions/:id/messages', (ctx) => {

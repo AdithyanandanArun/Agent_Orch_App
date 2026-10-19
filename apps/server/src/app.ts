@@ -22,6 +22,9 @@ import { resolveRunConfig } from './session-config.ts';
 import { ImportService } from './imports.ts';
 import { DirectoryService } from './directories.ts';
 import { ProjectSources } from './project-sources.ts';
+import { BrowserService } from './browser/service.ts';
+import { BrowserError } from './browser/errors.ts';
+import { BrowserMcpBridge } from './browser-mcp.ts';
 
 export interface ApplicationOptions extends ConfigOptions {
   /** Provider adapters and detection. Inject a fake in tests; the CLI entry passes ./providers/index.ts. */
@@ -44,6 +47,7 @@ export interface RelayApplication {
   readonly terminals: TerminalManager;
   readonly hub: Hub;
   readonly providers: ProviderService;
+  readonly browser: BrowserService;
   /** Runs recovery-independent async setup (example workspace). Called by listen(); safe to call repeatedly. */
   initialize(): Promise<void>;
   listen(): Promise<{ host: string; port: number; url: string }>;
@@ -101,13 +105,15 @@ export function createApplication(options: ApplicationOptions): RelayApplication
   const hub = new Hub(security, log);
   const tasks = new TaskService(store);
   const providers = new ProviderService(options.providers, () => store.getSettings(), log, () => store.touch());
+  const browser = new BrowserService({ dataDir: config.dataDir, getSettings: () => store.getSettings(), onChange: () => store.touch(), log, sessionExists: (id) => Boolean(store.getSession(id)) });
+  const browserMcp = new BrowserMcpBridge(browser, store, () => boundPort, (sessionId, tabId) => hub.broadcast({ type: 'browser.opened', sessionId, tabId }), () => config.host);
   const runtime = new SessionRuntime(store, hub, options.providers, tasks, log, options.runtime, (session) => {
     resolveRunConfig(providers.cached()?.find((row) => row.id === session.provider), session, { effort: true, policy: true, serviceTier: true });
-  });
+  }, browserMcp);
   const terminals = new TerminalManager(store, hub, log, options.terminal);
   const workspace = new WorkspaceService(store, config.dataDir, runtime, () => providers.cached());
   const services: Services = {
-    config, store, hub, runtime, tasks, terminals, providers, handoffs: new HandoffService(store), workspace,
+    config, store, hub, runtime, tasks, terminals, providers, browser, handoffs: new HandoffService(store), workspace,
     imports: new ImportService(store, options.providers, providers, runtime), directories: new DirectoryService(), projectSources: new ProjectSources(workspace), startedAt: Date.now(), getPort: () => boundPort,
   };
   hub.bind({ onMessage: (socket, raw) => terminals.handleMessage(socket, raw), onClose: (socket) => terminals.releaseSocket(socket) });
@@ -137,16 +143,18 @@ export function createApplication(options: ApplicationOptions): RelayApplication
       const verdict = security.checkHttp(req);
       if (!verdict.ok) return send(res, 403, { error: verdict.reason ?? 'Forbidden' });
       const url = new URL(req.url ?? '/', 'http://relay.local');
+      if (url.pathname === '/api/browser/mcp') return await browserMcp.handle(req, res);
       if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
         const reply = await dispatch(req, res, url);
         return send(res, reply.status, reply.body);
       }
-      if (url.pathname === '/ws') return send(res, 426, { error: 'WebSocket upgrade required' });
+      if (url.pathname === '/ws' || url.pathname === '/ws/browser') return send(res, 426, { error: 'WebSocket upgrade required' });
       if (config.webDistDir && (await serveStatic(config.webDistDir, req, res, config.csp))) return;
       if (res.headersSent) return;
       send(res, 404, { error: config.webDistDir ? 'Not found' : 'The web app is not built. Run `pnpm build` or use the Vite dev server on port 5173.' });
     } catch (error) {
       if (res.headersSent) return void res.destroy();
+      if (error instanceof BrowserError) return send(res, error.status, { error: error.message });
       if (error instanceof HttpError) return send(res, error.status, { error: error.message });
       if (error instanceof ZodError) return send(res, 400, { error: error.issues[0]?.message ?? 'Invalid request' });
       if (error instanceof URIError) return send(res, 400, { error: 'Malformed URL' });
@@ -156,7 +164,12 @@ export function createApplication(options: ApplicationOptions): RelayApplication
   };
 
   const server = createServer((req, res) => { void handle(req, res); });
-  server.on('upgrade', (req, socket, head) => hub.handleUpgrade(req, socket, head));
+  server.on('upgrade', (req, socket, head) => {
+    let pathname: string;
+    try { pathname = new URL(req.url ?? '/', 'http://relay.local').pathname; } catch { socket.destroy(); return; }
+    if (pathname === '/ws/browser') browser.handleUpgrade(req, socket, head, security);
+    else hub.handleUpgrade(req, socket, head);
+  });
   server.on('clientError', (_error, socket) => socket.destroy());
   server.requestTimeout = 60_000;
   server.headersTimeout = 20_000;
@@ -168,7 +181,7 @@ export function createApplication(options: ApplicationOptions): RelayApplication
   const address = () => ({ host: config.host, port: boundPort, url: `http://${config.host.includes(':') ? `[${config.host}]` : config.host}:${boundPort}` });
 
   const app: RelayApplication = {
-    config, store, server, runtime, terminals, hub, providers,
+    config, store, server, runtime, terminals, hub, providers, browser,
     initialize() {
       initialized ??= (async () => {
         if (options.exampleWorkspace !== false) await seedExampleWorkspace(store, config.dataDir, log);
@@ -194,6 +207,8 @@ export function createApplication(options: ApplicationOptions): RelayApplication
       closing ??= (async () => {
         if (pendingNotify) clearTimeout(pendingNotify);
         await runtime.shutdown();
+        browserMcp.close();
+        await browser.close();
         terminals.killAll();
         await hub.close();
         await new Promise<void>((resolve) => {
