@@ -14,6 +14,7 @@ export interface Session {
   status: SessionStatus; policy: Policy; isolated: boolean; worktreePath: string; branch: string | null;
   providerSessionId: string | null; createdAt: string; updatedAt: string; error: string | null;
   inputTokens: number; outputTokens: number; costUsd: number | null;
+  pinned: boolean; unread: boolean;
 }
 export interface Message { id: string; sessionId: string; role: 'user' | 'assistant' | 'system' | 'tool'; content: string; createdAt: string; kind?: string }
 export interface Task { id: string; projectId: string; title: string; description: string; acceptanceCriteria: string; sessionId: string | null; dependsOn: string[]; status: TaskStatus; createdAt: string; updatedAt: string }
@@ -42,6 +43,7 @@ export type ClientEvent =
   | { type: 'terminal.stop'; terminalId: string };
 
 export const CreateProjectSchema = z.object({ name: z.string().trim().min(1).max(100), path: z.string().trim().min(1).max(4096) });
+export const UpdateProjectSchema = z.object({ name: z.string().trim().min(1).max(100) }).strict();
 export const CreateSessionSchema = z.object({
   projectId: z.string().min(1), name: z.string().trim().min(1).max(100).optional(), provider: ProviderSchema.optional(),
   model: z.string().trim().min(1).max(150).optional(), effort: EffortSchema.optional(),
@@ -50,6 +52,7 @@ export const CreateSessionSchema = z.object({
 export const UpdateSessionSchema = z.object({
   name: z.string().trim().min(1).max(100).optional(), provider: ProviderSchema.optional(),
   model: z.string().trim().min(1).max(150).optional(), effort: EffortSchema.optional(), policy: PolicySchema.optional(),
+  pinned: z.boolean().optional(), unread: z.boolean().optional(),
 }).strict().refine((patch) => Object.keys(patch).length > 0, 'Supply a session setting to update');
 export const SendMessageSchema = z.object({ content: z.string().trim().min(1).max(100_000) });
 export const CreateTaskSchema = z.object({ projectId: z.string().min(1), title: z.string().trim().min(1).max(200), description: z.string().max(20_000).default(''), acceptanceCriteria: z.string().max(10_000).default(''), sessionId: z.string().nullable().default(null), dependsOn: z.array(z.string()).max(100).default([]) });

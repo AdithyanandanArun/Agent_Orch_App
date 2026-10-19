@@ -40,6 +40,8 @@ const MIGRATIONS: string[] = [
   CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
   CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
   `,
+  `ALTER TABLE sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
+   ALTER TABLE sessions ADD COLUMN unread INTEGER NOT NULL DEFAULT 0;`,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

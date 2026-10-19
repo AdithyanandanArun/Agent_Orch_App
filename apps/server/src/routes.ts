@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { z } from 'zod';
 import {
-  ApprovalDecisionSchema, CreateProjectSchema, CreateSessionSchema, CreateTaskSchema, HandoffSchema, SendMessageSchema, UpdateSessionSchema, UpdateSettingsSchema, UpdateTaskSchema,
+  ApprovalDecisionSchema, CreateProjectSchema, CreateSessionSchema, CreateTaskSchema, HandoffSchema, SendMessageSchema, UpdateProjectSchema, UpdateSessionSchema, UpdateSettingsSchema, UpdateTaskSchema,
 } from '@relay/contracts';
 import type { Bootstrap } from '@relay/contracts';
 import { gitStatus } from './git.ts';
@@ -133,6 +133,7 @@ export function buildRouter(s: Services) {
   });
 
   add('POST', '/api/sessions', async (ctx) => new Reply(201, await s.workspace.createSession(await ctx.body(CreateSessionSchema))));
+  add('PATCH', '/api/projects/:id', async (ctx) => s.workspace.renameProject(param(ctx, 'id'), (await ctx.body(UpdateProjectSchema)).name));
   add('PATCH', '/api/sessions/:id', async (ctx) => s.workspace.updateSession(param(ctx, 'id'), await ctx.body(UpdateSessionSchema)));
   add('DELETE', '/api/sessions/:id', (ctx) => {
     s.workspace.archiveSession(param(ctx, 'id'));

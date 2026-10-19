@@ -10,7 +10,7 @@ export function makeSession(overrides: Partial<Session> = {}): Session {
     id: 'session-1', projectId: 'project-1', name: 'Test', provider: 'codex', model: 'gpt-6.1-sol', effort: 'high',
     status: 'idle', policy: 'supervised', isolated: true, worktreePath: '/tmp/relay-test-worktree', branch: null,
     providerSessionId: null, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', error: null,
-    inputTokens: 0, outputTokens: 0, costUsd: null, ...overrides,
+    inputTokens: 0, outputTokens: 0, costUsd: null, pinned: false, unread: false, ...overrides,
   };
 }
 

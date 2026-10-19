@@ -25,6 +25,7 @@ const mapSession = (r: Row): Session => ({
   effort: r.effort as Session['effort'], status: r.status as SessionStatus, policy: r.policy as Policy, isolated: r.isolated === 1,
   worktreePath: r.worktree_path as string, branch: (r.branch as string | null) ?? null, providerSessionId: (r.provider_session_id as string | null) ?? null,
   createdAt: r.created_at as string, updatedAt: r.updated_at as string, error: (r.error as string | null) ?? null,
+  pinned: r.pinned === 1, unread: r.unread === 1,
   inputTokens: r.input_tokens as number, outputTokens: r.output_tokens as number, costUsd: (r.cost_usd as number | null) ?? null,
 });
 const mapMessage = (r: Row): Message => {
@@ -101,6 +102,10 @@ export class Store {
     this.run('INSERT INTO projects(id, name, path, created_at, is_example) VALUES (?, ?, ?, ?, ?)', project.id, project.name, project.path, project.createdAt, project.isExample ? 1 : 0);
     return project;
   }
+  renameProject(id: string, name: string): Project {
+    this.run('UPDATE projects SET name = ? WHERE id = ?', name, id);
+    return this.getProject(id)!;
+  }
   getProject(id: string): Project | undefined {
     const row = this.get('SELECT * FROM projects WHERE id = ?', id);
     return row ? mapProject(row) : undefined;
@@ -134,17 +139,19 @@ export class Store {
       : this.all('SELECT * FROM sessions WHERE archived_at IS NULL ORDER BY created_at ASC, rowid ASC');
     return rows.map(mapSession);
   }
-  updateSession(id: string, patch: Partial<Pick<Session, 'name' | 'provider' | 'model' | 'effort' | 'policy' | 'status' | 'error' | 'providerSessionId' | 'inputTokens' | 'outputTokens' | 'costUsd'>>): Session {
-    const columns: Record<string, string> = { name: 'name', provider: 'provider', model: 'model', effort: 'effort', policy: 'policy', status: 'status', error: 'error', providerSessionId: 'provider_session_id', inputTokens: 'input_tokens', outputTokens: 'output_tokens', costUsd: 'cost_usd' };
-    const sets: string[] = ['updated_at = ?'];
-    const params: SQLInputValue[] = [nowIso()];
+  updateSession(id: string, patch: Partial<Pick<Session, 'name' | 'provider' | 'model' | 'effort' | 'policy' | 'status' | 'error' | 'providerSessionId' | 'inputTokens' | 'outputTokens' | 'costUsd' | 'pinned' | 'unread'>>): Session {
+    const columns: Record<string, string> = { name: 'name', provider: 'provider', model: 'model', effort: 'effort', policy: 'policy', status: 'status', error: 'error', providerSessionId: 'provider_session_id', inputTokens: 'input_tokens', outputTokens: 'output_tokens', costUsd: 'cost_usd', pinned: 'pinned', unread: 'unread' };
+    // Organizing a session does not count as conversation activity or change its recency.
+    const activityChanged = Object.entries(patch).some(([key, value]) => value !== undefined && key !== 'pinned' && key !== 'unread');
+    const sets: string[] = activityChanged ? ['updated_at = ?'] : [];
+    const params: SQLInputValue[] = activityChanged ? [nowIso()] : [];
     for (const [key, value] of Object.entries(patch)) {
       const column = columns[key];
       if (!column || value === undefined) continue;
       sets.push(`${column} = ?`);
-      params.push(value as SQLInputValue);
+      params.push(typeof value === 'boolean' ? Number(value) : value as SQLInputValue);
     }
-    this.run(`UPDATE sessions SET ${sets.join(', ')} WHERE id = ?`, ...params, id);
+    if (sets.length) this.run(`UPDATE sessions SET ${sets.join(', ')} WHERE id = ?`, ...params, id);
     return this.getSession(id, true)!;
   }
   archiveSession(id: string): void {

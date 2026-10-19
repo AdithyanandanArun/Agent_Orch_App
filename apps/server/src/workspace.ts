@@ -39,6 +39,17 @@ export class WorkspaceService {
     return { project, created: true };
   }
 
+  renameProject(id: string, name: string): Project {
+    const project = this.store.getProject(id);
+    if (!project) throw notFound('Project not found');
+    if (project.name === name) return project;
+    return this.store.tx(() => {
+      const updated = this.store.renameProject(id, name);
+      this.store.recordEvent({ projectId: id, type: 'project.renamed', summary: `Project renamed: ${project.name} → ${name}`, payload: { from: project.name, to: name } });
+      return updated;
+    });
+  }
+
   async createSession(input: CreateSession): Promise<Session> {
     const project = this.store.getProject(input.projectId);
     if (!project) throw notFound('Project not found');
@@ -54,8 +65,8 @@ export class WorkspaceService {
     let branch: string | null = null;
     const info = await repoInfo(project.path);
     if (isolated) {
-      if (!info.isRepo) throw unprocessable('This project is not a Git repository. Choose Project folder in Settings → Session permissions and workspace to work directly in this folder, then create the session again.');
-      if (!info.hasHead) throw unprocessable('This repository has no commits yet. Make an initial commit, or choose Project folder in Settings → Session permissions and workspace, then create the session again.');
+      if (!info.isRepo) throw unprocessable('This project is not a Git repository. Choose Project folder in Settings → General → Workspace to work directly in this folder, then create the session again.');
+      if (!info.hasHead) throw unprocessable('This repository has no commits yet. Make an initial commit, or choose Project folder in Settings → General → Workspace, then create the session again.');
       branch = `relay/${slugify(name)}-${id.slice(4, 12)}`;
       const target = path.join(this.dataDir, 'worktrees', project.id, id);
       await addWorktree(project.path, target, branch);
@@ -87,6 +98,11 @@ export class WorkspaceService {
     if (!Object.keys(changes).length) return session;
     return this.store.tx(() => {
       const updated = this.store.updateSession(id, changes);
+      const organizationOnly = Object.keys(changes).every((key) => key === 'pinned' || key === 'unread');
+      if (organizationOnly) {
+        this.store.touch();
+        return updated;
+      }
       const renamed = Object.keys(changes).length === 1 && 'name' in changes;
       this.store.recordEvent({
         projectId: session.projectId, sessionId: id, type: renamed ? 'session.renamed' : 'session.updated',
