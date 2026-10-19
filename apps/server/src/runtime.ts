@@ -1,10 +1,11 @@
 import { existsSync, statSync } from 'node:fs';
-import type { AdapterEvent, Approval, Message, ProviderSkill, Session, ToolActivity, ToolCall } from '@relay/contracts';
+import type { AdapterEvent, Approval, Message, ProviderSkill, RunChanges, Session, ToolActivity, ToolCall } from '@relay/contracts';
 import type { Hub } from './hub.ts';
 import type { Store } from './store.ts';
 import type { TaskService } from './tasks.ts';
 import type { Logger, ProviderRuntime } from './types.ts';
 import { conflict, errorMessage, notFound, redactSecrets, truncate, newId, nowIso } from './util.ts';
+import { captureRunTree, compareRunTrees, unavailableRunChanges, type RunTreeSnapshot } from './run-changes.ts';
 
 export interface RuntimeOptions {
   /** Milliseconds to wait after an abort before declaring an unresponsive adapter interrupted. */
@@ -34,6 +35,7 @@ interface ActiveRun {
   baseCost: number | null;
   taskId: string | null;
   skills: ProviderSkill[];
+  changeBaseline: RunTreeSnapshot | null;
   promise: Promise<void>;
 }
 
@@ -79,7 +81,7 @@ export class SessionRuntime {
     const run: ActiveRun = {
       id: newId('run'), startedAt: nowIso(), tick: performance.now(), tools: new Map(), activityTimer: null,
       sessionId, controller: new AbortController(), closed: false, cleanupPending: false, approvals: new Map(), stream: null, flushTimer: null, consumedHandoffs: handoffs.map((h) => h.id), firstEvent: false,
-      baseInput: session.inputTokens, baseOutput: session.outputTokens, baseCost: session.costUsd, taskId: options.taskId ?? null, skills: options.skills ?? [], promise: Promise.resolve(),
+      baseInput: session.inputTokens, baseOutput: session.outputTokens, baseCost: session.costUsd, taskId: options.taskId ?? null, skills: options.skills ?? [], changeBaseline: null, promise: Promise.resolve(),
     };
     this.store.tx(() => {
       const userMessage = this.store.insertMessage({ sessionId, role: 'user', content: options.userMessage?.content ?? content, kind: options.userMessage?.kind ?? null, runId: run.id });
@@ -105,6 +107,11 @@ export class SessionRuntime {
     let outcome: 'completed' | 'failed' | 'interrupted' = 'completed';
     let failure: string | null = null;
     try {
+      run.changeBaseline = await captureRunTree(startSession.worktreePath);
+      if (run.controller.signal.aborted) {
+        this.finish(run, 'interrupted', null, unavailableRunChanges('The run was interrupted before work started.'));
+        return;
+      }
       const adapter = this.providers.createAdapter(startSession.provider);
       const session = this.store.getSession(run.sessionId) ?? startSession;
       const adapterRun = Promise.resolve().then(() => adapter.run({
@@ -131,7 +138,20 @@ export class SessionRuntime {
         failure = truncate(redactSecrets(errorMessage(error)), 4000);
       }
     }
-    this.finish(run, outcome, failure);
+    let changes: RunChanges;
+    try {
+      changes = run.cleanupPending
+        ? unavailableRunChanges('The provider was still stopping, so a final change snapshot could not be captured.')
+        : run.changeBaseline?.status !== 'available'
+          ? unavailableRunChanges('A starting workspace snapshot was unavailable. Changes for this run cannot be determined.')
+          : await compareRunTrees(startSession.worktreePath, run.changeBaseline, await captureRunTree(startSession.worktreePath));
+      if (!startSession.isolated && changes.summary.status === 'available') {
+        changes.summary.notices.push('This session uses a shared project folder. Changes made by other writers during the run may be included.');
+      }
+    } catch {
+      changes = unavailableRunChanges('Workspace changes could not be captured for this run.');
+    }
+    this.finish(run, outcome, failure, changes);
   }
 
   private releaseAfterCleanup(run: ActiveRun): void {
@@ -360,14 +380,15 @@ export class SessionRuntime {
     return true;
   }
 
-  private finish(run: ActiveRun, outcome: 'completed' | 'failed' | 'interrupted', failure: string | null): void {
+  private finish(run: ActiveRun, outcome: 'completed' | 'failed' | 'interrupted', failure: string | null, changes: RunChanges, durationMs = Math.max(0, Math.round(performance.now() - run.tick)), finishedAt = nowIso()): void {
     run.closed = true;
     this.denyApprovals(run, outcome === 'completed' ? 'run finished' : outcome);
     try {
       this.store.tx(() => {
         this.closeStream(run, outcome === 'completed' ? null : 'partial');
         this.finishTools(run);
-        this.store.finishRun(run.id, outcome, Math.max(0, Math.round(performance.now() - run.tick)));
+        this.store.setRunChanges(run.id, changes);
+        this.store.finishRun(run.id, outcome, durationMs, finishedAt);
         const session = this.store.getSession(run.sessionId, true);
         if (!session) return;
         if (outcome === 'failed') {
@@ -385,7 +406,7 @@ export class SessionRuntime {
         this.store.recordEvent({
           projectId: session.projectId, sessionId: run.sessionId, type: `session.run.${outcome}`,
           summary: outcome === 'completed' ? `Run completed: ${session.name}` : outcome === 'failed' ? `Run failed: ${session.name}` : `Run interrupted: ${session.name}`,
-          payload: { runId: run.id, durationMs: Math.max(0, Math.round(performance.now() - run.tick)), taskId: run.taskId, ...(failure ? { error: failure } : {}) },
+          payload: { runId: run.id, durationMs, taskId: run.taskId, ...(failure ? { error: failure } : {}) },
         });
       });
     } catch (error) {
