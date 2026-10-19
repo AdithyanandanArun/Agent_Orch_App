@@ -1,5 +1,5 @@
 import type {
-  Approval, AppSettings, Bootstrap, ExternalConversationDetails, ExternalConversationList, FileEntry, GitStatus, ImportConversationResult, Project, ProviderCatalog, ProviderInfo, RunChanges, Session, SessionUsage, ToolCall, Task, TaskStatus, WorkspaceEvent,
+  Approval, AppSettings, Bootstrap, DirectoryListing, ExternalConversationDetails, ExternalConversationList, FileEntry, GitStatus, ImportConversationResult, Project, ProviderCatalog, ProviderInfo, RunChanges, Session, SessionUsage, ToolCall, Task, TaskStatus, WorkspaceEvent,
 } from '@relay/contracts';
 export type { ProviderCatalog } from '@relay/contracts';
 
@@ -97,6 +97,11 @@ async function readFile(projectId: string, path: string, sessionId: string | nul
 export const api = {
   bootstrap: (signal?: AbortSignal) => json<Bootstrap>('/api/bootstrap', 'GET', undefined, signal),
   createProject: (input: { name: string; path: string }) => json<Project>('/api/projects', 'POST', input),
+  directories: (path: string, query: string, hidden: boolean, signal?: AbortSignal) =>
+    json<DirectoryListing>(`/api/directories${q({ path: path || undefined, query: query || undefined, hidden: hidden ? 'true' : undefined })}`, 'GET', undefined, signal),
+  revealDirectory: (path: string) => json<{ ok: boolean }>('/api/directories/reveal', 'POST', { path }),
+  createProjectAt: (input: { name: string; parentPath: string }) => json<Project>('/api/projects/new', 'POST', input),
+  cloneProject: (input: { url: string; name: string; parentPath: string }) => json<Project>('/api/projects/clone', 'POST', input),
   renameProject: (id: string, name: string) => json<Project>(`/api/projects/${encodeURIComponent(id)}`, 'PATCH', { name }),
   listFiles: (projectId: string, path: string, sessionId: string | null) =>
     json<FileEntry[]>(`/api/projects/${encodeURIComponent(projectId)}/files${q({ path, sessionId })}`),

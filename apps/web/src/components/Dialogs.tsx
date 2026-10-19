@@ -2,9 +2,9 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { useRelay, useActiveSession, useProject } from '../store/store';
 import { api, errorMessage } from '../lib/api';
-import { basename } from '../lib/format';
 import { Button, Field, InlineError, Modal, PROVIDER_NAME } from './ui';
 import { SelectMenu } from './SelectMenu';
+export { ProjectDialog } from './ProjectDialog';
 
 function useSubmit(onDone: () => void) {
   const [busy, setBusy] = useState(false);
@@ -22,41 +22,6 @@ function useSubmit(onDone: () => void) {
     }
   };
   return { busy, error, run, setError };
-}
-
-export function ProjectDialog() {
-  const close = useRelay.getState().closeDialog;
-  const [path, setPath] = useState('');
-  const [name, setName] = useState('');
-  const [touched, setTouched] = useState(false);
-  const { busy, error, run } = useSubmit(close);
-
-  useEffect(() => { if (!touched) setName(basename(path)); }, [path, touched]);
-
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    void run(async () => {
-      const project = await api.createProject({ name: name.trim(), path: path.trim() });
-      await useRelay.getState().refreshNow();
-      useRelay.getState().selectProject(project.id);
-      useRelay.getState().toast('success', `Opened ${project.name}`);
-    });
-  };
-
-  return (
-    <Modal title="Open project" description="Point Relay at a folder on this machine. Git repositories get isolated session worktrees." onClose={close}
-      footer={<><Button variant="ghost" onClick={close}>Cancel</Button><Button variant="primary" type="submit" form="project-form" busy={busy} disabled={!path.trim() || !name.trim()} why="Enter a folder path and a name">Open project</Button></>}>
-      <form id="project-form" className="form" onSubmit={submit}>
-        <Field label="Folder path" htmlFor="pf-path" hint="Absolute path on the machine running the Relay server. The server resolves it to its real path.">
-          <input id="pf-path" data-autofocus className="input input--mono" value={path} onChange={(e) => setPath(e.target.value)} placeholder="/home/you/code/my-app" spellCheck={false} autoComplete="off" />
-        </Field>
-        <Field label="Name" htmlFor="pf-name">
-          <input id="pf-name" className="input" value={name} maxLength={100} onChange={(e) => { setTouched(true); setName(e.target.value); }} />
-        </Field>
-        {error ? <InlineError>{error}</InlineError> : null}
-      </form>
-    </Modal>
-  );
 }
 
 export function TaskDialog() {

@@ -13,6 +13,7 @@ import './styles/usage.css';
 import './styles/run-activity.css';
 import './styles/run-changes.css';
 import './styles/import-dialog.css';
+import './styles/project-picker.css';
 import { App } from './App';
 import { Boundary } from './components/ui';
 
