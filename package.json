@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.26.0",
-  "engines": { "node": ">=24.13.0" },
+  "engines": {
+    "node": ">=24.13.0"
+  },
   "scripts": {
     "dev": "concurrently -k -n server,web -c cyan,magenta \"pnpm --filter @relay/server dev\" \"pnpm --filter @relay/web dev\"",
     "build": "pnpm --filter @relay/web build && pnpm --filter @relay/server build",
@@ -12,7 +14,14 @@
     "test": "pnpm --filter @relay/server test",
     "smoke": "node scripts/smoke.mjs",
     "start": "pnpm --filter @relay/server start",
-    "desktop": "pnpm --filter @relay/desktop start"
+    "desktop": "pnpm --filter @relay/desktop start",
+    "package:linux": "pnpm build && node scripts/package-desktop.mjs",
+    "package:arch": "pnpm package:linux && node scripts/package-arch.mjs"
   },
-  "devDependencies": { "@types/node": "^24.0.0", "concurrently": "^9.2.0", "typescript": "^5.9.3" }
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "concurrently": "^9.2.0",
+    "esbuild": "0.28.2",
+    "typescript": "^5.9.3"
+  }
 }

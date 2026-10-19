@@ -1,11 +1,13 @@
 import { app, BrowserWindow, dialog, shell } from 'electron';
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { createServer } from 'node:net';
-import { join } from 'node:path';
+import { dirname, delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const root = fileURLToPath(new URL('../../', import.meta.url));
+const root = app.isPackaged ? join(process.resourcesPath, 'workspace') : fileURLToPath(new URL('../../', import.meta.url));
+const runtimeNode = app.isPackaged ? join(process.resourcesPath, 'runtime/bin/node') : process.env.RELAY_NODE_EXECUTABLE || 'node';
+const serverRoot = join(root, 'apps/server');
 app.setName('Relay');
 let backend;
 let quitting = false;
@@ -37,13 +39,26 @@ async function waitForBackend(url) {
 
 async function openWorkspace() {
   if (!existsSync(join(root, 'apps/web/dist/index.html'))) {
-    throw new Error('Build Relay first with pnpm build, then run pnpm desktop.');
+    throw new Error(app.isPackaged ? 'The installed application is missing its UI files. Reinstall Relay.' : 'Build Relay first with pnpm build, then run pnpm desktop.');
   }
   const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
-  backend = spawn(process.env.RELAY_NODE_EXECUTABLE || 'node', ['--import', join(root, 'apps/server/node_modules/tsx/dist/loader.mjs'), join(root, 'apps/server/src/index.ts')], {
-    cwd: root,
-    env: { ...process.env, RELAY_PORT: String(port), PORT: String(port), RELAY_DATA_DIR: join(app.getPath('userData'), 'workspace') },
+  const userData = app.getPath('userData');
+  mkdirSync(userData, { recursive: true, mode: 0o700 });
+  // Never inherit another Relay development server's paths, origins or host into the desktop runtime.
+  const environment = {
+    ...process.env, NODE_ENV: 'production', RELAY_HOST: '127.0.0.1',
+    RELAY_PORT: String(port), PORT: String(port), RELAY_DATA_DIR: join(userData, 'workspace'),
+    RELAY_WEB_DIST: join(root, 'apps/web/dist'), RELAY_ALLOWED_ORIGINS: '',
+  };
+  delete environment.ELECTRON_RUN_AS_NODE;
+  delete environment.NODE_OPTIONS;
+  delete environment.NODE_PATH;
+  if (app.isPackaged) environment.PATH = [dirname(runtimeNode), process.env.PATH || '/usr/local/bin:/usr/bin:/bin'].join(delimiter);
+  const serverArgs = app.isPackaged ? [join(serverRoot, 'dist/index.mjs')] : ['--import', join(serverRoot, 'node_modules/tsx/dist/loader.mjs'), join(serverRoot, 'src/index.ts')];
+  backend = spawn(runtimeNode, serverArgs, {
+    cwd: app.isPackaged ? userData : root,
+    env: environment,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let startupErrors = '';
@@ -68,7 +83,7 @@ async function openWorkspace() {
   catch (error) { throw new Error(`${error.message}\n${startupErrors}`); }
   const window = new BrowserWindow({
     title: 'Relay', width: 1540, height: 1000, minWidth: 900, minHeight: 620,
-    backgroundColor: '#101116', autoHideMenuBar: true,
+    backgroundColor: '#0a0a0a', autoHideMenuBar: true,
     webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true },
   });
   window.webContents.setWindowOpenHandler(({ url: target }) => {

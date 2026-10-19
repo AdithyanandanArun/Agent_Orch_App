@@ -1,0 +1,7 @@
+{
+  "version": "26.8.2",
+  "linux-x64": {
+    "url": "https://nodejs.org/dist/v26.8.2/node-v26.8.2-linux-x64.tar.xz",
+    "sha256": "40e1d3225c1c9ae9a2671c98ecb9857e4d5555026394f348645676798840d5c5"
+  }
+}
