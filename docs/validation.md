@@ -72,3 +72,16 @@ Automated tests and paid/live provider turns were not run for this design pass. 
 - Pin/unread persistence uses schema migration 2 with default-false columns. The implementation preserves activity timestamps for organization changes and retains active-run/cleanup restrictions for run settings and archive.
 
 Automated tests, persistence/restart exercises, clipboard writes, project renames, archive operations and live model calls were not run for this change. Browser review opened and dismissed UI surfaces without changing session or project data.
+
+
+## Desktop and Arch packaging — 2026-10-19
+
+Implemented a standalone Linux x86-64 Electron release and an Arch `relay-workspace-bin` package. The desktop launches its compiled backend using a pinned, checksum-verified official Node runtime, serves the bundled UI, and keeps user data outside its installation directory. Production dependencies deploy in an isolated workspace; symbolic links are constrained to the release and installer bookkeeping is omitted. Frontend and backend dependency license/notice files accompany the release.
+
+- Workspace type checking passed, including the Electron entry-point syntax checks.
+- The UI production build, server compilation/bundling, standalone archive creation and Arch `makepkg` packaging completed successfully. The combined `pnpm package:arch` command completed before the final notice-inventory addition; the standalone and Arch build steps were subsequently rebuilt with that addition.
+- `makepkg` accepted the pinned source checksum. Package metadata and archive contents were inspected, including the root-owned mode-4755 Chromium sandbox helper, command symlink and desktop entry.
+- The Arch recipe passes Bash syntax checking and `.SRCINFO` generation. The Git whitespace check passed.
+- A manual GitHub workflow was added to build downloadable artifacts; the hosted workflow has not been executed.
+
+No automated tests, package installation, packaged application launch, clean-machine/restart exercise or live provider calls were run for this change. The unsigned package is a local build, not a published GitHub release or an AUR registration. Relay's project license remains unspecified; it must be selected before publishing the package. The development checkout's `.relay` data was not copied into the desktop user-data directory.

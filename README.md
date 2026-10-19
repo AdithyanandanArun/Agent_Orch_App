@@ -2,7 +2,28 @@
 
 A local development workspace for independent coding-agent sessions. Relay is the working title for the distributed AI development environment described in [the product vision](docs/vision.md).
 
-This repository establishes the local foundation: an original React workspace, a Node runtime, persistent sessions and events, isolated Git worktrees, provider adapters, task dependencies, artifact handoffs and a development Electron shell. Distributed team networking, voice orchestration and automatic integration remain later milestones.
+This repository establishes the local foundation: an original React workspace, a Node runtime, persistent sessions and events, isolated Git worktrees, provider adapters, task dependencies, artifact handoffs and an Electron desktop app with Linux packaging. Distributed team networking, voice orchestration and automatic integration remain later milestones.
+
+## Desktop app (Arch Linux x86-64)
+
+Relay is intended to be installed as a desktop application. The repository now includes a standalone Linux bundle and an Arch package build; neither a GitHub release nor an AUR entry has been published yet.
+
+Build the installable package on Arch with `base-devel`, Node and pnpm available:
+
+```sh
+pnpm install --frozen-lockfile
+pnpm package:arch
+```
+
+Then explicitly install it:
+
+```sh
+sudo pacman -U ./release/relay-workspace-bin-0.1.0-1-x86_64.pkg.tar.zst
+```
+
+Open **Relay** from the application menu, or run `relay-workspace`. The package includes Electron, Node, the compiled local server and the UI. It starts and stops its own local server; users do not need a source checkout, pnpm or a manually started development server. Install/sign in to your preferred provider CLI separately. Data lives in the desktop application's user-data directory, outside `/opt/relay-workspace`.
+
+`yay -S relay-workspace-bin` will work only after an AUR entry is published. See [desktop distribution](docs/desktop-distribution.md) for builds, downloads, updates and release prerequisites.
 
 ## Run locally
 

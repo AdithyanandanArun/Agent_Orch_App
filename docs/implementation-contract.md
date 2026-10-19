@@ -6,6 +6,12 @@ Working title: Relay. This is a durable first foundation for the multi-month pro
 
 pnpm workspace; React 19 + TypeScript + Vite; Tailwind or plain CSS with design tokens; TanStack Router and Zustand if useful; Node >=24.13; WebSockets; SQLite via node:sqlite; node-pty; Monaco and xterm; Electron desktop entry point. Effect may be used where useful, without copying T3 abstractions. Core architecture matches T3's UI / Node / provider process separation. Rust isn't required to launch the Codex Rust executable.
 
+## Desktop distribution
+
+Relay is intended to be an installed desktop application. Linux x86-64 packaging stages Electron, a checksum-pinned official Node runtime, the compiled backend, production dependencies and built web assets. The installed app manages its loopback server and stores data under the Electron user-data directory, without requiring pnpm, a source checkout or a manually started server. Provider CLIs and their logins remain separately installed.
+
+`pnpm package:linux` produces the standalone archive; `pnpm package:arch` adds an installable `.pkg.tar.zst` and checksum using `makepkg` as an ordinary user. The Arch recipe installs a launcher, icon and properly owned sandbox helper. Package creation does not install into the host or publish a release. AUR/GitHub Release publication requires the owner's approval; there is no AUR entry or automatic updater yet. See desktop-distribution.md for the exact build/publication contract and outstanding release prerequisites.
+
 ## HTTP and WebSocket contract
 
 All HTTP routes use /api. Errors: {error: string}. JSON success bodies, except file content endpoint. API server port 4310 on 127.0.0.1, Vite port 5173. Vite proxies /api and /ws. Production server serves apps/web/dist. Default data directory is .relay under repository root (override RELAY_DATA_DIR); never tracked.
