@@ -85,3 +85,14 @@ Implemented a standalone Linux x86-64 Electron release and an Arch `relay-worksp
 - A manual GitHub workflow was added to build downloadable artifacts; the hosted workflow has not been executed.
 
 No automated tests, package installation, packaged application launch, clean-machine/restart exercise or live provider calls were run for this change. The unsigned package is a local build, not a published GitHub release or an AUR registration. Relay's project license remains unspecified; it must be selected before publishing the package. The development checkout's `.relay` data was not copied into the desktop user-data directory.
+
+## Structured tool activity and run timing — 2026-10-19
+
+Added durable run records and tool lifecycle records through additive schema migration 3. Codex app-server items/output deltas and Claude SDK tool-use/result/progress messages now feed compact activity disclosures with counts, live elapsed time, final duration and expandable details. Only provider-reported parent links create nesting; this is not a complete operating-system process monitor.
+
+- Workspace type checking passed after final integration, including existing provider assertions updated to the new event contract and Electron entry-point syntax checks.
+- Production web build and server compilation passed.
+- The running local server returned healthy bootstrap responses containing the new run/tool collections. Source review covered stable invocation IDs, progress deduplication, bounded/redacted captured output, interrupted-run recovery, nested disclosure events and stale detail-request handling.
+- Native collaborative-browser snapshots failed during final inspection. The available conversation initially had no structured tool history, so the new populated activity tree was not visually verified against a live provider run.
+
+No automated tests, paid/live provider calls, synthetic production conversations, package installation or packaged application launch were performed for this change. Existing text-only history has no recoverable invocation identity, duration or parent metadata; its available output is grouped without inventing that information. Interrupted runs recovered after a server restart have unknown elapsed duration. Per-run detail loading is limited to 1,000 calls; captured output is bounded and truncation is labeled.

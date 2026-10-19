@@ -41,3 +41,12 @@ Project settings opens the project's full Settings page, with an editable displa
 The initial simplification passed workspace type checking and the production build. The running server returned the new defaults through bootstrap. Snapshot capture initially failed, limiting that pass to DOM inspection.
 
 During the subsequent screenshot-directed design pass, native browser capture became available after opening the preview visibly. The actual chat with existing messages, full Settings page and open model popover were inspected visually. The work starts no new model turn and fabricates no demonstration conversation. Automated tests and live model turns were not run for this design pass; compilation and production-build results are recorded in validation.md.
+
+
+## Live run activity
+
+Each newly recorded run has one quiet activity disclosure beside its conversation, replacing repetitive generic tool/shell rows. It shows elapsed time while running and a persisted “Worked for…” duration on completion; failed/interrupted runs retain their own labels. The timer refreshes once per second without announcing every tick to assistive technology.
+
+Invocation counts come from durable tool IDs and are separate from start/progress/result updates. Category summaries describe commands, browsing, search, files and agent delegation where those operations are identified by the provider. Expanded rows show actual input, command, output, directory, exit code, process ID and child relationships when reported. They do not claim a complete operating-system process tree. Captured output tails and truncation are labeled.
+
+Older text-only tool history remains readable under grouped Tool activity disclosures, with descriptive previews. Missing historical timing and parent IDs are not reconstructed from guesses. No demonstration runs or conversations are inserted into production data.

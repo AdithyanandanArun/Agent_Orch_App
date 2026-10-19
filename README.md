@@ -66,6 +66,8 @@ Right-click a session, use its three-dot action button, or press **Shift+F10** o
 
 Git worktrees are the default; a repository needs an initial commit before Relay can create one. Settings also offers an explicit project-folder workspace default. A worktree separates file edits and is not an operating-system sandbox. The context pane and terminal start closed; open them when needed. Tasks, activity and the agent map are available under **More** in the sidebar.
 
+New runs show a live elapsed timer and tool/category summaries, followed by a final worked duration. Expand the activity row for commands, inputs/output, exit codes and provider-reported child calls. Activity and timing survive reloads; older text-only history retains its available details.
+
 Tasks include an owner, prerequisites and acceptance criteria. A successful assigned run enters review. Artifact handoffs identify a committed file and revision, record an event and add context for the receiving session's next turn. Handoffs do not merge branches or silently launch inference.
 
 Use the file pane to inspect and edit permitted project files, the changes pane for Git diffs, and the terminal for an interactive shell in the selected local workspace. The app is intended for a trusted local user and binds to loopback; exposing it through a network tunnel is not a supported team collaboration mode.
