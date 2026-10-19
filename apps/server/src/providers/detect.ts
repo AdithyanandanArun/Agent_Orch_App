@@ -1,7 +1,8 @@
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
-import type { AppSettings, ProviderInfo } from '@relay/contracts';
+import type { AppSettings, ProviderInfo, ProviderModel } from '@relay/contracts';
 import { CODEX_CLIENT_INFO } from './codex/adapter.js';
+import { CODEX_POLICIES, parseCodexModel } from './codex/capabilities.js';
 import { JsonRpcConnection, RpcError } from './codex/rpc.js';
 import { CLAUDE_DEFAULT_MODEL, CLAUDE_MODELS } from './claude/messages.js';
 import { claudeEnvironment } from './claude/auth.js';
@@ -74,7 +75,7 @@ export async function detectClaude(settings: AppSettings, deps: DetectDeps = {})
 interface CodexProbe {
   account: 'none' | 'present' | 'unknown';
   accountType: string | null;
-  models: { id: string; name: string }[] | null;
+  models: ProviderModel[] | null;
   error: string | null;
 }
 
@@ -116,15 +117,15 @@ export async function probeCodexAppServer(executable: string, deps: DetectDeps =
       result.error = `account/read failed: ${errorMessage(error)}`;
     }
     try {
-      const models: { id: string; name: string }[] = [];
+      const models: ProviderModel[] = [];
       let cursor: string | null = null;
       for (let page = 0; page < 5; page += 1) {
         const response: unknown = await conn.request('model/list', { limit: 100, includeHidden: false, ...(cursor ? { cursor } : {}) }, left());
         if (!isRecord(response) || !Array.isArray(response.data)) break;
         for (const entry of response.data) {
           if (!isRecord(entry) || entry.hidden === true) continue;
-          const id = typeof entry.model === 'string' ? entry.model : typeof entry.id === 'string' ? entry.id : null;
-          if (id) models.push({ id, name: typeof entry.displayName === 'string' ? entry.displayName : id });
+          const model = parseCodexModel(entry);
+          if (model) models.push(model);
         }
         cursor = typeof response.nextCursor === 'string' ? response.nextCursor : null;
         if (!cursor) break;
@@ -144,7 +145,7 @@ export async function probeCodexAppServer(executable: string, deps: DetectDeps =
 
 export async function detectCodex(settings: AppSettings, deps: DetectDeps = {}): Promise<ProviderInfo> {
   const env = deps.env ?? process.env;
-  const base: ProviderInfo = { id: 'codex', name: 'Codex', available: false, version: null, executable: null, reason: null, models: [] };
+  const base: ProviderInfo = { id: 'codex', name: 'Codex', available: false, version: null, executable: null, reason: null, models: [], policies: CODEX_POLICIES };
   const resolved = await resolveExecutable({ name: 'codex', override: settings.codexExecutable, env, home: deps.home, probe: deps.probe });
   if (!resolved.ok) return { ...base, reason: resolved.reason };
   const { executable } = resolved;
