@@ -29,13 +29,14 @@ const target = { selector: z.string().min(1).max(2000).optional(), ref: z.string
 export class BrowserMcpBridge {
   private bindings = new Map<string, Binding>();
   constructor(private browser: BrowserAutomation, private store: Store, private getPort: () => number,
-    private onOpen: (sessionId: string, tabId: string) => void) {}
+    private onOpen: (sessionId: string, tabId: string) => void, private getHost: () => string = () => '127.0.0.1') {}
 
   create(runId: string, session: Session, signal: AbortSignal, requestApproval: Binding['requestApproval']): BrowserMcpConnection {
     if (this.bindings.size >= 64) throw new Error('Too many active browser tool connections');
     const token = randomBytes(32).toString('base64url');
     this.bindings.set(hash(token), { runId, session, signal, requestApproval, shown: false, revoked: false });
-    return { url: `http://127.0.0.1:${this.getPort()}/api/browser/mcp`, token };
+    const host = this.getHost();
+    return { url: `http://${host.includes(':') ? `[${host}]` : host}:${this.getPort()}/api/browser/mcp`, token };
   }
 
   revoke(runId: string): void {
@@ -48,7 +49,8 @@ export class BrowserMcpBridge {
     if (this.store.getSettings().browserAgentEnabled === false) throw new Error('Agent browser access is disabled in Settings → Browser');
   }
 
-  private async permit(binding: Binding): Promise<void> {
+  private async permit(binding: Binding, requestSignal: AbortSignal): Promise<void> {
+    if (requestSignal.aborted) throw new Error('This browser request was cancelled');
     this.ensure(binding);
     if (binding.session.policy === 'supervised' || binding.session.policy === 'balanced') {
       binding.approval ??= binding.requestApproval({
@@ -58,6 +60,7 @@ export class BrowserMcpBridge {
       if (!await binding.approval) throw new Error('Browser control was not approved for this run');
     }
     this.ensure(binding);
+    if (requestSignal.aborted) throw new Error('This browser request was cancelled');
   }
 
   private show(binding: Binding, id: string): void {
@@ -71,19 +74,20 @@ export class BrowserMcpBridge {
     return id;
   }
 
-  private tools(binding: Binding): McpServer {
+  private tools(binding: Binding, requestSignal: AbortSignal): McpServer {
+    const ensureRequest = () => { this.ensure(binding); if (requestSignal.aborted) throw new Error('This browser request was cancelled'); };
     const server = new McpServer({ name: 'relay-browser', version: '0.1.0' }, {
       instructions: 'These tools operate Relay’s collaborative browser. The user sees the same tabs. Start with browser_status, then browser_open or browser_snapshot. Use snapshot refs or role/name targets; ambiguous targets fail. Human control pauses agent writes: ask the user to release control, never bypass it. Existing-browser connections are made by the user in Relay. Never extract cookies or credentials. Use browser_evaluate only for page JavaScript. Browser actions must follow the user’s task and authorization.',
     });
     const output = (value: unknown) => ({ content: [{ type: 'text' as const, text: truncate(redactSecrets(JSON.stringify(value) ?? 'null'), 64_000) }] });
     const register = (name: string, description: string, shape: z.ZodRawShape, readOnly: boolean, operation: (args: Record<string, unknown>) => Promise<unknown> | unknown) => {
       server.registerTool(name, { description, inputSchema: shape, annotations: { readOnlyHint: readOnly, destructiveHint: !readOnly, openWorldHint: true } }, async (args) => {
-        try { this.ensure(binding); const result = await operation(args); this.ensure(binding); return output(result); }
+        try { ensureRequest(); const result = await operation(args); ensureRequest(); return output(result); }
         catch (error) { return { content: [{ type: 'text' as const, text: truncate(redactSecrets(errorMessage(error)), 1000) }], isError: true }; }
       });
     };
     const act = async (args: Record<string, unknown>, type: BrowserAction['type']) => {
-      await this.permit(binding);
+      await this.permit(binding, requestSignal);
       const { tabId: requested, ...input } = args;
       const id = this.current(binding, requested as string | undefined);
       const action = BrowserActionSchema.parse({ ...input, type });
@@ -94,7 +98,7 @@ export class BrowserMcpBridge {
     register('browser_status', 'Report browser connection, shared tabs and human control. No browser is launched.', {}, true, () => this.browser.status(binding.session.id));
     register('browser_tabs', 'List tabs shared with this session; other sessions’ tabs are excluded.', {}, true, () => this.browser.status(binding.session.id).tabs);
     register('browser_open', 'Open a new shared tab. A managed browser can start on demand; an existing personal browser must first be connected by the user in Relay.', { url: z.string().max(4096).optional() }, false, async (args) => {
-      await this.permit(binding);
+      await this.permit(binding, requestSignal);
       const tab = await this.browser.open(binding.session.id, args.url as string | undefined);
       this.show(binding, tab.id);
       return tab;
@@ -104,10 +108,10 @@ export class BrowserMcpBridge {
       inputSchema: { tabId, includeImage: z.boolean().optional() }, annotations: { readOnlyHint: true, openWorldHint: true },
     }, async ({ tabId: requested, includeImage }) => {
       try {
-        this.ensure(binding);
+        ensureRequest();
         const id = this.current(binding, requested);
         const snapshot = await this.browser.snapshot(binding.session.id, id, includeImage !== false);
-        this.ensure(binding);
+        ensureRequest();
         const { screenshot, ...text } = snapshot;
         const content: Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }> = [{ type: 'text', text: truncate(redactSecrets(JSON.stringify(text)), 64_000) }];
         if (screenshot) content.push({ type: 'image', data: screenshot.data, mimeType: screenshot.mimeType });
@@ -141,9 +145,10 @@ export class BrowserMcpBridge {
       res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Browser tool connection is unavailable or expired' })); return;
     }
     if (req.method !== 'POST') { res.writeHead(405, { Allow: 'POST' }); res.end(); return; }
-    const server = this.tools(binding);
+    const requestController = new AbortController();
+    const server = this.tools(binding, requestController.signal);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
-    res.once('close', () => { void transport.close(); void server.close(); });
+    res.once('close', () => { if (!res.writableFinished) requestController.abort(); void transport.close(); void server.close(); });
     try {
       await server.connect(transport);
       await transport.handleRequest(req, res);

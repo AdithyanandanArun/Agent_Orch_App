@@ -241,7 +241,7 @@ class CodexRun {
     const overrides: Record<string, unknown> = { ...this.compaction?.config };
     if (this.options.browserMcp) overrides['mcp_servers.relay_browser'] = {
       url: this.options.browserMcp.url, bearer_token_env_var: 'RELAY_BROWSER_MCP_TOKEN', enabled: true,
-      startup_timeout_sec: 15, tool_timeout_sec: 30, default_tools_approval_mode: 'approve',
+      startup_timeout_sec: 15, tool_timeout_sec: 180, default_tools_approval_mode: 'approve',
     };
     const threadConfig = Object.keys(overrides).length ? { config: overrides } : {};
     let result: unknown;
