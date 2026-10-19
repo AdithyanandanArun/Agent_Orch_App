@@ -29,7 +29,7 @@ Keyboard access, focus indication, labeled form inputs, Escape dismissal, a comm
 
 ## Design direction
 
-A quiet development environment with neutral surfaces, a muted accent, thin separators and readable conversation text. Optional context and terminal panels start closed. Keep secondary project views in More, and show advanced details when requested. Use a single spacing, type and color system. The agent graph explains work relationships; it should remain useful with one idle session. See [the minimal workspace revision](ui-direction.md) for current references and behavior.
+A quiet development environment with black/charcoal surfaces, white emphasis, occasional blue and no purple. Conversation prose is readable and unadorned; assistant responses have no provider icon. User bubbles, composer, choice menus and dialogs share deliberate spacing and rounded outlines. Settings occupies a full page. Optional context and terminal panels start closed. Keep secondary project views in the footer's More menu, and show advanced details when requested. Use a single spacing, type and color system. The agent graph explains work relationships; it should remain useful with one idle session. See [the workspace design revisions](ui-direction.md) for references and behavior.
 
 ## Future product work
 

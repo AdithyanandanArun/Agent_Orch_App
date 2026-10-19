@@ -39,7 +39,7 @@ See [provider research](docs/provider-research.md) for the T3 architecture inves
 
 ## Workspace behavior
 
-**New Session** creates and selects a session immediately. Set its default provider, model and effort in **Settings → New sessions**. Each provider remembers its own default model. Existing sessions keep their choices, and their model and effort can be changed in the composer between runs. A provider conversation is retained when switching models within that provider; use a new session to switch providers after a conversation has started.
+**New Session** creates and selects a session immediately from the sidebar toolbar. Set its default provider, model and effort in **Settings → General → New sessions**. Settings opens as a full page with General, Providers and Appearance sections. Each provider remembers its own default model. Existing sessions keep their choices, and their model and effort can be changed in the composer between runs. A provider conversation is retained when switching models within that provider; use a new session to switch providers after a conversation has started.
 
 Git worktrees are the default; a repository needs an initial commit before Relay can create one. Settings also offers an explicit project-folder workspace default. A worktree separates file edits and is not an operating-system sandbox. The context pane and terminal start closed; open them when needed. Tasks, activity and the agent map are available under **More** in the sidebar.
 
