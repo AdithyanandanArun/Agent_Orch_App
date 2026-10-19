@@ -37,6 +37,7 @@ export class ProjectSources {
         maxBuffer: GIT_OUTPUT_LIMIT,
       });
     } catch (error) {
+      if (isGitExecutableError(error)) throw unprocessable(`Git could not be started. Install Git and make it available to Relay. The new folder was kept at ${destination}.`);
       if (isGitIdentityError(error)) {
         throw unprocessable(`The new folder was created at ${destination}, but Git could not make its initial commit. Configure your Git user.name and user.email, then remove or rename this folder before trying again.`);
       }
@@ -60,10 +61,11 @@ export class ProjectSources {
         timeoutMs: GIT_CLONE_TIMEOUT_MS,
         maxBuffer: GIT_OUTPUT_LIMIT,
       });
-    } catch {
+    } catch (error) {
       // Keep the partial clone for user inspection/recovery. Never include Git stderr or URL
       // in an error response: either can contain credential-shaped remote information.
-      throw unprocessable(`Git clone did not finish within the allowed time or failed. The folder was kept at ${destination}; inspect it or remove it before trying again.`);
+      if (isGitExecutableError(error)) throw unprocessable(`Git could not be started. Install Git and make it available to Relay. The new folder was kept at ${destination}.`);
+      throw unprocessable(`Git clone failed or exceeded its time limit. Check the URL, network connection and your existing Git login. The folder was kept at ${destination}; inspect it or remove it before trying again.`);
     }
 
     return (await this.workspace.createProject({ name, path: destination })).project;
@@ -173,6 +175,10 @@ function validateRemotePath(remotePath: string): void {
 function isGitIdentityError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : '';
   return /user\.name|user\.email|unable to auto-detect email|Author identity unknown/iu.test(message);
+}
+
+function isGitExecutableError(error: unknown): boolean {
+  return error instanceof Error && /spawn git (?:ENOENT|EACCES|EPERM)/u.test(error.message);
 }
 
 function pathError(error: unknown, fallback: string): Error {
