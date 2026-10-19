@@ -6,6 +6,19 @@ import { cx } from '../lib/format';
 import { formatElapsed, runElapsed, runStatusLabel } from '../lib/activity';
 
 interface ToolNode { call: ToolCall; children: ToolNode[] }
+function mergeToolCalls(current: ToolCall[], incoming: ToolCall[], preferIncoming: boolean): ToolCall[] {
+  const calls = new Map(current.map(call => [call.id, call]));
+  for (const call of incoming) {
+    const existing = calls.get(call.id);
+    if (!existing) calls.set(call.id, call);
+    else if (preferIncoming) calls.set(call.id, { ...existing, ...call });
+  }
+  return [...calls.values()].sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+}
+
+function normalizeCommand(value: string): string {
+  return value.trim().replace(/^(?:\$|❯)\s*/, '');
+}
 
 function toolTree(calls: ToolCall[], runId: string): ToolNode[] {
   const members = calls.filter(call => call.runId === runId);
@@ -95,9 +108,11 @@ function ToolDetail({ node, activeRun }: { node: ToolNode; activeRun: boolean })
   const [loadError, setLoadError] = useState(false);
   const requested = useRef(false);
   const expanded = useRef(false);
-  const finalFetchKey = useRef('');
+  const requestGeneration = useRef(0);
   const fullCall = useRef<ToolCall | null>(null);
   const previousStatus = useRef(node.call.status);
+  const latestCall = useRef(node.call);
+  latestCall.current = node.call;
   const row = call;
   const elapsedMs = row.durationMs ?? (row.status === 'running' && activeRun ? (() => {
     const started = Date.parse(row.startedAt);
@@ -106,58 +121,61 @@ function ToolDetail({ node, activeRun }: { node: ToolNode; activeRun: boolean })
   const title = row.summary.trim() || row.command?.trim() || row.name || 'Tool activity';
 
   const fetchFull = (): void => {
-    const loader = api.toolCall;
+    const current = latestCall.current;
+    if (current.status === 'running') return;
+    requested.current = true;
+    const generation = ++requestGeneration.current;
     setLoading(true);
     setLoadError(false);
-    void loader(row.id).then((full) => {
-      fullCall.current = full;
-      setCall(full);
+    void api.toolCall(current.id).then((full) => {
+      const latest = latestCall.current;
+      if (generation !== requestGeneration.current || !expanded.current || latest.id !== full.id || latest.status === 'running') return;
+      const merged = { ...full, ...latest, input: full.input, output: full.output, outputTruncated: full.outputTruncated };
+      fullCall.current = merged;
+      setCall(merged);
       setOutputSource('detail');
     }).catch(() => {
+      if (generation !== requestGeneration.current) return;
       setLoadError(true);
       requested.current = false;
-    }).finally(() => setLoading(false));
+    }).finally(() => {
+      if (generation === requestGeneration.current) setLoading(false);
+    });
   };
 
   useEffect(() => {
     const completedLiveCall = previousStatus.current === 'running' && node.call.status !== 'running';
     previousStatus.current = node.call.status;
-    if (activeRun) {
+    setLoading(false);
+    if (node.call.status === 'running') {
       fullCall.current = null;
       setCall(node.call);
       setOutputSource('snapshot');
     } else if (fullCall.current?.id === node.call.id) {
-      setCall({ ...node.call, input: fullCall.current.input, output: fullCall.current.output });
+      setCall({ ...fullCall.current, ...node.call, input: fullCall.current.input, output: fullCall.current.output, outputTruncated: fullCall.current.outputTruncated });
       setOutputSource('detail');
     } else {
       setCall(node.call);
       setOutputSource('snapshot');
     }
-    if (expanded.current && (completedLiveCall || !activeRun)) {
-      const key = `${node.call.id}:${node.call.finishedAt ?? node.call.status}`;
-      if (finalFetchKey.current !== key) {
-        finalFetchKey.current = key;
-        fetchFull();
-      }
-    }
+    if (expanded.current && node.call.status !== 'running' && (completedLiveCall || !activeRun || fullCall.current || requested.current)) fetchFull();
+    return () => { requestGeneration.current += 1; };
   }, [node.call, activeRun]);
+
+  useEffect(() => () => { requestGeneration.current += 1; }, []);
 
   const onToggle = (event: SyntheticEvent<HTMLDetailsElement>): void => {
     expanded.current = event.currentTarget.open;
-    if (!event.currentTarget.open || requested.current) return;
-    const loader = api.toolCall;
-    if (row.status === 'running') return;
-    requested.current = true;
-    setLoading(true);
-    setLoadError(false);
-    void loader(row.id).then((full) => {
-      fullCall.current = full;
-      setCall(full);
-      setOutputSource('detail');
-    }).catch(() => {
-      setLoadError(true);
+    if (!event.currentTarget.open) {
+      requestGeneration.current += 1;
       requested.current = false;
-    }).finally(() => setLoading(false));
+      setLoading(false);
+      return;
+    }
+    if (requested.current) return;
+    if (latestCall.current.status === 'running') return;
+    requested.current = true;
+    fetchFull();
   };
 
   return (
@@ -166,7 +184,7 @@ function ToolDetail({ node, activeRun }: { node: ToolNode; activeRun: boolean })
         <ChevronRight size={12} className="run-tool__chevron" aria-hidden="true" />
         {categoryIcon(row.category)}
         <span className="run-tool__title" title={title}>{title}</span>
-        {row.command && row.command !== title ? <code className="run-tool__command" title={row.command}>{row.command}</code> : null}
+        {row.command && normalizeCommand(row.command) !== normalizeCommand(title) ? <code className="run-tool__command" title={row.command}>{row.command}</code> : null}
         <span className={cx('run-tool__status', `is-${row.status}`)}>{row.status}</span>
       </summary>
       <div className="run-tool__body">
@@ -177,7 +195,7 @@ function ToolDetail({ node, activeRun }: { node: ToolNode; activeRun: boolean })
           {row.exitCode !== null ? <Field label="Exit code" value={String(row.exitCode)} /> : null}
           {row.processId ? <Field label="Process" value={row.processId} /> : null}
           {row.cwd ? <Field label="Working directory" value={row.cwd} code /> : null}
-          {row.command && row.summary ? <Field label="Command" value={row.command} code /> : null}
+          {row.command && row.summary && normalizeCommand(row.command) !== normalizeCommand(title) ? <Field label="Command" value={row.command} code /> : null}
         </div>
         {row.input ? <Field label="Input" value={row.input} code /> : null}
         {row.output ? <Field label={row.outputTruncated ? outputSource === 'snapshot' ? 'Output tail' : 'Captured output truncated' : 'Captured output'} value={row.output} code /> : null}
@@ -189,12 +207,15 @@ function ToolDetail({ node, activeRun }: { node: ToolNode; activeRun: boolean })
 
 export function RunActivity({ run, initialCalls }: { run: SessionRun; initialCalls: ToolCall[] }) {
   const [now, setNow] = useState(() => Date.now());
-  const [calls, setCalls] = useState(initialCalls);
+  const [calls, setCalls] = useState(() => initialCalls);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const requested = useRef(false);
+  const expanded = useRef(false);
+  const requestGeneration = useRef(0);
 
-  useEffect(() => setCalls(initialCalls), [initialCalls]);
+  useEffect(() => { setCalls(current => mergeToolCalls(current, initialCalls, true)); }, [initialCalls]);
+  useEffect(() => () => { requestGeneration.current += 1; }, []);
   useEffect(() => {
     if (run.status !== 'running') return;
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
@@ -205,15 +226,26 @@ export function RunActivity({ run, initialCalls }: { run: SessionRun; initialCal
   const summary = useMemo(() => runSummary(run), [run]);
   const tree = useMemo(() => toolTree(calls, run.id), [calls, run.id]);
   const onToggle = (event: SyntheticEvent<HTMLDetailsElement>): void => {
-    if (!event.currentTarget.open || requested.current) return;
-    const loader = api.runTools;
+    expanded.current = event.currentTarget.open;
+    if (!event.currentTarget.open) {
+      requestGeneration.current += 1;
+      requested.current = false;
+      setLoading(false);
+      return;
+    }
+    if (requested.current) return;
     requested.current = true;
+    const generation = ++requestGeneration.current;
     setLoading(true);
     setLoadError(false);
-    void loader(run.id).then((all) => setCalls(all.filter(call => call.runId === run.id))).catch(() => {
+    void api.runTools(run.id).then((all) => {
+      if (generation !== requestGeneration.current || !expanded.current) return;
+      setCalls(current => mergeToolCalls(current, all.filter(call => call.runId === run.id), false));
+    }).catch(() => {
+      if (generation !== requestGeneration.current) return;
       setLoadError(true);
       requested.current = false;
-    }).finally(() => setLoading(false));
+    }).finally(() => { if (generation === requestGeneration.current) setLoading(false); });
   };
 
   return (
@@ -229,7 +261,7 @@ export function RunActivity({ run, initialCalls }: { run: SessionRun; initialCal
         {loading ? <span className="run-tool__loading"><LoaderCircle size={13} className="run-tool__spin" /> Loading run activity…</span> : null}
         {loadError ? <span className="run-tool__load-error"><CircleAlert size={13} /> Could not refresh the full tool list. Showing available activity.</span> : null}
         {tree.length ? <div className="run-activity__tools">{tree.map(node => <ToolDetail key={node.call.id} node={node} activeRun={run.status === 'running'} />)}</div> : !loading && run.toolCount > 0 ? <p className="run-activity__empty">Tool details are not included in the current snapshot.</p> : null}
-        {calls.length < run.toolCount ? <p className="run-activity__empty">Showing {calls.length} of {run.toolCount} reported tool calls.</p> : null}
+        {calls.length < run.toolCount ? <p className="run-activity__empty">Showing {calls.length} of {run.toolCount} reported tool calls. The per-run detail list returns at most 1,000 calls.</p> : null}
       </div>
     </details>
   );

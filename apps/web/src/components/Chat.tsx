@@ -10,6 +10,8 @@ import { Composer } from './Composer';
 import { RunActivity } from './RunActivity';
 
 interface DisplayMessage { id: string; role: 'user' | 'assistant' | 'system' | 'tool'; content: string; createdAt: string; kind?: string; runId?: string; live: boolean }
+const EMPTY_RUNS: SessionRun[] = [];
+const EMPTY_TOOL_CALLS: ToolCall[] = [];
 
 function useSessionMessages(session: Session | undefined): DisplayMessage[] {
   const all = useRelay((s) => s.boot?.messages);
@@ -44,6 +46,10 @@ function legacyToolTitle(m: DisplayMessage): string {
   return 'Tool output';
 }
 
+function normalizedCommand(value: string): string {
+  return value.trim().replace(/^(?:\$|❯)\s*/, '');
+}
+
 const LegacyToolGroup = memo(function LegacyToolGroup({ messages }: { messages: DisplayMessage[] }) {
   const previews = messages.map(legacyToolTitle);
   return (
@@ -57,9 +63,11 @@ const LegacyToolGroup = memo(function LegacyToolGroup({ messages }: { messages: 
       <div className="legacy-tool-group__items">
         {messages.map((m, index) => {
           const first = m.content.split('\n').find(line => line.trim() && !/^(?:tool(?:\s+.*)?|shell|command|tool output)$/i.test(line.trim())) ?? '';
+          const title = previews[index] ?? 'Tool output';
+          const showPreview = first && normalizedCommand(first) !== normalizedCommand(title);
           return (
             <details key={m.id} className="legacy-tool-item">
-              <summary><ChevronRight size={12} aria-hidden="true" /><span>{previews[index]}</span><code>{first.slice(0, 160)}</code></summary>
+              <summary><ChevronRight size={12} aria-hidden="true" /><span>{title}</span>{showPreview ? <code>{first.slice(0, 160)}</code> : null}</summary>
               <pre>{m.content}</pre>
             </details>
           );
@@ -147,9 +155,9 @@ export function SessionPane() {
   const session = useActiveSession();
   const hasSessions = useRelay((s) => (s.boot?.sessions ?? []).some((x) => x.projectId === s.activeProjectId));
   const messages = useSessionMessages(session);
-  const allRuns = useRelay((s) => s.boot?.runs ?? []);
+  const allRuns = useRelay((s) => s.boot?.runs ?? EMPTY_RUNS);
   const runs = useMemo(() => allRuns.filter(run => run.sessionId === session?.id), [allRuns, session?.id]);
-  const allToolCalls = useRelay((s) => s.boot?.toolCalls ?? []);
+  const allToolCalls = useRelay((s) => s.boot?.toolCalls ?? EMPTY_TOOL_CALLS);
   const toolCallsByRun = useMemo(() => {
     const grouped = new Map<string, ToolCall[]>();
     for (const call of allToolCalls) {
@@ -233,11 +241,11 @@ export function SessionPane() {
             return (
               <Fragment key={m.id}>
                 <MessageRow m={m} session={session} />
-                {m.role === 'user' ? (runsByUserMessage.get(m.id) ?? []).map(run => <RunActivity key={run.id} run={run} initialCalls={toolCallsByRun.get(run.id) ?? []} />) : null}
+                {m.role === 'user' ? (runsByUserMessage.get(m.id) ?? []).map(run => <RunActivity key={run.id} run={run} initialCalls={toolCallsByRun.get(run.id) ?? EMPTY_TOOL_CALLS} />) : null}
               </Fragment>
             );
           })}
-          {unplacedRuns.map(run => <RunActivity key={run.id} run={run} initialCalls={toolCallsByRun.get(run.id) ?? []} />)}
+          {unplacedRuns.map(run => <RunActivity key={run.id} run={run} initialCalls={toolCallsByRun.get(run.id) ?? EMPTY_TOOL_CALLS} />)}
           {session.status === 'running' && !runs.some(run => run.status === 'running') ? (
             <div className="working" role="status"><span className="dots" aria-hidden="true"><i /><i /><i /></span> {PROVIDER_NAME[session.provider]} is working…</div>
           ) : null}
