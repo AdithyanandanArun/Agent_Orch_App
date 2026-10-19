@@ -10,11 +10,18 @@ export const CLAUDE_POLICIES: Policy[] = ['supervised', 'balanced', 'auto', 'ful
 /** Effort values accepted by Claude Code's Agent SDK. */
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 
-async function* noPrompt(): AsyncGenerator<SDKUserMessage, void, unknown> {
-  // An empty async stream lets Claude Code initialize metadata without sending a user turn.
+async function* holdOpenWithoutPrompt(signal: AbortSignal): AsyncGenerator<SDKUserMessage, void, unknown> {
+  // Keep SDK stdin open for control RPCs, but never yield a user message or start a model turn.
+  if (signal.aborted) return;
+  await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
 }
 
-export async function queryWithoutPrompt(settings: AppSettings, cwd: string, model = settings.defaultClaudeModel): Promise<Query> {
+interface MetadataQueryHandle {
+  query: Query;
+  close(): void;
+}
+
+async function queryWithoutPrompt(settings: AppSettings, cwd: string, model = settings.defaultClaudeModel): Promise<MetadataQueryHandle> {
   const resolved = await resolveClaudeExecutable(settings, process.env);
   if (!resolved.ok) throw new Error(resolved.reason);
   const abortController = new AbortController();
@@ -28,7 +35,14 @@ export async function queryWithoutPrompt(settings: AppSettings, cwd: string, mod
     settings: { disableAllHooks: true },
     env: { ...claudeEnvironment(process.env), CLAUDE_AGENT_SDK_CLIENT_APP: 'relay/0.1.0' },
   };
-  return query({ prompt: noPrompt(), options });
+  const activeQuery = query({ prompt: holdOpenWithoutPrompt(abortController.signal), options });
+  return {
+    query: activeQuery,
+    close() {
+      abortController.abort();
+      activeQuery.close();
+    },
+  };
 }
 
 /** Run one metadata-only query with a hard deadline and close its CLI process on every exit path. */
@@ -39,27 +53,29 @@ export async function withClaudeMetadataQuery<T>(
   read: (activeQuery: Query) => Promise<T>,
   timeoutMs = 15_000,
 ): Promise<T> {
-  let activeQuery: Query | undefined;
+  let activeHandle: MetadataQueryHandle | undefined;
   let timedOut = false;
   let timeout: NodeJS.Timeout | undefined;
   const deadline = new Promise<never>((_resolve, reject) => {
     timeout = setTimeout(() => {
       timedOut = true;
-      try { activeQuery?.close(); } catch { /* deadline still rejects when teardown fails */ }
+      try { activeHandle?.close(); } catch { /* deadline still rejects when teardown fails */ }
       reject(new Error(`Claude metadata discovery exceeded ${timeoutMs} ms.`));
     }, timeoutMs);
   });
   try {
-    const startedQuery = queryWithoutPrompt(settings, cwd, model).then((query) => {
-      activeQuery = query;
-      if (timedOut) query.close();
-      return query;
+    const startedQuery = queryWithoutPrompt(settings, cwd, model).then((handle) => {
+      activeHandle = handle;
+      if (timedOut) {
+        try { handle.close(); } catch { /* retain the deadline error */ }
+      }
+      return handle.query;
     });
     const query = await Promise.race([startedQuery, deadline]);
     return await Promise.race([read(query), deadline]);
   } finally {
     if (timeout) clearTimeout(timeout);
-    try { activeQuery?.close(); } catch { /* process already closed */ }
+    try { activeHandle?.close(); } catch { /* process already closed */ }
   }
 }
 

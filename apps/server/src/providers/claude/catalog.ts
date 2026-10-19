@@ -36,10 +36,21 @@ function chooseCanonicalCommands(rows: unknown[]): Map<string, SlashCommand> {
 export async function getClaudeCatalog(session: Session, settings: AppSettings): Promise<ProviderCatalog> {
   const catalog: ProviderCatalog = { commands: [], skills: [], warnings: [] };
   try {
-    const { commands, skills } = await withClaudeMetadataQuery(settings, session.worktreePath, session.model, async (activeQuery) => {
-      const [commandRows, skillResponse] = await Promise.all([activeQuery.supportedCommands(), activeQuery.reloadSkills()]);
-      return { commands: commandRows, skills: skillResponse.skills };
+    const { commands, skills, skillWarning } = await withClaudeMetadataQuery(settings, session.worktreePath, session.model, async (activeQuery) => {
+      const commandRows = await activeQuery.supportedCommands();
+      try {
+        const skillResponse = await activeQuery.reloadSkills();
+        return { commands: commandRows, skills: skillResponse.skills, skillWarning: undefined };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          commands: commandRows,
+          skills: [],
+          skillWarning: `Claude skill discovery is unavailable; commands were still loaded. ${truncate(redactSecrets(message), 300)}`,
+        };
+      }
     });
+    if (skillWarning) catalog.warnings.push(skillWarning);
     const canonical = chooseCanonicalCommands((Array.isArray(commands) ? commands : []).slice(0, MAX_COMMANDS));
     const actualNames = new Set(canonical.keys());
     const resolvedNames = new Map(canonical);
