@@ -45,6 +45,7 @@ export interface WorkspaceEvent { id: number; projectId: string | null; sessionI
 export interface Approval { id: string; sessionId: string; tool: string; description: string; input: Record<string, unknown>; status: 'pending' | 'approved' | 'denied'; createdAt: string }
 export interface ProviderModel {
   id: string; name: string;
+  aliases?: string[];
   reasoningEfforts?: { id: string; label: string; description?: string }[];
   defaultReasoningEffort?: string;
   serviceTiers?: { id: string; name: string; description?: string }[];
