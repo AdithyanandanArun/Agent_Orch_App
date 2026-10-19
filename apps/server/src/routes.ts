@@ -3,7 +3,7 @@ import { z } from 'zod';
 import {
   ApprovalDecisionSchema, CreateProjectSchema, CreateSessionSchema, CreateTaskSchema, HandoffSchema, SendMessageSchema, UpdateProjectSchema, UpdateSessionSchema, UpdateSettingsSchema, UpdateTaskSchema,
 } from '@relay/contracts';
-import type { Bootstrap } from '@relay/contracts';
+import type { Bootstrap, SessionUsage } from '@relay/contracts';
 import { gitStatus } from './git.ts';
 import type { Hub } from './hub.ts';
 import { listDirectory, readTextFile, writeTextFile } from './paths.ts';
@@ -163,6 +163,16 @@ export function buildRouter(s: Services) {
     const session = s.store.getSession(param(ctx, 'id'));
     if (!session) throw notFound('Session not found');
     return s.providers.catalog(session, ctx.url.searchParams.get('refresh') === 'true');
+  });
+  add('GET', '/api/sessions/:id/usage', async (ctx) => {
+    const session = s.store.getSession(param(ctx, 'id'));
+    if (!session) throw notFound('Session not found');
+    const usage = await s.providers.usage(session, ctx.url.searchParams.get('refresh') === 'true');
+    const latest = s.store.getSession(session.id);
+    if (!latest) throw notFound('Session not found');
+    if (latest.provider !== session.provider || latest.model !== session.model) throw conflict('The session provider or model changed. Open usage again.');
+    const result: SessionUsage = { ...usage, session: { id: latest.id, inputTokens: latest.inputTokens, outputTokens: latest.outputTokens, costUsd: latest.costUsd } };
+    return result;
   });
   add('POST', '/api/sessions/:id/messages', async (ctx) => {
     const id = param(ctx, 'id');

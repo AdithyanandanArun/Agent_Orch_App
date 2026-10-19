@@ -1,8 +1,10 @@
-import type { AppSettings, Provider, ProviderCatalog, ProviderInfo, Session } from '@relay/contracts';
+import type { AppSettings, Provider, ProviderCatalog, ProviderInfo, ProviderUsage, Session } from '@relay/contracts';
 import type { Logger, ProviderRuntime } from './types.ts';
-import { errorMessage } from './util.ts';
+import { errorMessage, redactSecrets, truncate } from './util.ts';
 
 const BOOTSTRAP_WAIT_MS = 4000;
+const USAGE_CACHE_MS = 60_000;
+const USAGE_REFRESH_MIN_MS = 15_000;
 const PROVIDERS: Array<{ id: Provider; name: string }> = [{ id: 'codex', name: 'Codex' }, { id: 'claude', name: 'Claude' }];
 
 function placeholder(reason: string): ProviderInfo[] {
@@ -16,6 +18,8 @@ export class ProviderService {
   private generation = 0;
   private readonly catalogs = new Map<string, { expires: number; value: ProviderCatalog }>();
   private readonly catalogInflight = new Map<string, Promise<ProviderCatalog>>();
+  private readonly usageCache = new Map<string, { receivedAt: number; expires: number; value: ProviderUsage }>();
+  private readonly usageInflight = new Map<string, Promise<ProviderUsage>>();
 
   constructor(private readonly providers: ProviderRuntime, private readonly getSettings: () => AppSettings, private readonly log: Logger,
     private readonly onChange: () => void = () => {}) {}
@@ -47,6 +51,7 @@ export class ProviderService {
 
   /** Forces a fresh probe (after settings change or explicit refresh). */
   refresh(): Promise<ProviderInfo[]> {
+    this.usageCache.clear();
     return this.probe();
   }
 
@@ -54,6 +59,8 @@ export class ProviderService {
     this.cache = null;
     this.catalogs.clear();
     this.catalogInflight.clear();
+    this.usageCache.clear();
+    this.usageInflight.clear();
     this.generation++;
     this.inflight = null;
     void this.probe();
@@ -79,6 +86,33 @@ export class ProviderService {
 
   cached(): ProviderInfo[] | null {
     return this.cache;
+  }
+
+  /** Quota reporting never starts a model turn or redeems earned resets. */
+  usage(session: Session, force = false): Promise<ProviderUsage> {
+    const settings = this.getSettings();
+    const key = JSON.stringify([session.provider, session.model, session.worktreePath, settings.codexExecutable, settings.claudeExecutable]);
+    const now = Date.now();
+    const cached = this.usageCache.get(key);
+    if (cached && (cached.expires > now && !force || now - cached.receivedAt < USAGE_REFRESH_MIN_MS)) return Promise.resolve(cached.value);
+    const inflight = this.usageInflight.get(key);
+    if (inflight) return inflight;
+    const unavailable = (notice: string): ProviderUsage => ({ provider: session.provider, fetchedAt: new Date().toISOString(),
+      status: 'unavailable', plan: null, windows: [], credits: null, resets: null, notices: [notice] });
+    if (!this.providers.getUsage) return Promise.resolve(unavailable('This provider runtime does not expose account usage.'));
+    const generation = this.generation;
+    const pending = Promise.resolve().then(() => this.providers.getUsage!(session, settings)).catch((error) =>
+      unavailable(`Usage could not be read: ${truncate(redactSecrets(errorMessage(error)), 400)}`),
+    ).then((value) => {
+      if (generation === this.generation) {
+        if (this.usageCache.size >= 100) this.usageCache.delete(this.usageCache.keys().next().value!);
+        const receivedAt = Date.now();
+        this.usageCache.set(key, { receivedAt, expires: receivedAt + (value.status === 'unavailable' ? USAGE_REFRESH_MIN_MS : USAGE_CACHE_MS), value });
+      }
+      return value;
+    }).finally(() => { if (this.usageInflight.get(key) === pending) this.usageInflight.delete(key); });
+    this.usageInflight.set(key, pending);
+    return pending;
   }
 
   /** Discover commands and skills without submitting a model prompt. Cache briefly per session configuration. */
