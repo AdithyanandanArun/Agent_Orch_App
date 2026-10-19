@@ -90,11 +90,13 @@ function Field({ label, value, code = false }: { label: string; value: string; c
 
 function ToolDetail({ node, activeRun }: { node: ToolNode; activeRun: boolean }) {
   const [call, setCall] = useState(node.call);
+  const [outputSource, setOutputSource] = useState<'snapshot' | 'detail'>('snapshot');
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const requested = useRef(false);
   const expanded = useRef(false);
   const finalFetchKey = useRef('');
+  const fullCall = useRef<ToolCall | null>(null);
   const row = call;
   const elapsedMs = row.durationMs ?? (row.status === 'running' && activeRun ? (() => {
     const started = Date.parse(row.startedAt);
@@ -106,15 +108,29 @@ function ToolDetail({ node, activeRun }: { node: ToolNode; activeRun: boolean })
     const loader = api.toolCall;
     setLoading(true);
     setLoadError(false);
-    void loader(row.id).then((full) => setCall(full)).catch(() => {
+    void loader(row.id).then((full) => {
+      fullCall.current = full;
+      setCall(full);
+      setOutputSource('detail');
+    }).catch(() => {
       setLoadError(true);
       requested.current = false;
     }).finally(() => setLoading(false));
   };
 
   useEffect(() => {
-    setCall(node.call);
-    if (!activeRun && expanded.current && node.call.status !== 'running') {
+    if (activeRun) {
+      fullCall.current = null;
+      setCall(node.call);
+      setOutputSource('snapshot');
+    } else if (fullCall.current?.id === node.call.id) {
+      setCall({ ...node.call, input: fullCall.current.input, output: fullCall.current.output });
+      setOutputSource('detail');
+    } else {
+      setCall(node.call);
+      setOutputSource('snapshot');
+    }
+    if (!activeRun && expanded.current) {
       const key = `${node.call.id}:${node.call.finishedAt ?? node.call.status}`;
       if (finalFetchKey.current !== key) {
         finalFetchKey.current = key;
@@ -127,10 +143,15 @@ function ToolDetail({ node, activeRun }: { node: ToolNode; activeRun: boolean })
     expanded.current = event.currentTarget.open;
     if (!event.currentTarget.open || requested.current) return;
     const loader = api.toolCall;
+    if (row.status === 'running') return;
     requested.current = true;
     setLoading(true);
     setLoadError(false);
-    void loader(row.id).then((full) => setCall(full)).catch(() => {
+    void loader(row.id).then((full) => {
+      fullCall.current = full;
+      setCall(full);
+      setOutputSource('detail');
+    }).catch(() => {
       setLoadError(true);
       requested.current = false;
     }).finally(() => setLoading(false));
@@ -156,7 +177,7 @@ function ToolDetail({ node, activeRun }: { node: ToolNode; activeRun: boolean })
           {row.command && row.summary ? <Field label="Command" value={row.command} code /> : null}
         </div>
         {row.input ? <Field label="Input" value={row.input} code /> : null}
-        {row.output ? <Field label="Output" value={row.output} code /> : null}
+        {row.output ? <Field label={outputSource === 'snapshot' ? 'Captured output · recent snapshot tail (up to 2 KB)' : row.output.length >= 20_000 ? 'Captured output · may be truncated at 20 KB' : 'Captured output'} value={row.output} code /> : null}
         {node.children.length ? <div className="run-tool__children" aria-label="Child tool calls">{node.children.map(child => <ToolDetail key={child.call.id} node={child} activeRun={activeRun} />)}</div> : null}
       </div>
     </details>
@@ -197,7 +218,7 @@ export function RunActivity({ run, initialCalls }: { run: SessionRun; initialCal
       <summary className="run-activity__summary">
         <ChevronRight size={13} className="run-activity__chevron" aria-hidden="true" />
         {run.status === 'running' ? <span className="run-activity__pulse" aria-hidden="true" /> : <span className={cx('run-activity__mark', `is-${run.status}`)} aria-hidden="true" />}
-        <span className="run-activity__status">{runStatusLabel(run, elapsed)}</span>
+        <span className="run-activity__status" role={run.status === 'running' ? 'timer' : undefined} aria-live="off">{runStatusLabel(run, elapsed)}</span>
         {summary.length ? <span className="run-activity__counts">{summary.join(' · ')}</span> : null}
       </summary>
       <div className="run-activity__body">
