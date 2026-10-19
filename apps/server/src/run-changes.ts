@@ -1,14 +1,15 @@
 import fsp from 'node:fs/promises';
+import { constants, type Stats } from 'node:fs';
 import path from 'node:path';
 import type { RunChangedFile, RunChanges, RunChangesSummary } from '@relay/contracts';
 import { git, repoInfo } from './git.ts';
-import { isDeniedName } from './paths.ts';
+import { isDeniedName, resolveInside } from './paths.ts';
 import { nowIso, redactSecrets } from './util.ts';
 
-const MAX_FILES = 10_000;
+const MAX_FILES = 2_000;
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 100 * 1024 * 1024;
-const MAX_CAPTURE_MS = 30_000;
+const MAX_CAPTURE_MS = 15_000;
 const MAX_LISTED_FILES = 200;
 const MAX_DIFF_BYTES = 500 * 1024;
 const NOTICE = 'Workspace changes are unavailable because an accurate snapshot could not be captured.';
@@ -39,6 +40,14 @@ function deniedPath(file: string): boolean {
 function inside(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
   return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+function checkCaptureTime(started: number): void {
+  if (Date.now() - started > MAX_CAPTURE_MS) throw new Error('capture time limit');
+}
+
+function sameFileMetadata(a: Stats, b: Stats): boolean {
+  return a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mode === b.mode && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
 }
 
 /** Capture the complete current workspace tree without touching the index, refs, or working files. */
@@ -76,17 +85,17 @@ export async function captureRunTree(cwd: string): Promise<RunTreeSnapshot> {
     let totalBytes = 0;
     const entries = new Map<string, { mode: string; oid: string }>();
     for (const repoFile of files) {
-      if (Date.now() - started > MAX_CAPTURE_MS) throw new Error('capture time limit');
+      checkCaptureTime(started);
       const scoped = prefix ? repoFile.slice(prefix.length + 1) : repoFile;
       const absolute = path.join(scopeRoot, ...scoped.split('/'));
-      const parentReal = await fsp.realpath(path.dirname(absolute));
-      if (!inside(scopeRoot, parentReal)) throw new Error('parent escapes scope');
-      const stat = await fsp.lstat(absolute).catch((error: NodeJS.ErrnoException) => error.code === 'ENOENT' ? null : Promise.reject(error));
+      const stat = await fsp.lstat(absolute).catch((error: NodeJS.ErrnoException) => error.code === 'ENOENT' || error.code === 'ENOTDIR' ? null : Promise.reject(error));
       if (!stat) continue; // A deleted tracked path is absent from this tree.
+      const parentRel = path.posix.dirname(scoped) === '.' ? '' : path.posix.dirname(scoped);
+      const safeParent = await resolveInside(scopeRoot, parentRel);
+      if (!inside(scopeRoot, safeParent.real)) throw new Error('parent escapes scope');
       const indexed = stagedEntries.get(repoFile);
       if (indexed?.mode === '160000') {
-        entries.set(scoped, { mode: '160000', oid: indexed.oid });
-        continue;
+        throw new Error('submodule snapshots are unsupported');
       }
       let content: Buffer;
       let mode: string;
@@ -95,19 +104,37 @@ export async function captureRunTree(cwd: string): Promise<RunTreeSnapshot> {
         mode = '120000';
       } else if (stat.isFile()) {
         if (stat.size > MAX_FILE_BYTES) throw new Error('file size limit');
-        totalBytes += stat.size;
-        if (totalBytes > MAX_TOTAL_BYTES) throw new Error('total size limit');
-        content = await fsp.readFile(absolute);
-        if (content.length !== stat.size) throw new Error('file changed while reading');
-        mode = (stat.mode & 0o111) !== 0 ? '100755' : '100644';
+        const handle = await fsp.open(absolute, constants.O_RDONLY | constants.O_NOFOLLOW);
+        try {
+          const opened = await handle.stat();
+          if (!opened.isFile() || !sameFileMetadata(stat, opened)) throw new Error('file changed before read');
+          const bounded = Buffer.alloc(MAX_FILE_BYTES + 1);
+          let offset = 0;
+          while (offset < bounded.length) {
+            const { bytesRead } = await handle.read(bounded, offset, bounded.length - offset, offset);
+            if (bytesRead === 0) break;
+            offset += bytesRead;
+          }
+          if (offset > MAX_FILE_BYTES) throw new Error('file size limit');
+          content = bounded.subarray(0, offset);
+          const afterRead = await handle.stat();
+          if (offset !== opened.size || !sameFileMetadata(opened, afterRead)) throw new Error('file changed while reading');
+          totalBytes += offset;
+          if (totalBytes > MAX_TOTAL_BYTES) throw new Error('total size limit');
+          mode = (opened.mode & 0o111) !== 0 ? '100755' : '100644';
+        } finally {
+          await handle.close();
+        }
       } else {
         throw new Error('unsupported workspace entry');
       }
       const blob = await git(scopeRoot, ['hash-object', '-w', '--stdin'], { stdin: content, timeoutMs: 8_000, maxBuffer: 1024 });
       entries.set(scoped, { mode, oid: blob.stdout.trim() });
+      checkCaptureTime(started);
     }
 
     const tree = await writeTree(scopeRoot, entries, started);
+    checkCaptureTime(started);
     return { status: 'available', repoRoot, scopeRoot, tree, capturedAt: nowIso() };
   } catch {
     return unavailableSnapshot();
@@ -128,7 +155,7 @@ async function writeTree(cwd: string, entries: Map<string, { mode: string; oid: 
     node.files.push({ name: parts.at(-1)!, ...value });
   }
   const write = async (node: Node): Promise<string> => {
-    if (Date.now() - started > MAX_CAPTURE_MS) throw new Error('capture time limit');
+    checkCaptureTime(started);
     const records: Array<{ name: string; mode: string; oid: string }> = [...node.files];
     for (const [name, child] of node.dirs) records.push({ name, mode: '040000', oid: await write(child) });
     records.sort((a, b) => {
@@ -148,14 +175,15 @@ export async function compareRunTrees(cwd: string, before: RunTreeSnapshot, afte
   try {
     const info = await repoInfo(cwd);
     if (!info.isRepo || !info.topLevel || await fsp.realpath(info.topLevel) !== before.repoRoot || await fsp.realpath(cwd) !== before.scopeRoot) return unavailableRunChanges(NOTICE);
-    const statusResult = await git(cwd, ['diff', '--no-renames', '--name-status', '-z', before.tree, after.tree, '--'], { timeoutMs: 15_000, maxBuffer: 8 * 1024 * 1024 });
+    const safeDiffOptions = ['--no-ext-diff', '--no-textconv'];
+    const statusResult = await git(cwd, ['diff', '--no-renames', ...safeDiffOptions, '--name-status', '-z', before.tree, after.tree, '--'], { timeoutMs: 15_000, maxBuffer: 8 * 1024 * 1024 });
     const statusRecords = statusResult.stdout.split('\0').filter(Boolean);
     const statuses = new Map<string, RunChangedFile['status']>();
     for (let i = 0; i + 1 < statusRecords.length; i += 2) {
       const status = statusRecords[i]!.slice(0, 1);
       if (['A', 'M', 'D', 'T'].includes(status)) statuses.set(statusRecords[i + 1]!, status as RunChangedFile['status']);
     }
-    const numstat = await git(cwd, ['diff', '--no-renames', '--numstat', '-z', before.tree, after.tree, '--'], { timeoutMs: 15_000, maxBuffer: 8 * 1024 * 1024 });
+    const numstat = await git(cwd, ['diff', '--no-renames', ...safeDiffOptions, '--numstat', '-z', before.tree, after.tree, '--'], { timeoutMs: 15_000, maxBuffer: 8 * 1024 * 1024 });
     const changed: RunChangedFile[] = [];
     let additions = 0;
     let deletions = 0;
@@ -167,8 +195,10 @@ export async function compareRunTrees(cwd: string, before: RunTreeSnapshot, afte
       const minus = record.slice(first + 1, second);
       const file = record.slice(second + 1);
       const binary = plus === '-' || minus === '-';
+      if (!binary && (!/^\d+$/.test(plus) || !/^\d+$/.test(minus))) throw new Error('malformed numstat record');
       const add = binary ? null : Number(plus);
       const del = binary ? null : Number(minus);
+      if ((add !== null && !Number.isSafeInteger(add)) || (del !== null && !Number.isSafeInteger(del))) throw new Error('invalid numstat count');
       if (add !== null) additions += add;
       if (del !== null) deletions += del;
       changed.push({ path: file, status: statuses.get(file) ?? 'M', additions: add, deletions: del, binary });
@@ -179,7 +209,7 @@ export async function compareRunTrees(cwd: string, before: RunTreeSnapshot, afte
       rawDiff = (await git(cwd, ['diff', '--no-renames', '--no-ext-diff', '--no-textconv', '--no-color', before.tree, after.tree, '--'], { timeoutMs: 15_000, maxBuffer: 2 * 1024 * 1024 })).stdout;
     } catch {
       // Stats remain valid if a very large patch exceeds the bounded subprocess buffer.
-      rawDiff = 'Patch omitted because it exceeded the capture limit.\n';
+      rawDiff = 'Saved patch could not be captured within limits.\n';
       patchUnavailable = true;
     }
     const diffTruncated = patchUnavailable || Buffer.byteLength(rawDiff) > MAX_DIFF_BYTES;
@@ -189,7 +219,7 @@ export async function compareRunTrees(cwd: string, before: RunTreeSnapshot, afte
       files: changed.slice(0, MAX_LISTED_FILES), additions, deletions,
       truncated: changed.length > MAX_LISTED_FILES || diffTruncated,
       notices: [
-        ...(patchUnavailable ? ['Patch was omitted because it exceeded the capture limit; file counts remain complete.'] : diffTruncated ? ['Patch was truncated at 500 KiB.'] : []),
+        ...(patchUnavailable ? ['Saved patch could not be captured within limits; file counts remain complete.'] : diffTruncated ? ['Patch was truncated at 500 KiB.'] : []),
         ...(changed.length > MAX_LISTED_FILES ? ['File list was truncated at 200 entries; totals cover all changed files.'] : []),
       ],
     };
