@@ -119,6 +119,7 @@ function ToolDetail({ node, activeRun }: { node: ToolNode; activeRun: boolean })
     return Number.isFinite(started) ? Math.max(0, Date.now() - started) : null;
   })() : null);
   const title = row.summary.trim() || row.command?.trim() || row.name || 'Tool activity';
+  const executing = activeRun && row.status === 'running';
 
   const fetchFull = (): void => {
     const current = latestCall.current;
@@ -184,9 +185,9 @@ function ToolDetail({ node, activeRun }: { node: ToolNode; activeRun: boolean })
       <summary className="run-tool__summary">
         <ChevronRight size={12} className="run-tool__chevron" aria-hidden="true" />
         {categoryIcon(row.category)}
-        <span className="run-tool__title" title={title}>{title}</span>
+        <span className="run-tool__title" title={title}><span className={cx(executing && 'activity-shimmer')}>{title}</span></span>
         {row.command && normalizeCommand(row.command) !== normalizeCommand(title) ? <code className="run-tool__command" title={row.command}>{row.command}</code> : null}
-        <span className={cx('run-tool__status', `is-${row.status}`)}>{row.status}</span>
+        <span className={cx('run-tool__status', `is-${row.status}`, executing && 'activity-shimmer')}>{row.status}</span>
       </summary>
       <div className="run-tool__body">
         {loading ? <span className="run-tool__loading"><LoaderCircle size={13} className="run-tool__spin" /> Loading full output…</span> : null}
@@ -253,10 +254,8 @@ export function RunActivity({ run, initialCalls }: { run: SessionRun; initialCal
   return (
     <details className={cx('run-activity', `is-${run.status}`)} onToggle={onToggle}>
       <summary className="run-activity__summary">
-        <ChevronRight size={13} className="run-activity__chevron" aria-hidden="true" />
-        {run.status === 'running' ? <span className="run-activity__pulse" aria-hidden="true" /> : <span className={cx('run-activity__mark', `is-${run.status}`)} aria-hidden="true" />}
-        <span className="run-activity__status" role={run.status === 'running' ? 'timer' : undefined} aria-live="off">{runStatusLabel(run, elapsed)}</span>
-        {summary.length ? <span className="run-activity__counts" title={summary.join(' · ')}>{summary.join(' · ')}</span> : null}
+        <span className={cx('run-activity__status', run.status === 'running' && 'activity-shimmer')} role={run.status === 'running' ? 'timer' : undefined} aria-live="off">{runStatusLabel(run, elapsed)}</span>
+        {summary.length ? <span className={cx('run-activity__counts', run.status === 'running' && 'activity-shimmer')} title={summary.join(' · ')}>{summary.join(' · ')}</span> : null}
       </summary>
       <div className="run-activity__body">
         {!run.toolCount && !tree.length ? <p className="run-activity__empty">No tool calls were reported for this run.</p> : null}

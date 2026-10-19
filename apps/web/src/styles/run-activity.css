@@ -22,13 +22,6 @@
 .run-activity__summary::-webkit-details-marker { display: none; }
 .run-activity__summary:hover { color: var(--fg-1); }
 .run-activity__summary:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
-.run-activity__chevron { flex: none; transition: transform 120ms ease; }
-.run-activity[open] > .run-activity__summary .run-activity__chevron { transform: rotate(90deg); }
-.run-activity__pulse,
-.run-activity__mark { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--fg-3); }
-.run-activity__pulse { background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
-.run-activity__mark.is-completed { background: var(--ok); }
-.run-activity__mark.is-failed { background: var(--err); }
 .run-activity__status { flex: none; color: var(--fg-1); font-weight: 550; font-variant-numeric: tabular-nums; }
 .run-activity__counts { min-width: 0; overflow: hidden; color: var(--fg-3); text-overflow: ellipsis; white-space: nowrap; }
 .run-activity[open] .run-activity__counts { overflow: visible; text-overflow: clip; white-space: normal; }
@@ -96,6 +89,25 @@
 .legacy-tool-item > summary span { flex: none; max-width: 42%; overflow: hidden; color: var(--fg-1); text-overflow: ellipsis; white-space: nowrap; }
 .legacy-tool-item > summary code { min-width: 0; overflow: hidden; color: var(--fg-3); font: 10px/1.4 var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
 .legacy-tool-item > pre { max-height: 260px; overflow: auto; margin: 0; padding: 9px 10px; border-top: 1px solid var(--line-soft); color: var(--fg-1); font: 10.5px/1.55 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+@keyframes activity-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  @supports (background-clip: text) or (-webkit-background-clip: text) {
+    .activity-shimmer {
+      background-image: linear-gradient(110deg, var(--fg-2) 30%, var(--fg-0) 50%, var(--fg-2) 70%);
+      background-size: 250% 100%;
+      background-clip: text;
+      -webkit-background-clip: text;
+      color: transparent;
+      -webkit-text-fill-color: transparent;
+      animation: activity-shimmer 2.4s linear infinite;
+    }
+  }
+}
 
 @media (max-width: 599px) {
   .run-activity__counts { display: none; }
