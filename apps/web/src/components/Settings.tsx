@@ -64,7 +64,7 @@ export function SettingsPage() {
 
   return <div className="settings-page" aria-labelledby="settings-title">
     <div className="settings-page__inner">
-      <header className="settings-page__head"><div><h1 id="settings-title">Settings</h1><p>Models, permissions and appearance.</p></div><span className="settings-page__save" role="status">{status}</span></header>
+      <header className="settings-page__head"><div><h1 id="settings-title" tabIndex={-1}>Settings</h1><p>Models, permissions and appearance.</p></div><span className="settings-page__save" role="status">{status}</span></header>
       <nav className="settings-page__tabs" aria-label="Settings sections">
         {CATEGORIES.map((item) => <button type="button" key={item.id} aria-current={category === item.id ? 'page' : undefined} onClick={() => setCategory(item.id)}>{item.name}</button>)}
       </nav>

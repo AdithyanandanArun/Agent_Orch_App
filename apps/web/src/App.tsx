@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect } from 'react';
+import { Suspense, lazy, useEffect, useRef } from 'react';
 import { useRelay } from './store/store';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
@@ -34,9 +34,20 @@ export function App() {
   const view = useRelay((s) => s.view);
   const theme = useRelay((s) => s.boot?.settings.theme ?? 'dark');
   const sidebarOpen = useRelay((s) => s.sidebarOpen);
+  const previousView = useRef(view);
 
   useEffect(() => { useRelay.getState().init(); }, []);
   useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
+  useEffect(() => {
+    if (view === 'settings') document.getElementById('settings-title')?.focus({ preventScroll: true });
+    else if (previousView.current === 'settings') {
+      const state = useRelay.getState();
+      const sessionId = state.activeProjectId ? state.sessionByProject[state.activeProjectId] : undefined;
+      const composer = view === 'workspace' && state.centerTab === 'session' && sessionId ? document.getElementById(`composer-${sessionId}`) : null;
+      (composer ?? document.getElementById('main'))?.focus({ preventScroll: true });
+    }
+    previousView.current = view;
+  }, [view]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -67,7 +78,7 @@ export function App() {
       <a className="skip" href="#main">Skip to content</a>
       <Sidebar />
       {sidebarOpen ? <button type="button" className="sidebar-scrim" aria-label="Close sidebar" tabIndex={-1} onClick={() => useRelay.getState().setSidebarOpen(false)} /> : null}
-      <main className="main" id="main">
+      <main className="main" id="main" tabIndex={-1}>
         <Header />
         <ConnectionBanner />
         <div className="main__body">

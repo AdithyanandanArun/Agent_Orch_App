@@ -252,6 +252,7 @@ export function Menu({ trigger, children, align = 'start', width }: {
 }) {
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLButtonElement | null>(null);
+  const openFromEnd = useRef(false);
   const pop = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number; width: number; maxHeight: number } | null>(null);
 
@@ -278,7 +279,8 @@ export function Menu({ trigger, children, align = 'start', width }: {
 
   useEffect(() => {
     if (!open) return;
-    pop.current?.querySelector<HTMLElement>('[role="menuitem"]:not([disabled])')?.focus();
+    const items = Array.from(pop.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])') ?? []);
+    items[openFromEnd.current ? items.length - 1 : 0]?.focus();
     const down = (e: MouseEvent) => {
       if (!pop.current?.contains(e.target as Node) && !anchor.current?.contains(e.target as Node)) setOpen(false);
     };
@@ -295,14 +297,16 @@ export function Menu({ trigger, children, align = 'start', width }: {
     const i = items.indexOf(document.activeElement as HTMLElement);
     if (e.key === 'ArrowDown') { items[(i + 1) % items.length]?.focus(); e.preventDefault(); }
     else if (e.key === 'ArrowUp') { items[(i - 1 + items.length) % items.length]?.focus(); e.preventDefault(); }
+    else if (e.key === 'Home') { items[0]?.focus(); e.preventDefault(); }
+    else if (e.key === 'End') { items.at(-1)?.focus(); e.preventDefault(); }
     else if (e.key === 'Escape') { e.stopPropagation(); close(); }
-    else if (e.key === 'Tab') setOpen(false);
+    else if (e.key === 'Tab') close();
   };
 
   const ctx = useMemo(() => ({ close }), [close]);
   return (
     <>
-      {trigger({ onClick: () => setOpen((o) => !o), onKeyDown: (event) => { if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setOpen(true); } }, 'aria-haspopup': 'menu', 'aria-expanded': open, ref: (el) => { anchor.current = el; } })}
+      {trigger({ onClick: () => { openFromEnd.current = false; setOpen((o) => !o); }, onKeyDown: (event) => { if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); openFromEnd.current = event.key === 'ArrowUp'; setOpen(true); } }, 'aria-haspopup': 'menu', 'aria-expanded': open, ref: (el) => { anchor.current = el; } })}
       {open ? createPortal(
         <MenuContext.Provider value={ctx}>
           <div ref={pop} role="menu" className="menu" style={pos ?? { visibility: 'hidden' }} onKeyDown={onKey}>{children}</div>
