@@ -93,7 +93,7 @@ export function claudeModelsFromSdk(models: ModelInfo[]): ProviderModel[] {
       { id: 'standard', name: 'Standard' },
       ...(model.supportsFastMode ? [{ id: 'fast', name: 'Fast', description: 'Claude Code fast mode; account and usage availability is checked by Claude at run time.' }] : []),
     ];
-    const policies: Policy[] = ['supervised', 'balanced', 'full-access', ...(model.supportsAutoMode ? ['auto' as const] : [])];
+    const policies = CLAUDE_POLICIES.filter((policy) => policy !== 'auto' || model.supportsAutoMode === true);
     return [{
       id,
       name: model.displayName || id,
