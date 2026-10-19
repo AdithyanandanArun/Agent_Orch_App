@@ -127,7 +127,7 @@ Executable choice (`discovery.ts`): a non-empty `codexExecutable`/`claudeExecuta
 
 * **Claude:** `available` requires a working executable plus either a nonblank `ANTHROPIC_API_KEY` or a CLI auth-status response with `loggedIn: true`. The key/login is not validated against a model without a run; `reason` says so. A missing login gives the resolved executable's `auth login` command and an optional API-key path. Failed, timed-out or unrecognized auth-status output is shown as a setup diagnostic. Only known authentication-method labels are exposed; email, account identifiers, raw auth-status output and credentials never enter the public result.
 * **Codex:** `available` requires a working executable, a responding app-server and an account from `account/read` (the account type is reported; the email is not read into the result). `account: null` with `requiresOpenaiAuth` yields unavailable plus a `codex login` hint. If `account/read` itself fails the provider stays available with a note that login could not be verified.
-* **Models:** Codex lists come from `model/list` (non-hidden, using the `model` id); if that call fails only the documented default `gpt-6.1-sol` is shown. Claude lists are the official identifiers `claude-sonnet-5-5` (default), `claude-opus-5-5`, `claude-fable-5-1`, `claude-haiku-4-5-20251001`; Relay does not call the Models API.
+* **Models:** Codex lists come from `model/list` with effort/tier metadata. Claude uses an initialization-only SDK `supportedModels()` query, preserving canonical aliases, effort levels, Fast support and Auto support. Discovery failures retain baseline model entries with limited controls. Relay does not issue an inference prompt during discovery.
 
 ## Policy mapping
 
@@ -136,7 +136,10 @@ Executable choice (`discovery.ts`): a non-empty `codexExecutable`/`claudeExecuta
 | `supervised` | `approvalPolicy: on-request`, read-only sandbox | `permissionMode: default` (prompts for everything except read-only tools) |
 | `balanced` | `approvalPolicy: on-request`, `workspace-write` sandbox limited to the worktree, network off | `permissionMode: acceptEdits` (edits pre-approved, everything else prompts) |
 
-Both forward every approval request to `requestApproval`; neither disables a sandbox or permission check.
+| `auto` | `on-request`, native `auto_review` reviewer, workspace-write/network off | Native `auto`, only for models reporting support |
+| `full-access` | `never`, danger-full-access sandbox | `bypassPermissions` with explicit bypass flag |
+
+Every approval request reaching Relay is forwarded to `requestApproval`. Full access intentionally bypasses normal provider approval/sandbox restrictions. See codex-controls-research.md and claude-controls-research.md for the current mappings.
 
 ## Restrictions and security posture
 
