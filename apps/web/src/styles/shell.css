@@ -36,3 +36,15 @@
 .banner--example { background: transparent; border-bottom: 0; padding: 3px 20px 0; color: var(--fg-3); font-size: 11px; }
 .banner--example > div, .banner--example strong { color: var(--fg-3); }
 @media (max-width: 680px) { .crumbs__project { max-width: 120px; } .header { padding-left: 10px; } }
+
+/* Session actions stay quiet until the row is hovered or reached with the keyboard. */
+.sitem-row { position: relative; }
+.sitem-row .sitem { padding-right: 32px; }
+.sitem__actions { position: absolute; right: 6px; bottom: 10px; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--fg-3); opacity: 0; }
+.sitem-row:hover .sitem__actions, .sitem-row:focus-within .sitem__actions, .sitem__actions[aria-expanded='true'] { opacity: 1; }
+.sitem__actions:hover, .sitem__actions:focus-visible { color: var(--fg-0); background: var(--bg-active); }
+.sitem__state { display: flex; align-items: center; gap: 5px; color: var(--fg-3); flex: none; }
+.sitem__text strong { display: flex; align-items: center; gap: 6px; }
+.sitem__unread { width: 5px; height: 5px; border-radius: 50%; background: var(--fg-0); flex: none; }
+.sitem.is-unread .sitem__text strong { color: var(--fg-0); font-weight: 550; }
+@media (hover: none) { .sitem__actions { opacity: 1; } }

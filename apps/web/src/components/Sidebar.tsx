@@ -1,6 +1,10 @@
-import { Activity, ChevronsUpDown, FolderOpen, FolderPlus, Kanban, LayoutPanelLeft, MoreHorizontal, Network, Search, Settings, SquarePen, Loader2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Activity, ChevronsUpDown, FolderOpen, FolderPlus, Kanban, LayoutPanelLeft, MoreHorizontal, Network, Search, Settings, SquarePen, Loader2, Pin } from 'lucide-react';
 import type { Session } from '@relay/contracts';
 import { useRelay, useProject, type View } from '../store/store';
+import { copyText } from '../lib/clipboard';
+import { errorMessage } from '../lib/api';
+import { ContextMenu, type ContextMenuEntry } from './ContextMenu';
 import { cx, relativeTime, useNow } from '../lib/format';
 import { IconButton, Menu, MenuItem, MenuLabel, MenuSeparator, StatusDot } from './ui';
 
@@ -8,6 +12,7 @@ const VIEWS: { view: View; label: string; icon: typeof Kanban }[] = [
   { view: 'tasks', label: 'Tasks', icon: Kanban }, { view: 'activity', label: 'Activity', icon: Activity }, { view: 'map', label: 'Agent map', icon: Network },
 ];
 const GROUPS: { id: string; label: string; match: (session: Session) => boolean }[] = [
+  { id: 'pinned', label: 'Pinned', match: (session) => session.pinned },
   { id: 'attention', label: 'Needs attention', match: (session) => session.status === 'waiting' || session.status === 'error' },
   { id: 'running', label: 'Running', match: (session) => session.status === 'running' },
   { id: 'idle', label: 'Sessions', match: (session) => session.status === 'idle' || session.status === 'interrupted' },
@@ -22,9 +27,40 @@ export function Sidebar() {
   const connection = useRelay((state) => state.connection);
   const creatingSession = useRelay((state) => state.creatingSession);
   const { setView, selectSession, selectProject, openDialog, createSession } = useRelay.getState();
+  const [menu, setMenu] = useState<{ sessionId: string; x: number; y: number; returnFocus: HTMLElement } | null>(null);
+  const [organizing, setOrganizing] = useState<Set<string>>(() => new Set());
   const now = useNow();
   const sessions = (boot?.sessions ?? []).filter((session) => session.projectId === project?.id);
   const connectionLabel = connection === 'online' ? 'Connected' : connection === 'connecting' ? 'Connecting' : 'Disconnected';
+
+  const target = sessions.find((session) => session.id === menu?.sessionId);
+  useEffect(() => { if (menu && !target) setMenu(null); }, [menu, target]);
+  const organize = async (session: Session, changes: Partial<Pick<Session, 'pinned' | 'unread'>>) => {
+    setOrganizing((current) => new Set(current).add(session.id));
+    try { await useRelay.getState().organizeSession(session.id, changes); }
+    catch { /* The store reports the failure. */ }
+    finally { setOrganizing((current) => { const next = new Set(current); next.delete(session.id); return next; }); }
+  };
+  const copy = async (text: string, label: string) => {
+    try { await copyText(text); useRelay.getState().toast('success', `${label} copied.`); }
+    catch (error) { useRelay.getState().toast('error', errorMessage(error)); }
+  };
+  const menuItems: ContextMenuEntry[] = target ? [
+    { id: 'pin', label: target.pinned ? 'Unpin session' : 'Pin session', checked: target.pinned, disabled: connection !== 'online' || organizing.has(target.id), onSelect: () => void organize(target, { pinned: !target.pinned }) },
+    { type: 'separator', id: 'organize' },
+    { id: 'rename', label: 'Rename session…', disabled: connection !== 'online', onSelect: () => openDialog({ kind: 'rename', sessionId: target.id }) },
+    { id: 'unread', label: target.unread ? 'Mark read' : 'Mark unread', disabled: connection !== 'online' || organizing.has(target.id), onSelect: () => void organize(target, { unread: !target.unread }) },
+    { type: 'separator', id: 'details' },
+    { id: 'copy', label: 'Copy', children: [
+      { id: 'copy-name', label: 'Session name', onSelect: () => void copy(target.name, 'Session name') },
+      { id: 'copy-id', label: 'Session ID', onSelect: () => void copy(target.id, 'Session ID') },
+      { id: 'copy-branch', label: 'Branch name', disabled: !target.branch, onSelect: () => void copy(target.branch!, 'Branch name') },
+      { id: 'copy-path', label: target.isolated ? 'Worktree path' : 'Project path', onSelect: () => void copy(target.worktreePath, 'Folder path') },
+    ] },
+    { id: 'project-settings', label: 'Project settings', onSelect: () => useRelay.getState().openSettings({ section: 'project', projectId: target.projectId }) },
+    { type: 'separator', id: 'archive-section' },
+    { id: 'archive', label: 'Archive session…', disabled: connection !== 'online' || target.status === 'running' || target.status === 'waiting', onSelect: () => openDialog({ kind: 'archive', sessionId: target.id }) },
+  ] : [];
 
   return <aside className={cx('sidebar', sidebarOpen && 'is-open')} aria-label="Primary">
     <div className="sidebar__brand"><span className="brand-name">Relay</span><span className="sidebar__local">local</span></div>
@@ -46,20 +82,35 @@ export function Sidebar() {
       <div className="session-scroll" role="list" aria-label="Sessions">
         {!sessions.length ? <p className="sidebar__empty">No sessions yet.</p> : null}
         {GROUPS.map((group) => {
-          const items = sessions.filter(group.match).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+          const items = sessions.filter((session) => group.match(session) && (group.id === 'pinned' || !session.pinned)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
           if (!items.length) return null;
           return <div key={group.id} className="sgroup" role="group" aria-label={group.label}>
-            {group.id !== 'idle' ? <div className="sgroup__label">{group.label}</div> : null}
-            {items.map((session) => <div role="listitem" key={session.id}>
-              <button type="button" className={cx('sitem', session.id === activeSessionId && view === 'workspace' && 'is-active')} onClick={() => selectSession(session.id)} aria-current={session.id === activeSessionId && view === 'workspace' ? 'true' : undefined} title={`${session.name} · ${session.model}`}>
-                <span className="sitem__text"><span className="sitem__meta"><span>{project?.name}</span><span>{relativeTime(session.updatedAt, now)}</span></span><strong>{session.name}</strong></span>
-                {session.status !== 'idle' ? <StatusDot status={session.status} label={false} /> : null}
+            {group.id !== 'idle' || sessions.some((session) => session.pinned) ? <div className="sgroup__label">{group.label}</div> : null}
+            {items.map((session) => <div role="listitem" key={session.id} className="sitem-row" onContextMenu={(event) => {
+              event.preventDefault();
+              const row = event.currentTarget.querySelector<HTMLButtonElement>('.sitem')!;
+              setMenu({ sessionId: session.id, x: event.clientX, y: event.clientY, returnFocus: row });
+            }} onKeyDown={(event) => {
+              if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;
+              event.preventDefault();
+              const row = event.currentTarget.querySelector<HTMLButtonElement>('.sitem')!;
+              const bounds = row.getBoundingClientRect();
+              setMenu({ sessionId: session.id, x: bounds.left + 24, y: bounds.bottom, returnFocus: event.target as HTMLElement });
+            }}>
+              <button type="button" className={cx('sitem', session.id === activeSessionId && view === 'workspace' && 'is-active', session.unread && 'is-unread')} onClick={() => selectSession(session.id)} aria-current={session.id === activeSessionId && view === 'workspace' ? 'true' : undefined} aria-label={`${session.name}${session.pinned ? ', pinned' : ''}${session.unread ? ', unread' : ''}`} title={`${session.name} · ${session.model}`}>
+                <span className="sitem__text"><span className="sitem__meta"><span>{project?.name}</span><span>{relativeTime(session.updatedAt, now)}</span></span><strong>{session.unread ? <i className="sitem__unread" aria-hidden="true" /> : null}{session.name}</strong></span>
+                <span className="sitem__state">{session.pinned ? <Pin size={11} aria-hidden="true" /> : null}{session.status !== 'idle' ? <StatusDot status={session.status} label={false} /> : null}</span>
               </button>
+              <button type="button" className="sitem__actions" aria-label={`Actions for ${session.name}`} aria-haspopup="menu" aria-expanded={menu?.sessionId === session.id} onClick={(event) => {
+                const bounds = event.currentTarget.getBoundingClientRect();
+                setMenu(menu?.sessionId === session.id ? null : { sessionId: session.id, x: bounds.right, y: bounds.bottom + 4, returnFocus: event.currentTarget });
+              }}><MoreHorizontal size={14} /></button>
             </div>)}
           </div>;
         })}
       </div>
     </div>
+    {menu && target ? <ContextMenu key={`${menu.sessionId}:${menu.x}:${menu.y}`} x={menu.x} y={menu.y} items={menuItems} returnFocus={menu.returnFocus} onClose={() => setMenu(null)} /> : null}
     <footer className="sidebar__foot">
       <IconButton label="Settings" active={view === 'settings'} onClick={() => useRelay.getState().openSettings()}><Settings size={15} /></IconButton>
       <IconButton label="Workspace" active={view === 'workspace'} onClick={() => setView('workspace')}><LayoutPanelLeft size={15} /></IconButton>
