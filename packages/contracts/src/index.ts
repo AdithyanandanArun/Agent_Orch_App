@@ -111,6 +111,9 @@ export const ImportConversationSchema = z.object({ provider: ProviderSchema, con
 export interface AppSettings {
   defaultProvider: Provider; defaultCodexModel: string; defaultClaudeModel: string; defaultEffort: Effort; defaultIsolated: boolean;
   defaultPolicy: Policy; defaultServiceTier?: string; theme: 'dark' | 'light'; claudeExecutable: string; codexExecutable: string;
+  autoCompactPercent?: number | null;
+  browserAgentEnabled?: boolean; browserExecutable?: string;
+  browserDefaultMode?: 'managed' | 'existing'; browserExistingSourceId?: string; browserCdpEndpoint?: string;
 }
 export interface Bootstrap { projects: Project[]; sessions: Session[]; messages: Message[]; tasks: Task[]; events: WorkspaceEvent[]; approvals: Approval[]; providers: ProviderInfo[]; settings: AppSettings; version: string; runs: SessionRun[]; toolCalls: ToolCall[] }
 export interface GitFile { path: string; status: string }
@@ -163,11 +166,15 @@ export const UpdateSettingsSchema = z.object({
   defaultIsolated: z.boolean().optional(),
   defaultPolicy: PolicySchema.optional(), defaultServiceTier: ServiceTierSchema.optional(), theme: z.enum(['dark', 'light']).optional(),
   claudeExecutable: z.string().max(4096).optional(), codexExecutable: z.string().max(4096).optional(),
+  autoCompactPercent: z.number().int().min(1).max(95).nullable().optional(),
+  browserAgentEnabled: z.boolean().optional(), browserExecutable: z.string().max(4096).optional(),
+  browserDefaultMode: z.enum(['managed', 'existing']).optional(), browserExistingSourceId: z.string().max(200).optional(),
+  browserCdpEndpoint: z.string().max(2048).optional(),
 });
 export const ApprovalDecisionSchema = z.object({ decision: z.enum(['approved', 'denied']) });
 
 // Provider boundary: implemented independently from persistence and transport.
-export interface RunOptions { session: Session; prompt: string; skills?: ProviderSkill[]; signal: AbortSignal; onEvent: (event: AdapterEvent) => void; requestApproval: (request: { tool: string; description: string; input: Record<string, unknown> }) => Promise<boolean>; settings: AppSettings }
+export interface RunOptions { session: Session; prompt: string; skills?: ProviderSkill[]; browserMcp?: import('./browser').BrowserMcpConnection; signal: AbortSignal; onEvent: (event: AdapterEvent) => void; requestApproval: (request: { tool: string; description: string; input: Record<string, unknown> }) => Promise<boolean>; settings: AppSettings }
 export type AdapterEvent =
   | { type: 'session'; providerSessionId: string }
   | { type: 'text'; text: string }
@@ -183,3 +190,4 @@ export interface AgentAdapter { run(options: RunOptions): Promise<void> }
  * null means the client has a gap and must fetch a current snapshot rather than invent missing text.
  */
 export { mergeTextDelta } from './stream';
+export * from './browser';
