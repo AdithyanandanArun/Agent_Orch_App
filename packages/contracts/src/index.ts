@@ -2,16 +2,18 @@ import { z } from 'zod';
 
 export const ProviderSchema = z.enum(['codex', 'claude']);
 export type Provider = z.infer<typeof ProviderSchema>;
-export const PolicySchema = z.enum(['supervised', 'balanced']);
+export const PolicySchema = z.enum(['supervised', 'balanced', 'auto', 'full-access']);
 export type Policy = z.infer<typeof PolicySchema>;
-export const EffortSchema = z.enum(['low', 'medium', 'high']);
+// Harness model discovery advertises valid effort/tier identifiers; validate membership on the server.
+export const EffortSchema = z.string().trim().min(1).max(40).regex(/^[a-z][a-z0-9_-]*$/);
 export type Effort = z.infer<typeof EffortSchema>;
+export const ServiceTierSchema = z.string().trim().min(1).max(80).regex(/^[a-z][a-z0-9_-]*$/);
 export type SessionStatus = 'idle' | 'running' | 'waiting' | 'interrupted' | 'error';
 export type TaskStatus = 'backlog' | 'ready' | 'running' | 'blocked' | 'review' | 'done';
 export interface Project { id: string; name: string; path: string; createdAt: string; isExample: boolean }
 export interface Session {
   id: string; projectId: string; name: string; provider: Provider; model: string; effort: Effort;
-  status: SessionStatus; policy: Policy; isolated: boolean; worktreePath: string; branch: string | null;
+  status: SessionStatus; policy: Policy; serviceTier?: string; isolated: boolean; worktreePath: string; branch: string | null;
   providerSessionId: string | null; createdAt: string; updatedAt: string; error: string | null;
   inputTokens: number; outputTokens: number; costUsd: number | null;
   pinned: boolean; unread: boolean;
@@ -41,10 +43,26 @@ export interface Message { id: string; sessionId: string; role: 'user' | 'assist
 export interface Task { id: string; projectId: string; title: string; description: string; acceptanceCriteria: string; sessionId: string | null; dependsOn: string[]; status: TaskStatus; createdAt: string; updatedAt: string }
 export interface WorkspaceEvent { id: number; projectId: string | null; sessionId: string | null; type: string; summary: string; payload: Record<string, unknown>; createdAt: string }
 export interface Approval { id: string; sessionId: string; tool: string; description: string; input: Record<string, unknown>; status: 'pending' | 'approved' | 'denied'; createdAt: string }
-export interface ProviderInfo { id: Provider; name: string; available: boolean; version: string | null; executable: string | null; reason: string | null; models: { id: string; name: string }[] }
+export interface ProviderModel {
+  id: string; name: string;
+  reasoningEfforts?: { id: string; label: string; description?: string }[];
+  defaultReasoningEffort?: string;
+  serviceTiers?: { id: string; name: string; description?: string }[];
+  defaultServiceTier?: string;
+}
+export interface ProviderInfo { id: Provider; name: string; available: boolean; version: string | null; executable: string | null; reason: string | null; models: ProviderModel[]; policies?: Policy[] }
+export interface ProviderCommand {
+  id: string; name: string; description: string; argumentHint?: string;
+  source: 'provider' | 'project' | 'user' | 'relay'; kind: 'prompt' | 'action';
+}
+export interface ProviderSkill {
+  id: string; name: string; description: string; path?: string;
+  source: 'provider' | 'project' | 'user'; enabled: boolean;
+}
+export interface ProviderCatalog { commands: ProviderCommand[]; skills: ProviderSkill[]; warnings: string[] }
 export interface AppSettings {
   defaultProvider: Provider; defaultCodexModel: string; defaultClaudeModel: string; defaultEffort: Effort; defaultIsolated: boolean;
-  defaultPolicy: Policy; theme: 'dark' | 'light'; claudeExecutable: string; codexExecutable: string;
+  defaultPolicy: Policy; defaultServiceTier?: string; theme: 'dark' | 'light'; claudeExecutable: string; codexExecutable: string;
 }
 export interface Bootstrap { projects: Project[]; sessions: Session[]; messages: Message[]; tasks: Task[]; events: WorkspaceEvent[]; approvals: Approval[]; providers: ProviderInfo[]; settings: AppSettings; version: string; runs: SessionRun[]; toolCalls: ToolCall[] }
 export interface GitFile { path: string; status: string }
@@ -68,14 +86,14 @@ export const UpdateProjectSchema = z.object({ name: z.string().trim().min(1).max
 export const CreateSessionSchema = z.object({
   projectId: z.string().min(1), name: z.string().trim().min(1).max(100).optional(), provider: ProviderSchema.optional(),
   model: z.string().trim().min(1).max(150).optional(), effort: EffortSchema.optional(),
-  policy: PolicySchema.optional(), isolated: z.boolean().optional(),
+  policy: PolicySchema.optional(), serviceTier: ServiceTierSchema.optional(), isolated: z.boolean().optional(),
 });
 export const UpdateSessionSchema = z.object({
   name: z.string().trim().min(1).max(100).optional(), provider: ProviderSchema.optional(),
-  model: z.string().trim().min(1).max(150).optional(), effort: EffortSchema.optional(), policy: PolicySchema.optional(),
+  model: z.string().trim().min(1).max(150).optional(), effort: EffortSchema.optional(), policy: PolicySchema.optional(), serviceTier: ServiceTierSchema.optional(),
   pinned: z.boolean().optional(), unread: z.boolean().optional(),
 }).strict().refine((patch) => Object.keys(patch).length > 0, 'Supply a session setting to update');
-export const SendMessageSchema = z.object({ content: z.string().trim().min(1).max(100_000) });
+export const SendMessageSchema = z.object({ content: z.string().trim().min(1).max(100_000), skills: z.array(z.string().min(1).max(4096)).max(20).optional() }).strict();
 export const CreateTaskSchema = z.object({ projectId: z.string().min(1), title: z.string().trim().min(1).max(200), description: z.string().max(20_000).default(''), acceptanceCriteria: z.string().max(10_000).default(''), sessionId: z.string().nullable().default(null), dependsOn: z.array(z.string()).max(100).default([]) });
 export const UpdateTaskSchema = z.object({ title: z.string().trim().min(1).max(200).optional(), description: z.string().max(20_000).optional(), acceptanceCriteria: z.string().max(10_000).optional(), sessionId: z.string().nullable().optional(), dependsOn: z.array(z.string()).max(100).optional(), status: z.enum(['backlog', 'ready', 'running', 'blocked', 'review', 'done']).optional() });
 export const HandoffSchema = z.object({ fromSessionId: z.string().min(1), toSessionId: z.string().min(1), taskId: z.string().optional(), path: z.string().min(1).max(4096), revision: z.string().trim().min(1).max(100), note: z.string().max(10_000).default('') });
@@ -83,13 +101,13 @@ export const UpdateSettingsSchema = z.object({
   defaultProvider: ProviderSchema.optional(), defaultCodexModel: z.string().trim().min(1).max(150).optional(),
   defaultClaudeModel: z.string().trim().min(1).max(150).optional(), defaultEffort: EffortSchema.optional(),
   defaultIsolated: z.boolean().optional(),
-  defaultPolicy: PolicySchema.optional(), theme: z.enum(['dark', 'light']).optional(),
+  defaultPolicy: PolicySchema.optional(), defaultServiceTier: ServiceTierSchema.optional(), theme: z.enum(['dark', 'light']).optional(),
   claudeExecutable: z.string().max(4096).optional(), codexExecutable: z.string().max(4096).optional(),
 });
 export const ApprovalDecisionSchema = z.object({ decision: z.enum(['approved', 'denied']) });
 
 // Provider boundary: implemented independently from persistence and transport.
-export interface RunOptions { session: Session; prompt: string; signal: AbortSignal; onEvent: (event: AdapterEvent) => void; requestApproval: (request: { tool: string; description: string; input: Record<string, unknown> }) => Promise<boolean>; settings: AppSettings }
+export interface RunOptions { session: Session; prompt: string; skills?: ProviderSkill[]; signal: AbortSignal; onEvent: (event: AdapterEvent) => void; requestApproval: (request: { tool: string; description: string; input: Record<string, unknown> }) => Promise<boolean>; settings: AppSettings }
 export type AdapterEvent =
   | { type: 'session'; providerSessionId: string }
   | { type: 'text'; text: string }
