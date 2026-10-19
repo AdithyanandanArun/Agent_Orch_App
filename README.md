@@ -60,7 +60,7 @@ See [provider research](docs/provider-research.md) for the T3 architecture inves
 
 ## Workspace behavior
 
-**New Session** creates and selects a session immediately from the sidebar toolbar. Set its default provider, model and effort in **Settings → General → New sessions**. Settings opens as a full page with General, Project, Providers and Appearance sections. Each provider remembers its own default model. Existing sessions keep their choices, and their model and effort can be changed in the composer between runs. A provider conversation is retained when switching models within that provider; use a new session to switch providers after a conversation has started.
+**New Session** creates and selects a session immediately from the sidebar toolbar. Set its default provider, model and effort in **Settings → General → New sessions**. Settings opens as a full page with General, Project, Providers, Browser and Appearance sections. Each provider remembers its own default model. Existing sessions keep their choices, and their model and effort can be changed in the composer between runs. A provider conversation is retained when switching models within that provider; use a new session to switch providers after a conversation has started.
 
 The composer reads each model's supported reasoning levels and speed options from its provider. Its combined reasoning/speed popover shows the reported defaults. Permission choices include **Supervised**, **Auto-accept edits**, **Auto** and **Full access**, where supported. Settings also saves a default service tier. Explicit unsupported choices fail before a run; inherited defaults adapt when changing models.
 
@@ -81,6 +81,10 @@ Tasks include an owner, prerequisites and acceptance criteria. A successful assi
 Use the file pane to inspect and edit permitted project files, the changes pane for Git diffs, and the terminal for an interactive shell in the selected local workspace. The app is intended for a trusted local user and binds to loopback; exposing it through a network tunnel is not a supported team collaboration mode.
 
 State lives in the ignored `.relay/` directory by default. Override it with `RELAY_DATA_DIR`. Worktrees and provider conversation references are retained; deleting application data is not a supported cleanup procedure for repositories with unmerged work.
+
+## Shared browser and context
+
+Open **Browser** in a session’s context pane to use a Relay-managed Chromium or explicitly connect a running Chromium browser with its existing logins and tabs. Both providers receive tools for that same browser. Take control to browse yourself, then release it to the agent. Configure browser defaults in **Settings → Browser** and automatic context compaction in **Settings → General → Context**. See [setup, controls and current limits](docs/shared-browser.md).
 
 ## Desktop development shell
 
