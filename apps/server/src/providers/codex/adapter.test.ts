@@ -14,6 +14,7 @@ function server(script: Handler = () => undefined): NonNullable<FakeChildOptions
   return (message, child) => {
     switch (message.method) {
       case 'initialize': return child.reply(message, { userAgent: 'fake' });
+      case 'model/list': return child.reply(message, { data: [{ model: 'gpt-6.1-sol', displayName: 'GPT-6.1 Sol', supportedReasoningEfforts: ['low', 'medium', 'high'].map((reasoningEffort) => ({ reasoningEffort })) }], nextCursor: null });
       case 'thread/start': return child.reply(message, { thread: { id: 'thr_1' }, model: message.params.model });
       case 'thread/resume': return child.reply(message, { thread: { id: message.params.threadId } });
       case 'turn/start':
@@ -99,6 +100,7 @@ describe('codex adapter', () => {
     const bad = makeRun({ session: { providerSessionId: 'thr_gone' } });
     const b = setup((message, c) => {
       if (message.method === 'initialize') c.reply(message, {});
+      if (message.method === 'model/list') c.reply(message, { data: [{ model: 'gpt-6.1-sol', supportedReasoningEfforts: ['low', 'medium', 'high'].map((reasoningEffort) => ({ reasoningEffort })) }] });
       if (message.method === 'thread/resume') c.fail(message, -32600, 'no rollout found for thread id thr_gone');
     });
     await expect(b.adapter.run(bad.options)).rejects.toMatchObject({ code: 'resume_failed', message: expect.stringContaining('no rollout found') });

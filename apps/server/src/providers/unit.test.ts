@@ -33,8 +33,8 @@ describe('redaction', () => {
 
 describe('codex mapping', () => {
   it('maps relay policies to wire values from the app-server schema', () => {
-    expect(codexPolicy('supervised', '/w')).toEqual({ approvalPolicy: 'on-request', sandbox: 'read-only', sandboxPolicy: { type: 'readOnly' } });
-    expect(codexPolicy('balanced', '/w')).toEqual({ approvalPolicy: 'on-request', sandbox: 'workspace-write', sandboxPolicy: { type: 'workspaceWrite', writableRoots: ['/w'], networkAccess: false } });
+    expect(codexPolicy('supervised', '/w')).toEqual({ approvalPolicy: 'on-request', approvalsReviewer: 'user', sandbox: 'read-only', sandboxPolicy: { type: 'readOnly' } });
+    expect(codexPolicy('balanced', '/w')).toEqual({ approvalPolicy: 'on-request', approvalsReviewer: 'user', sandbox: 'workspace-write', sandboxPolicy: { type: 'workspaceWrite', writableRoots: ['/w'], networkAccess: false } });
   });
 
   it('derives per-run usage from thread totals', () => {

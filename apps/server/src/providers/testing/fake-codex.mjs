@@ -34,7 +34,7 @@ rl.on('line', (line) => {
       break;
     case 'model/list':
       send({ id: message.id, result: { data: [
-        { id: 'gpt-6.1-sol', model: 'gpt-6.1-sol', displayName: 'GPT-6.1 Sol', hidden: false, isDefault: true },
+        { id: 'gpt-6.1-sol', model: 'gpt-6.1-sol', displayName: 'GPT-6.1 Sol', hidden: false, isDefault: true, supportedReasoningEfforts: ['low', 'medium', 'high'].map((reasoningEffort) => ({ reasoningEffort })) },
         { id: 'secret-model', model: 'secret-model', displayName: 'Hidden', hidden: true },
       ], nextCursor: null } });
       break;

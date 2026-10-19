@@ -98,7 +98,7 @@ echo "2.1.292 (Claude Code)"`);
     const codex = await box.fakeCodex();
     const info = await detectCodex({ ...settings, codexExecutable: codex }, { env: { PATH: '', FAKE_CODEX_ACCOUNT: 'chatgpt' } });
     expect(info).toMatchObject({ id: 'codex', available: true, version: '9.9.9', executable: codex });
-    expect(info.models).toEqual([{ id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol' }]);
+    expect(info.models).toMatchObject([{ id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol' }]);
     expect(info.reason).toContain('chatgpt');
     expect(info.reason).toContain('not validated');
   });
