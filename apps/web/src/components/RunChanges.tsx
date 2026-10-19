@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { ChevronDown, ChevronRight, FileDiff, FolderOpen, X } from 'lucide-react';
 import type { RunChangedFile, RunChanges as RunChangesData, RunChangesSummary } from '@relay/contracts';
 import { api, errorMessage } from '../lib/api';
@@ -51,10 +52,11 @@ function DiffView({ data }: { data: RunChangesData }) {
       return <section className="run-diff-file" key={file.path}>
         <header><span className={`run-diff-file__status run-diff-file__status--${file.status.toLowerCase()}`}>{file.status}</span><code title={file.path}>{file.path}</code><span><b className="add">+{count(file.additions)}</b> <b className="del">−{count(file.deletions)}</b></span></header>
         {file.binary || patch?.binary ? <p className="run-diff__note">Binary file changed. Line counts are unavailable.</p> : patch?.lines.length ? <div className="run-diff-lines" role="table" aria-label={`Saved diff for ${file.path}`}>
-          {patch.lines.map((line, index) => <div key={index} role="row" className={`run-diff-line run-diff-line--${line.kind}`}>
+          {patch.lines.slice(0, 1500).map((line, index) => <div key={index} role="row" className={`run-diff-line run-diff-line--${line.kind}`}>
             <span aria-hidden="true">{line.oldNo ?? ''}</span><span aria-hidden="true">{line.newNo ?? ''}</span><span aria-hidden="true">{line.kind === 'add' ? '+' : line.kind === 'del' ? '−' : ''}</span><code>{line.text || ' '}</code>
           </div>)}
-        </div> : <p className="run-diff__note">No textual patch was saved for this file.</p>}
+          {patch.lines.length > 1500 ? <p className="run-diff__note">Showing the first 1,500 lines for this file.</p> : null}
+        </div> : <p className="run-diff__note">Textual diff is unavailable for this file.</p>}
       </section>;
     })}
     {data.diffTruncated ? <p className="run-diff__note run-diff__note--warning">The saved patch was truncated. Some diff content is not shown.</p> : null}
@@ -78,47 +80,48 @@ function SavedDiffDialog({ runId, initialPath, onClose }: { runId: string; initi
       if (!abort.signal.aborted) setError(errorMessage(reason));
     }).finally(() => { if (!abort.signal.aborted) setLoading(false); });
   };
-  useEffect(() => { load(); return () => { controller.current?.abort(); opener.current?.focus(); }; }, [runId]);
+  useEffect(() => { load(); return () => { controller.current?.abort(); if (opener.current?.isConnected) opener.current.focus({ preventScroll: true }); }; }, [runId]);
   useEffect(() => {
     const element = dialog.current;
     if (!element) return;
     const focusables = () => [...element.querySelectorAll<HTMLElement>('button:not(:disabled), [href], [tabindex]:not([tabindex="-1"])')];
     focusables()[0]?.focus();
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { event.stopPropagation(); onClose(); }
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onClose(); }
       if (event.key === 'Tab') {
         const items = focusables(); const first = items[0]; const last = items.at(-1);
-        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        if (!element.contains(document.activeElement)) { event.preventDefault(); first?.focus(); }
+        else if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
         else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
       }
     };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose, loading, error, data]);
-  const pathPatch = initialPath && data ? parseDiff(data.diff).find(file => file.path === initialPath) : null;
-  return <div className="run-diff-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
+  }, [onClose]);
+  const visible = initialPath && data ? { ...data, summary: { ...data.summary, files: data.summary.files.filter(file => file.path === initialPath) } } : data;
+  return createPortal(<div className="run-diff-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
     <section ref={dialog} className="run-diff-dialog" role="dialog" aria-modal="true" aria-labelledby="run-diff-title">
       <header className="run-diff-dialog__head"><div><span className="run-changes__eyebrow">Saved run changes</span><h2 id="run-diff-title">{initialPath ?? 'Run diff'}</h2></div><button className="run-changes__icon" type="button" onClick={onClose} aria-label="Close saved diff"><X size={17} /></button></header>
       <div className="run-diff-dialog__body">
-        {loading ? <p className="run-diff__note" role="status">Loading saved diff…</p> : error ? <div className="run-diff-error" role="alert"><p>{error}</p><button type="button" onClick={load}>Try again</button></div> : data ? <DiffView data={pathPatch ? { ...data, summary: { ...data.summary, files: [data.summary.files.find(file => file.path === initialPath)!] }, diff: data.diff } : data} /> : null}
+        {loading ? <p className="run-diff__note" role="status">Loading saved diff…</p> : error ? <div className="run-diff-error" role="alert"><p>{error}</p><button type="button" onClick={load}>Try again</button></div> : visible ? <DiffView data={visible} /> : null}
       </div>
     </section>
-  </div>;
+  </div>, document.body);
 }
 
 function FileRows({ nodes, onOpen }: { nodes: Tree[]; onOpen: (path: string) => void }) {
   return <ul className="run-changes__tree">{nodes.map(node => node.file ? <li key={node.path}><button className="run-changes__file" type="button" onClick={() => onOpen(node.file!.path)} title={node.file.path}>
     <span className={`run-changes__status run-changes__status--${node.file.status.toLowerCase()}`}>{node.file.status}</span><span className="run-changes__filename">{node.name}</span><span className="run-changes__counts"><b className="add">+{count(node.file.additions)}</b><b className="del">−{count(node.file.deletions)}</b></span>
-  </button></li> : <li key={node.path}>{(() => { const totals = treeTotals(node); return <details className="run-changes__folder" open><summary><ChevronRight size={13} /><FolderOpen size={14} /><span>{node.name}</span><span className="run-changes__counts"><b className="add">+{totals.additions}</b><b className="del">−{totals.deletions}</b><span>{totals.files} {totals.files === 1 ? 'file' : 'files'}</span></span></summary><FileRows nodes={[...node.children.values()]} onOpen={onOpen} /></details>; })()}</li>)}</ul>;
+  </button></li> : <li key={node.path}>{(() => { const totals = treeTotals(node); return <details className="run-changes__folder"><summary><ChevronRight size={13} /><FolderOpen size={14} /><span>{node.name}</span><span className="run-changes__counts"><b className="add">+{count(totals.additions)}</b><b className="del">−{count(totals.deletions)}</b><span>{totals.files} {totals.files === 1 ? 'file' : 'files'}</span></span></summary><FileRows nodes={[...node.children.values()]} onOpen={onOpen} /></details>; })()}</li>)}</ul>;
 }
 
 export function RunChanges({ runId, summary }: { runId: string; summary?: RunChangesSummary | null }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
   const [dialog, setDialog] = useState<{ path?: string } | null>(null);
   const nodes = useMemo(() => fileTree(summary?.files ?? []), [summary?.files]);
+  const onClose = useCallback(() => setDialog(null), []);
   if (!summary || (summary.status === 'available' && summary.fileCount === 0)) return null;
   const open = (path?: string) => setDialog({ path });
-  const onClose = () => setDialog(null);
   return <>
     <section className="run-changes" aria-label="Changes saved for this run">
       {summary.status === 'unavailable' ? <><div className="run-changes__head"><span>Changes unavailable</span><span className="run-changes__quiet">This run’s change summary could not be captured.</span></div>{summary.notices.map((notice, index) => <p className="run-changes__notice" key={index}>{notice}</p>)}</> : <>

@@ -183,17 +183,18 @@ export function SessionPane() {
   const changesAfterMessage = useMemo(() => {
     const placements = new Map<number, SessionRun[]>();
     for (const run of runs) {
+      if (!messageIds.has(run.userMessageId)) continue;
       const assistants = messages.map((message, index) => ({ message, index })).filter(row => row.message.role === 'assistant' && row.message.runId === run.id);
       let index = assistants.at(-1)?.index;
       if (index === undefined) {
-        const fallback = messages.map((message, candidate) => ({ message, candidate })).filter(row => row.message.role !== 'tool').at(-1);
+        const fallback = messages.map((message, candidate) => ({ message, candidate })).filter(row => row.message.role !== 'tool' && row.message.runId === run.id).at(-1);
         index = fallback?.candidate ?? messages.findIndex(message => message.id === run.userMessageId);
       }
       if (index === undefined || index < 0) continue;
       const list = placements.get(index) ?? []; list.push(run); placements.set(index, list);
     }
     return placements;
-  }, [runs, messages]);
+  }, [runs, messages, messageIds]);
   const approvals = useRelay((s) => s.boot?.approvals);
   const pending = useMemo(() => (approvals ?? []).filter((a) => a.sessionId === session?.id && a.status === 'pending'), [approvals, session?.id]);
   const { openDialog } = useRelay.getState();
