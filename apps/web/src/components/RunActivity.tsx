@@ -97,6 +97,7 @@ function ToolDetail({ node, activeRun }: { node: ToolNode; activeRun: boolean })
   const expanded = useRef(false);
   const finalFetchKey = useRef('');
   const fullCall = useRef<ToolCall | null>(null);
+  const previousStatus = useRef(node.call.status);
   const row = call;
   const elapsedMs = row.durationMs ?? (row.status === 'running' && activeRun ? (() => {
     const started = Date.parse(row.startedAt);
@@ -119,6 +120,8 @@ function ToolDetail({ node, activeRun }: { node: ToolNode; activeRun: boolean })
   };
 
   useEffect(() => {
+    const completedLiveCall = previousStatus.current === 'running' && node.call.status !== 'running';
+    previousStatus.current = node.call.status;
     if (activeRun) {
       fullCall.current = null;
       setCall(node.call);
@@ -130,7 +133,7 @@ function ToolDetail({ node, activeRun }: { node: ToolNode; activeRun: boolean })
       setCall(node.call);
       setOutputSource('snapshot');
     }
-    if (!activeRun && expanded.current) {
+    if (expanded.current && (completedLiveCall || !activeRun)) {
       const key = `${node.call.id}:${node.call.finishedAt ?? node.call.status}`;
       if (finalFetchKey.current !== key) {
         finalFetchKey.current = key;
@@ -177,7 +180,7 @@ function ToolDetail({ node, activeRun }: { node: ToolNode; activeRun: boolean })
           {row.command && row.summary ? <Field label="Command" value={row.command} code /> : null}
         </div>
         {row.input ? <Field label="Input" value={row.input} code /> : null}
-        {row.output ? <Field label={outputSource === 'snapshot' ? 'Captured output · recent snapshot tail (up to 2 KB)' : row.output.length >= 20_000 ? 'Captured output · may be truncated at 20 KB' : 'Captured output'} value={row.output} code /> : null}
+        {row.output ? <Field label={row.outputTruncated ? outputSource === 'snapshot' ? 'Output tail' : 'Captured output truncated' : 'Captured output'} value={row.output} code /> : null}
         {node.children.length ? <div className="run-tool__children" aria-label="Child tool calls">{node.children.map(child => <ToolDetail key={child.call.id} node={child} activeRun={activeRun} />)}</div> : null}
       </div>
     </details>
