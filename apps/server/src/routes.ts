@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { z } from 'zod';
 import {
-  ApprovalDecisionSchema, CreateProjectSchema, CreateSessionSchema, CreateTaskSchema, HandoffSchema, SendMessageSchema, UpdateProjectSchema, UpdateSessionSchema, UpdateSettingsSchema, UpdateTaskSchema,
+  ApprovalDecisionSchema, ConversationIdSchema, ImportConversationSchema, ProviderSchema, CreateProjectSchema, CreateSessionSchema, CreateTaskSchema, HandoffSchema, SendMessageSchema, UpdateProjectSchema, UpdateSessionSchema, UpdateSettingsSchema, UpdateTaskSchema,
 } from '@relay/contracts';
 import type { Bootstrap, SessionUsage } from '@relay/contracts';
 import { gitStatus } from './git.ts';
@@ -17,10 +17,11 @@ import type { ServerConfig } from './config.ts';
 import type { TerminalManager } from './terminal.ts';
 import { HttpError, badRequest, conflict, notFound } from './util.ts';
 import { resolveRunConfig } from './session-config.ts';
+import type { ImportService } from './imports.ts';
 
 export interface Services {
   config: ServerConfig; store: Store; hub: Hub; workspace: WorkspaceService; runtime: SessionRuntime; tasks: TaskService; handoffs: HandoffService;
-  providers: ProviderService; terminals: TerminalManager; startedAt: number; getPort: () => number;
+  providers: ProviderService; imports: ImportService; terminals: TerminalManager; startedAt: number; getPort: () => number;
 }
 
 export class Reply {
@@ -71,6 +72,7 @@ const SettingsPatch = UpdateSettingsSchema.extend({ claudeExecutable: executable
 const MessagesQuery = z.object({ limit: z.coerce.number().int().min(1).max(2000).optional(), before: z.string().max(100).optional() });
 const EventsQuery = z.object({ after: z.coerce.number().int().min(0).default(0), projectId: z.string().max(100).optional(), limit: z.coerce.number().int().min(1).max(5000).optional() });
 const WriteFile = z.object({ content: z.string() });
+const ImportsQuery = z.object({ provider: ProviderSchema, projectId: z.string().min(1).max(100).optional(), cursor: z.string().min(1).max(4096).optional() }).strict();
 
 export function buildRouter(s: Services) {
   const routes: Route[] = [];
@@ -126,6 +128,16 @@ export function buildRouter(s: Services) {
   });
 
   add('GET', '/api/projects', () => s.store.listProjects());
+  add('GET', '/api/imports', (ctx) => {
+    const query = parse(ImportsQuery, Object.fromEntries(ctx.url.searchParams));
+    return s.imports.list(query.provider, query.projectId, query.cursor);
+  });
+  add('GET', '/api/imports/:provider/:id', (ctx) => s.imports.read(parse(ProviderSchema, ctx.params.provider), parse(ConversationIdSchema, ctx.params.id)));
+  add('POST', '/api/imports', async (ctx) => {
+    const input = await ctx.body(ImportConversationSchema);
+    const result = await s.imports.import(input.provider, input.conversationId);
+    return new Reply(result.alreadyImported ? 200 : 201, result);
+  });
   add('POST', '/api/projects', async (ctx) => {
     const { project, created } = await s.workspace.createProject(await ctx.body(CreateProjectSchema));
     return new Reply(created ? 201 : 200, project);

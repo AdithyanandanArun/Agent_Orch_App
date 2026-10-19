@@ -159,6 +159,14 @@ export class Store {
   archiveSession(id: string): void {
     this.run('UPDATE sessions SET archived_at = ?, updated_at = ? WHERE id = ?', nowIso(), nowIso(), id);
   }
+  findProviderSession(provider: Provider, nativeId: string): Session | undefined {
+    const row = this.get('SELECT * FROM sessions WHERE provider = ? AND provider_session_id = ? ORDER BY archived_at IS NULL DESC, rowid ASC LIMIT 1', provider, nativeId);
+    return row ? mapSession(row) : undefined;
+  }
+  restoreSession(id: string): Session {
+    this.run('UPDATE sessions SET archived_at = NULL WHERE id = ?', id);
+    return this.getSession(id)!;
+  }
   sessionsInStatus(statuses: SessionStatus[]): Session[] {
     return this.all(`SELECT * FROM sessions WHERE archived_at IS NULL AND status IN (${statuses.map(() => '?').join(',')})`, ...statuses).map(mapSession);
   }
@@ -229,9 +237,9 @@ export class Store {
   }
 
   // messages
-  insertMessage(input: { id?: string; sessionId: string; role: Message['role']; content: string; kind?: string | null; runId?: string }): Message {
+  insertMessage(input: { id?: string; sessionId: string; role: Message['role']; content: string; kind?: string | null; runId?: string; createdAt?: string }): Message {
     const id = input.id ?? newId('msg');
-    const createdAt = nowIso();
+    const createdAt = input.createdAt ?? nowIso();
     this.run('INSERT INTO messages(id, session_id, role, content, kind, created_at, run_id) VALUES (?, ?, ?, ?, ?, ?, ?)', id, input.sessionId, input.role, input.content, input.kind ?? null, createdAt, input.runId ?? null);
     return this.getMessage(id)!;
   }

@@ -19,6 +19,7 @@ import type { Logger, ProviderRuntime } from './types.ts';
 import { HttpError, errorMessage } from './util.ts';
 import { WorkspaceService } from './workspace.ts';
 import { resolveRunConfig } from './session-config.ts';
+import { ImportService } from './imports.ts';
 
 export interface ApplicationOptions extends ConfigOptions {
   /** Provider adapters and detection. Inject a fake in tests; the CLI entry passes ./providers/index.ts. */
@@ -104,7 +105,7 @@ export function createApplication(options: ApplicationOptions): RelayApplication
   const terminals = new TerminalManager(store, hub, log, options.terminal);
   const services: Services = {
     config, store, hub, runtime, tasks, terminals, providers, handoffs: new HandoffService(store), workspace: new WorkspaceService(store, config.dataDir, runtime, () => providers.cached()),
-    startedAt: Date.now(), getPort: () => boundPort,
+    imports: new ImportService(store, options.providers, providers, runtime), startedAt: Date.now(), getPort: () => boundPort,
   };
   hub.bind({ onMessage: (socket, raw) => terminals.handleMessage(socket, raw), onClose: (socket) => terminals.releaseSocket(socket) });
 
