@@ -1,5 +1,5 @@
 import { resolve } from 'node:path';
-import type { AdapterEvent, Policy, ToolActivity, ToolCategory, ToolStatus } from '@relay/contracts';
+import type { Policy, ToolActivity, ToolCategory, ToolStatus } from '@relay/contracts';
 import { describeValue, isRecord, truncate, truncateTail } from '../common.js';
 
 /**
@@ -30,6 +30,47 @@ const str = (value: unknown): string | undefined => (typeof value === 'string' &
 
 function compact(entries: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(Object.entries(entries).filter(([, value]) => value !== undefined && value !== null));
+}
+
+function safeStructured(value: unknown, depth = 0): unknown {
+  if (depth > 6 || value === null || typeof value === 'boolean' || typeof value === 'number') return value;
+  if (typeof value === 'string') {
+    if (value.length > 128 && /^[A-Za-z0-9+/]+={0,2}$/.test(value)) return '[omitted binary-like value]';
+    return truncate(value, 4_000);
+  }
+  if (Array.isArray(value)) return value.slice(0, 100).map((item) => safeStructured(item, depth + 1));
+  if (!isRecord(value)) return undefined;
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value).slice(0, 100)) {
+    if (/image|audio|base64|bytes|blob|dataurl/i.test(key)) continue;
+    const safe = safeStructured(item, depth + 1);
+    if (safe !== undefined) out[key] = safe;
+  }
+  return out;
+}
+
+function mcpResultText(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined;
+  const parts: string[] = [];
+  if (Array.isArray(value.content)) {
+    for (const block of value.content) {
+      if (isRecord(block) && block.type === 'text' && typeof block.text === 'string') parts.push(block.text);
+    }
+  }
+  if (value.structuredContent !== undefined) {
+    const safe = safeStructured(value.structuredContent);
+    if (safe !== undefined) {
+      try { parts.push(JSON.stringify(safe)); } catch { /* non-serializable provider payload */ }
+    }
+  }
+  const text = parts.join('\n');
+  return text ? truncate(text, 20_000) : undefined;
+}
+
+function dynamicResultText(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const text = value.filter(isRecord).filter((item) => item.type === 'inputText' && typeof item.text === 'string').map((item) => item.text as string).join('\n');
+  return text ? truncate(text, 20_000) : undefined;
 }
 
 export function describeCommandApproval(params: Record<string, unknown>): ApprovalPrompt {
@@ -129,23 +170,21 @@ export function legacyDecision(approved: boolean, cancelling: boolean): { decisi
   return { decision: approved ? 'approved' : cancelling ? 'abort' : 'denied' };
 }
 
-function outputTail(value: unknown, max: number): string {
-  const text = str(value);
-  return text ? `\n${truncateTail(text.trimEnd(), max)}` : '';
-}
-
 /** Maps app-server items to one evolving tool card. Returns null for non-tool items. */
-export function itemToolActivity(item: Record<string, unknown>, phase: 'started' | 'completed', fallbackId?: string): ToolActivity | null {
+export function itemToolActivity(item: Record<string, unknown>, phase: 'started' | 'completed'): ToolActivity | null {
   const done = phase === 'completed';
-  const id = str(item.id) ?? fallbackId;
+  const id = str(item.id);
   if (!id) return null;
   const rawStatus = str(item.status);
-  const status: ToolStatus = !done ? 'running' : rawStatus === 'failed' || rawStatus === 'declined' ? 'failed' : rawStatus === 'interrupted' ? 'interrupted' : 'completed';
+  const hasError = (isRecord(item.error) && Boolean(str(item.error.message))) || typeof item.error === 'string' && Boolean(item.error);
+  const nonzeroExit = typeof item.exitCode === 'number' && item.exitCode !== 0;
+  const status: ToolStatus = !done ? 'running' : rawStatus === 'interrupted' ? 'interrupted' : rawStatus === 'failed' || rawStatus === 'declined' || item.success === false || hasError || nonzeroExit ? 'failed' : 'completed';
   const base = { id, status, ...(typeof item.durationMs === 'number' ? { durationMs: item.durationMs } : {}) };
   switch (item.type) {
     case 'commandExecution': {
-      const command = str(item.command) ?? '(unknown command)';
-      return { ...base, name: 'shell', category: 'command', summary: truncate(`$ ${command}`, 1_500), command: truncate(command, 4_000), input: describeValue({ command, cwd: item.cwd }, 4_000), cwd: str(item.cwd) ?? null,
+      const command = str(item.command);
+      const cwd = str(item.cwd);
+      return { ...base, name: 'shell', category: 'command', ...(command ? { summary: truncate(`$ ${command}`, 1_500) } : phase === 'started' ? { summary: 'Shell command' } : {}), ...(command ? { command: truncate(command, 4_000) } : {}), ...(command || cwd ? { input: describeValue(compact({ command, cwd }), 4_000) } : {}), ...(cwd ? { cwd } : {}),
         ...(typeof item.exitCode === 'number' ? { exitCode: item.exitCode } : {}), ...(typeof item.processId === 'string' ? { processId: item.processId } : {}),
         ...(str(item.aggregatedOutput) ? { output: truncateTail(str(item.aggregatedOutput)!, 20_000) } : {}) };
     }
@@ -153,20 +192,22 @@ export function itemToolActivity(item: Record<string, unknown>, phase: 'started'
       const changes = summarizeChanges(item.changes);
       const list = changes.map((change) => `${change.kind} ${change.path}`).join('\n') || '(no file list)';
       const diff = changes.map((change) => change.diff ?? '').filter(Boolean).join('\n');
-      return { ...base, name: 'file_change', category: 'file', summary: truncate(list, 1_500), input: truncate(describeValue(item.changes, 4_000), 4_000), ...(diff ? { output: truncate(diff, 8_000) } : {}) };
+      return { ...base, name: 'file_change', category: 'file', ...(item.changes !== undefined ? { summary: truncate(list, 1_500), input: truncate(describeValue(item.changes, 4_000), 4_000) } : phase === 'started' ? { summary: truncate(list, 1_500) } : {}), ...(diff ? { output: truncate(diff, 8_000) } : {}) };
     }
     case 'mcpToolCall': {
       const name = `mcp:${str(item.server) ?? '?'}/${str(item.tool) ?? '?'}`;
       const failure = isRecord(item.error) ? str(item.error.message) : str(item.error);
       const identity = `${str(item.server) ?? ''} ${str(item.tool) ?? ''}`.toLowerCase();
       const category: ToolCategory = /browser|playwright|puppeteer/.test(identity) || (/t3_code/.test(identity) && /preview_/.test(identity)) ? 'browser' : 'other';
-      return { ...base, name, category, summary: name, input: describeValue(item.arguments, 4_000), ...(failure ? { output: truncate(failure, 8_000) } : {}) };
+      const output = [failure, done ? mcpResultText(item.result) : undefined].filter(Boolean).join('\n');
+      return { ...base, name, category, summary: name, ...(item.arguments !== undefined ? { input: describeValue(item.arguments, 4_000) } : {}), ...(output ? { output: truncate(output, 20_000) } : {}) };
     }
     case 'dynamicToolCall': {
       const name = str(item.tool) ?? '?';
-      const identity = `${str(item.server) ?? ''} ${name}`.toLowerCase();
+      const identity = `${str(item.namespace) ?? ''} ${name}`.toLowerCase();
       const category: ToolCategory = /browser|playwright/.test(identity) || (/t3_code/.test(identity) && /preview_/.test(identity)) ? 'browser' : 'other';
-      return { ...base, name: `tool:${name}`, category, summary: truncate(name, 300), input: describeValue(item.arguments, 4_000), ...(str(item.content) ? { output: truncate(str(item.content)!, 20_000) } : {}) };
+      const output = done ? dynamicResultText(item.contentItems) : undefined;
+      return { ...base, name: `tool:${name}`, category, summary: truncate(name, 300), ...(item.arguments !== undefined ? { input: describeValue(item.arguments, 4_000) } : {}), ...(output ? { output } : {}) };
     }
     case 'webSearch': {
       const action = isRecord(item.action) ? item.action : {};
@@ -175,20 +216,17 @@ export function itemToolActivity(item: Record<string, unknown>, phase: 'started'
       const name = actionType === 'search' ? 'web_search' : actionType === 'openPage' ? 'web_open_page' : actionType === 'findInPage' ? 'web_find_in_page' : 'web_action';
       const summary = actionType === 'search' ? str(action.query) ?? (Array.isArray(action.queries) ? action.queries.filter((query): query is string => typeof query === 'string').join(', ') : 'Search web')
         : str(action.url) ?? str(action.pattern) ?? 'Web action';
-      return { ...base, name, category, summary: truncate(summary, 600), input: describeValue(action, 4_000), ...(str(item.result) ? { output: truncate(str(item.result)!, 20_000) } : {}) };
+      return { ...base, name, category, ...(item.action !== undefined || item.query !== undefined || phase === 'started' ? { summary: truncate(summary, 600) } : {}), ...(item.action !== undefined || item.query !== undefined ? { input: describeValue(item.action ?? item.query, 4_000) } : {}), ...(str(item.result) ? { output: truncate(str(item.result)!, 20_000) } : {}) };
     }
-    case 'collabAgentToolCall': return { ...base, name: `agent:${str(item.tool) ?? '?'}`, category: 'agent', summary: truncate(str(item.prompt) ?? 'Delegate task', 600), input: describeValue(item, 4_000), ...(str(item.output) ? { output: truncate(str(item.output)!, 20_000) } : {}) };
+    case 'collabAgentToolCall': {
+      const tool = str(item.tool) ?? '?';
+      const category: ToolCategory = tool === 'spawnAgent' ? 'agent' : 'other';
+      return { ...base, name: `agent:${tool}`, category, summary: truncate(str(item.prompt) ?? `Agent ${tool}`, 600), input: describeValue(item, 4_000), ...(str(item.output) ? { output: truncate(str(item.output)!, 20_000) } : {}) };
+    }
     case 'imageView': return { ...base, name: 'image_view', category: 'other', summary: str(item.path) ?? 'View image', input: str(item.path) ?? '' };
     default:
       return null;
   }
-}
-
-/** Compatibility projection for existing mapper checks; provider adapters emit structured activity. */
-export function itemToolEvent(item: Record<string, unknown>, phase: 'started' | 'completed'): AdapterEvent | null {
-  if (item.type === 'contextCompaction') return phase === 'completed' ? { type: 'info', content: 'Codex compacted the conversation context.' } : null;
-  const activity = itemToolActivity(item, phase, str(item.id) ?? 'compat-item');
-  return activity ? { type: 'tool', name: activity.name, content: truncate(`${activity.summary}${activity.output ? `\n${activity.output}` : ''}`, 8_000) } : null;
 }
 
 interface Counters { input: number; output: number }

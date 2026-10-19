@@ -93,8 +93,6 @@ class CodexRun {
   private lastTextItem: string | null = null;
   private emittedText = false;
   private readonly changesByItem = new Map<string, FileChangeSummary[]>();
-  private readonly activityIds = new Map<string, string>();
-  private fallbackActivityId = 0;
   private readonly warned = new Set<string>();
   private graceTimer: NodeJS.Timeout | undefined;
 
@@ -280,7 +278,7 @@ class CodexRun {
         if (isRecord(params.item)) this.onItem(params.item, method === 'item/started' ? 'started' : 'completed');
         break;
       case 'item/commandExecution/outputDelta': {
-        const id = typeof params.itemId === 'string' ? this.activityIds.get(params.itemId) ?? params.itemId : null;
+        const id = typeof params.itemId === 'string' ? params.itemId : null;
         if (id && typeof params.delta === 'string' && params.delta) this.emit({ type: 'tool.output', id, delta: params.delta });
         break;
       }
@@ -328,10 +326,12 @@ class CodexRun {
       return;
     }
     if (item.type === 'fileChange' && id) this.changesByItem.set(id, summarizeChanges(item.changes));
-    const key = id ?? `${String(item.type ?? 'tool')}:${this.turnId ?? 'turn'}:${this.fallbackActivityId++}`;
-    const activityId = this.activityIds.get(key) ?? key;
-    this.activityIds.set(key, activityId);
-    const activity = itemToolActivity(item, phase, activityId);
+    const isTool = ['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'webSearch', 'collabAgentToolCall', 'imageView'].includes(String(item.type));
+    if (isTool && !id) {
+      this.info(`Codex ${String(item.type)} item had no provider id; its tool activity was omitted.`);
+      return;
+    }
+    const activity = itemToolActivity(item, phase);
     if (activity) this.emit({ type: 'tool.activity', activity });
   }
 
