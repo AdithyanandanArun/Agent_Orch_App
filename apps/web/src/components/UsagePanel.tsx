@@ -62,10 +62,10 @@ function LimitWindow({ item, now }: { item: UsageWindow; now: number }) {
 
 function CreditDetails({ usage, now }: { usage: SessionUsage; now: number }) {
   const credits = usage.credits;
-  if (!credits) return <p className="usage__unknown">Credit balance not reported.</p>;
+  if (!credits) return <p className="usage__unknown">Credit balance and reset timing not reported.</p>;
   return <dl className="usage__facts">
     <div><dt>Balance</dt><dd>{credits.unlimited === true ? 'Unlimited' : credits.balance === null ? 'Not reported' : `${credits.balance}${credits.unit ? ` ${credits.unit}` : ''}`}</dd></div>
-    {credits.resetAt ? <div><dt>Credit reset</dt><dd><DateValue value={credits.resetAt} now={now} passedLabel="Reset time passed—refresh" /></dd></div> : null}
+    <div><dt>Credit reset</dt><dd>{credits.resetAt ? <DateValue value={credits.resetAt} now={now} passedLabel="Reset time passed—refresh" /> : 'Timing not reported'}</dd></div>
   </dl>;
 }
 
