@@ -108,7 +108,7 @@ export async function captureRunTree(cwd: string): Promise<RunTreeSnapshot> {
         try {
           const opened = await handle.stat();
           if (!opened.isFile() || !sameFileMetadata(stat, opened)) throw new Error('file changed before read');
-          const bounded = Buffer.alloc(MAX_FILE_BYTES + 1);
+          const bounded = Buffer.alloc(opened.size + 1);
           let offset = 0;
           while (offset < bounded.length) {
             const { bytesRead } = await handle.read(bounded, offset, bounded.length - offset, offset);
@@ -217,7 +217,7 @@ export async function compareRunTrees(cwd: string, before: RunTreeSnapshot, afte
     const summary: RunChangesSummary = {
       status: 'available', capturedAt: nowIso(), fileCount: changed.length,
       files: changed.slice(0, MAX_LISTED_FILES), additions, deletions,
-      truncated: changed.length > MAX_LISTED_FILES || diffTruncated,
+      truncated: changed.length > MAX_LISTED_FILES,
       notices: [
         ...(patchUnavailable ? ['Saved patch could not be captured within limits; file counts remain complete.'] : diffTruncated ? ['Patch was truncated at 500 KiB.'] : []),
         ...(changed.length > MAX_LISTED_FILES ? ['File list was truncated at 200 entries; totals cover all changed files.'] : []),

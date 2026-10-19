@@ -4,6 +4,7 @@ import { SCHEMA_VERSION } from './db.ts';
 import { newId, nowIso } from './util.ts';
 
 type Row = Record<string, unknown>;
+const RUN_FIELDS = 'id, session_id, user_message_id, provider, model, status, started_at, finished_at, duration_ms, changes_summary';
 
 export const DEFAULT_SETTINGS: AppSettings = {
   defaultProvider: 'codex', defaultCodexModel: 'gpt-6.1-sol', defaultClaudeModel: 'claude-sonnet-5-5', defaultEffort: 'high', defaultIsolated: true,
@@ -178,7 +179,7 @@ export class Store {
     return this.getRun(input.id)!;
   }
   getRun(id: string): SessionRun | undefined {
-    const row = this.get('SELECT * FROM session_runs WHERE id = ?', id);
+    const row = this.get(`SELECT ${RUN_FIELDS} FROM session_runs WHERE id = ?`, id);
     return row ? this.mapRun(row) : undefined;
   }
   finishRun(id: string, status: Exclude<RunStatus, 'running'>, durationMs: number | null, finishedAt = nowIso()): void {
@@ -194,7 +195,7 @@ export class Store {
     return { summary: JSON.parse(row.changes_summary as string) as RunChangesSummary, diff: (row.changes_diff as string | null) ?? '', diffTruncated: row.changes_diff_truncated === 1 };
   }
   bootstrapRuns(limit = 200): SessionRun[] {
-    return this.all(`SELECT r.* FROM session_runs r JOIN sessions s ON s.id = r.session_id WHERE s.archived_at IS NULL
+    return this.all(`SELECT ${RUN_FIELDS.split(', ').map(field => `r.${field}`).join(', ')} FROM session_runs r JOIN sessions s ON s.id = r.session_id WHERE s.archived_at IS NULL
       ORDER BY (r.status = 'running') DESC, r.rowid DESC LIMIT ?`, limit).map((row) => this.mapRun(row));
   }
   putToolCall(call: ToolCall): void {
