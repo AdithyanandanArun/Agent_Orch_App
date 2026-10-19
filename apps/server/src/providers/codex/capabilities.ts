@@ -12,8 +12,9 @@ export function parseCodexModel(value: unknown): ProviderModel | null {
   // The CLI uses `model` as the turn/start identifier; `id` is a separate catalog row key.
   const id = text(value.model, 150) ?? text(value.id, 150);
   if (!id) return null;
-  const efforts = Array.isArray(value.supportedReasoningEfforts)
-    ? value.supportedReasoningEfforts.flatMap((entry) => {
+  const nativeEfforts = Array.isArray(value.supportedReasoningEfforts) ? value.supportedReasoningEfforts : undefined;
+  const efforts = nativeEfforts
+    ? nativeEfforts.flatMap((entry) => {
       if (!isRecord(entry)) return [];
       const effort = text(entry.reasoningEffort, 40);
       return effort ? [{ id: effort, label: effort, ...(text(entry.description) ? { description: text(entry.description) } : {}) }] : [];
@@ -32,7 +33,7 @@ export function parseCodexModel(value: unknown): ProviderModel | null {
   return {
     id,
     name: text(value.displayName, 150) ?? id,
-    ...(efforts.length ? { reasoningEfforts: efforts } : {}),
+    ...(nativeEfforts !== undefined ? { reasoningEfforts: efforts } : {}),
     ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
     ...(tiers.length ? { serviceTiers: tiers } : {}),
     ...(defaultServiceTier ? { defaultServiceTier } : {}),
@@ -50,7 +51,9 @@ export function parseCodexModels(value: unknown): ProviderModel[] {
 
 /** Return a clear reason when a persisted effort is not advertised for the selected model. */
 export function validateCodexEffort(model: ProviderModel | undefined, effort: string): string | null {
-  if (!model?.reasoningEfforts?.length) return `Codex did not advertise reasoning efforts for model ${model?.id ?? '(unknown)'}.`;
+  if (!model) return 'Codex did not return metadata for the selected model.';
+  if (!model.reasoningEfforts) return `Codex did not advertise reasoning efforts for model ${model.id}.`;
+  if (model.reasoningEfforts.length === 0) return `Codex model ${model.id} advertises no selectable reasoning efforts.`;
   if (!model.reasoningEfforts.some((option) => option.id === effort)) {
     return `Reasoning effort "${truncate(effort, 80)}" is not supported by Codex model ${model.id}.`;
   }

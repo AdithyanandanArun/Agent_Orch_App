@@ -19,9 +19,9 @@ Auto review is the native reviewer selected by Codex for approval requests; Rela
 
 ## Models, effort and service tier
 
-`model/list` advertises each model's `supportedReasoningEfforts`, `defaultReasoningEffort`, and `serviceTiers`/`defaultServiceTier`. Relay uses this live data to reject an effort or non-default tier that is not advertised for the selected model. It does not substitute another model, effort, or tier.
+`model/list` advertises each model's `supportedReasoningEfforts`, `defaultReasoningEffort`, and `serviceTiers`/`defaultServiceTier`. Relay preserves an explicitly empty native effort list and rejects a run when the model advertises no selectable effort; it does not infer common effort values. Relay also uses this live data to reject an effort or non-default tier that is not advertised for the selected model. It does not substitute another model, effort, or tier.
 
-`thread/start` and `thread/resume` accept `serviceTier`; `turn/start` also accepts `serviceTier`. Relay forwards the selected tier to both thread and turn requests. Relay's `standard` setting maps to native `null`, which leaves the Codex default in effect. Other values must match a tier returned for that model.
+`thread/start` and `thread/resume` accept `serviceTier`; `turn/start` accepts both `serviceTier` and `serviceTierForTurn`. Relay forwards a selected non-default tier to both thread and turn requests. For Relay's `standard` setting (including an unset value), it sends `serviceTierForTurn: "default"`, the schema's explicit standard-speed value. This prevents a priority tier configured on a resumed thread from being inherited for the current turn. The thread-level `serviceTier` remains `null` for standard so Relay does not claim a non-default tier. Other values must match a tier returned for that model.
 
 ## Skills and commands
 

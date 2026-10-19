@@ -245,13 +245,14 @@ class CodexRun {
     const { session, prompt } = this.options;
     const policy = codexPolicy(session.policy, session.worktreePath);
     const serviceTier = session.serviceTier && session.serviceTier !== 'standard' ? session.serviceTier : null;
+    const serviceTierForTurn = serviceTier ?? 'default';
     const skillInputs = (this.options.skills ?? []).filter((skill) => skill.enabled && skill.path && skill.path.startsWith('/') && skill.path.length <= 4096 && skill.name.trim().length > 0).slice(0, 20)
       .map((skill) => ({ type: 'skill', name: truncate(skill.name, 150), path: skill.path as string }));
     this.phase = 'turn';
     if (this.abortRequested) throw abortError();
     const request = this.conn.request('turn/start', {
       threadId: this.threadId, input: [{ type: 'text', text: prompt, text_elements: [] }, ...skillInputs], cwd: session.worktreePath,
-      model: session.model, effort: session.effort, serviceTier, approvalPolicy: policy.approvalPolicy, approvalsReviewer: policy.approvalsReviewer, sandboxPolicy: policy.sandboxPolicy,
+      model: session.model, effort: session.effort, serviceTier, serviceTierForTurn, approvalPolicy: policy.approvalPolicy, approvalsReviewer: policy.approvalsReviewer, sandboxPolicy: policy.sandboxPolicy,
     }, this.ctx.timeouts.turnStartMs);
     request.then((result) => {
       const turn = isRecord(result) && isRecord(result.turn) ? result.turn : null;
