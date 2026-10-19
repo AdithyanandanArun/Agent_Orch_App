@@ -1,10 +1,10 @@
 import { build } from 'esbuild';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { access, chmod, copyFile, cp, mkdir, readdir, readFile, readlink, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { access, chmod, copyFile, cp, mkdir, readdir, readFile, readlink, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
-import { dirname, join, resolve, delimiter } from 'node:path';
+import { dirname, join, relative, resolve, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -73,10 +73,26 @@ await writeFile(join(appDir, 'package.json'), JSON.stringify({
 const workspace = join(stage, 'resources/workspace');
 const server = join(workspace, 'apps/server');
 await mkdir(dirname(server), { recursive: true });
-// Deployment copies only the runtime project and its production dependency graph, including workspace packages.
-await run('pnpm', ['--filter', '@relay/server', 'deploy', '--legacy', '--prod', server], { env: environment });
+// Deploy from an isolated copy so pnpm's production metadata never changes the developer checkout.
+const deployWorkspace = join(release, '.deploy-workspace');
+await rm(deployWorkspace, { recursive: true, force: true });
+await mkdir(deployWorkspace, { recursive: true });
+for (const file of ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml']) await copyFile(join(root, file), join(deployWorkspace, file));
+for (const project of ['apps/server', 'apps/web', 'apps/desktop', 'packages/contracts']) {
+  await mkdir(join(deployWorkspace, project), { recursive: true });
+  await copyFile(join(root, project, 'package.json'), join(deployWorkspace, project, 'package.json'));
+}
+for (const project of ['apps/server', 'packages/contracts']) await cp(join(root, project, 'src'), join(deployWorkspace, project, 'src'), { recursive: true });
+try {
+  // No source-workspace install is needed: deploy installs the selected production graph directly.
+  await run('pnpm', ['--config.verify-deps-before-run=false', '--dir', deployWorkspace, '--filter', '@relay/server', 'deploy', '--legacy', '--prod', server], { env: environment });
+} finally { await rm(deployWorkspace, { recursive: true, force: true }); }
 // Relay uses separately installed provider CLIs. Do not redistribute the optional native Claude CLI.
 const virtualStore = join(server, 'node_modules/.pnpm');
+// Legacy deploy hoists a self-reference to its source workspace. Keep that link inside the release.
+const selfLink = join(virtualStore, 'node_modules/@relay/server');
+await rm(selfLink, { force: true });
+await symlink(relative(dirname(selfLink), server), selfLink);
 for (const entry of await readdir(virtualStore)) {
   if (entry.startsWith('@anthropic-ai+claude-agent-sdk-linux-')) await rm(join(virtualStore, entry), { recursive: true, force: true });
 }

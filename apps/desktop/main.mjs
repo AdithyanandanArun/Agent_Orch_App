@@ -9,6 +9,10 @@ const root = app.isPackaged ? join(process.resourcesPath, 'workspace') : fileURL
 const runtimeNode = app.isPackaged ? join(process.resourcesPath, 'runtime/bin/node') : process.env.RELAY_NODE_EXECUTABLE || 'node';
 const serverRoot = join(root, 'apps/server');
 app.setName('Relay');
+if (process.platform === 'linux') {
+  app.setDesktopName('relay-workspace.desktop');
+  app.commandLine.appendSwitch('class', 'relay-workspace');
+}
 let backend;
 let quitting = false;
 let shutdownPending = false;
