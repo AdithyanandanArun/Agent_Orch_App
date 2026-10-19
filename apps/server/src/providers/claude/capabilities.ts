@@ -7,7 +7,7 @@ import { claudeEnvironment } from './auth.js';
 /** Provider-wide policies with a direct native Claude Code mode mapping. */
 export const CLAUDE_POLICIES: Policy[] = ['supervised', 'balanced', 'auto', 'full-access'];
 
-/** Permission policies that Claude Code can enforce through its native Agent SDK modes. */
+/** Effort values accepted by Claude Code's Agent SDK. */
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 
 async function* noPrompt(): AsyncGenerator<SDKUserMessage, void, unknown> {
@@ -29,6 +29,38 @@ export async function queryWithoutPrompt(settings: AppSettings, cwd: string, mod
     env: { ...claudeEnvironment(process.env), CLAUDE_AGENT_SDK_CLIENT_APP: 'relay/0.1.0' },
   };
   return query({ prompt: noPrompt(), options });
+}
+
+/** Run one metadata-only query with a hard deadline and close its CLI process on every exit path. */
+export async function withClaudeMetadataQuery<T>(
+  settings: AppSettings,
+  cwd: string,
+  model: string,
+  read: (activeQuery: Query) => Promise<T>,
+  timeoutMs = 15_000,
+): Promise<T> {
+  let activeQuery: Query | undefined;
+  let timedOut = false;
+  let timeout: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      timedOut = true;
+      activeQuery?.close();
+      reject(new Error(`Claude metadata discovery exceeded ${timeoutMs} ms.`));
+    }, timeoutMs);
+  });
+  try {
+    const startedQuery = queryWithoutPrompt(settings, cwd, model).then((query) => {
+      activeQuery = query;
+      if (timedOut) query.close();
+      return query;
+    });
+    const query = await Promise.race([startedQuery, deadline]);
+    return await Promise.race([read(query), deadline]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    try { activeQuery?.close(); } catch { /* process already closed */ }
+  }
 }
 
 /** Map the SDK's live model catalog to Relay metadata without advertising unsupported controls. */
@@ -61,13 +93,6 @@ export function claudeModelsFromSdk(models: ModelInfo[]): ProviderModel[] {
 
 /** Probe Claude Code's own available model catalog without issuing a user prompt. */
 export async function probeClaudeModels(settings: AppSettings): Promise<ProviderModel[]> {
-  const activeQuery = await queryWithoutPrompt(settings, tmpdir());
-  const timeout = setTimeout(() => activeQuery.close(), 15_000);
-  timeout.unref?.();
-  try {
-    return claudeModelsFromSdk(await activeQuery.supportedModels());
-  } finally {
-    clearTimeout(timeout);
-    activeQuery.close();
-  }
+  return withClaudeMetadataQuery(settings, tmpdir(), settings.defaultClaudeModel, async (activeQuery) =>
+    claudeModelsFromSdk((await activeQuery.supportedModels()).slice(0, 500)));
 }

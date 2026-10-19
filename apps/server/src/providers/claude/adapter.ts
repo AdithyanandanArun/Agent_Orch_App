@@ -17,6 +17,15 @@ export function resolveClaudeExecutable(settings: AppSettings, env: NodeJS.Proce
   return resolveExecutableCached({ name: 'claude', override: settings.claudeExecutable, env, extraCandidates: bundledClaudeCandidates() });
 }
 
+function promptWithSelectedClaudeSkill(prompt: string, skillName: string): string {
+  const escapedName = skillName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  let body = prompt.replace(new RegExp(`(^|\\s)\\$${escapedName}(?=$|\\s)`, 'g'), '$1');
+  body = body.replace(new RegExp(`^/\\$${escapedName}(?=$|\\s)`), '').trim();
+  if (!body) return `/${skillName}`;
+  if (new RegExp(`^/${escapedName}(?=$|\\s)`).test(body)) return body;
+  return `/${skillName} ${body}`;
+}
+
 async function loadSdkQuery(): Promise<QueryFn> {
   const sdk = await import('@anthropic-ai/claude-agent-sdk');
   return sdk.query as QueryFn;
@@ -38,7 +47,7 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): AgentAdapter 
       if (selectedSkill && (!selectedSkill.enabled || selectedSkill.source === 'user' || !selectedSkillName || !/^[A-Za-z0-9_.:-]+$/.test(selectedSkillName))) {
         throw new ProviderError('The selected Claude skill is unavailable or has an invalid name. Refresh the provider catalog and select a listed project skill.', { code: 'invalid_skill' });
       }
-      const prompt = selectedSkillName ? `/${selectedSkillName} ${run.prompt}` : run.prompt;
+      const prompt = selectedSkillName ? promptWithSelectedClaudeSkill(run.prompt, selectedSkillName) : run.prompt;
       if (session.effort !== 'none' && !['low', 'medium', 'high', 'xhigh', 'max'].includes(session.effort)) {
         throw new ProviderError(`Claude does not support reasoning effort "${session.effort}". Refresh the model capabilities and choose a listed effort.`, { code: 'unsupported_effort' });
       }

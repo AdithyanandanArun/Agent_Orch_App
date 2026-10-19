@@ -1,8 +1,6 @@
 import type { AdapterEvent, Policy, ToolActivity, ToolCategory } from '@relay/contracts';
 import { ProviderError, describeValue, isRecord, truncate } from '../common.js';
 
-export type ClaudePermissionMode = 'default' | 'acceptEdits';
-
 export type ClaudeSdkPermissionMode = 'default' | 'acceptEdits' | 'auto' | 'bypassPermissions';
 
 /** Relay policy names map directly to Claude Code permission modes. */
