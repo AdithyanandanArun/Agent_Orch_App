@@ -7,12 +7,12 @@ type Row = Record<string, unknown>;
 
 export const DEFAULT_SETTINGS: AppSettings = {
   defaultProvider: 'codex', defaultCodexModel: 'gpt-6.1-sol', defaultClaudeModel: 'claude-sonnet-5-5', defaultEffort: 'high', defaultIsolated: true,
-  defaultPolicy: 'supervised', theme: 'dark', claudeExecutable: '', codexExecutable: '',
+  defaultPolicy: 'supervised', defaultServiceTier: 'standard', theme: 'dark', claudeExecutable: '', codexExecutable: '',
 };
 
 export interface NewSession {
   id?: string; projectId: string; name: string; provider: Provider; model: string; effort: Session['effort']; policy: Policy; isolated: boolean;
-  worktreePath: string; branch: string | null; status?: SessionStatus;
+  worktreePath: string; branch: string | null; status?: SessionStatus; serviceTier?: string;
 }
 
 export interface NewTask { id?: string; projectId: string; title: string; description: string; acceptanceCriteria: string; sessionId: string | null; dependsOn: string[]; status: TaskStatus }
@@ -22,7 +22,7 @@ export type ChangeListener = (event: WorkspaceEvent | undefined) => void;
 const mapProject = (r: Row): Project => ({ id: r.id as string, name: r.name as string, path: r.path as string, createdAt: r.created_at as string, isExample: r.is_example === 1 });
 const mapSession = (r: Row): Session => ({
   id: r.id as string, projectId: r.project_id as string, name: r.name as string, provider: r.provider as Provider, model: r.model as string,
-  effort: r.effort as Session['effort'], status: r.status as SessionStatus, policy: r.policy as Policy, isolated: r.isolated === 1,
+  effort: r.effort as Session['effort'], status: r.status as SessionStatus, policy: r.policy as Policy, serviceTier: (r.service_tier as string) ?? 'standard', isolated: r.isolated === 1,
   worktreePath: r.worktree_path as string, branch: (r.branch as string | null) ?? null, providerSessionId: (r.provider_session_id as string | null) ?? null,
   createdAt: r.created_at as string, updatedAt: r.updated_at as string, error: (r.error as string | null) ?? null,
   pinned: r.pinned === 1, unread: r.unread === 1,
@@ -124,9 +124,9 @@ export class Store {
     const now = nowIso();
     const id = input.id ?? newId('ses');
     this.run(
-      `INSERT INTO sessions(id, project_id, name, provider, model, effort, status, policy, isolated, worktree_path, branch, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      id, input.projectId, input.name, input.provider, input.model, input.effort, input.status ?? 'idle', input.policy, input.isolated ? 1 : 0, input.worktreePath, input.branch, now, now,
+      `INSERT INTO sessions(id, project_id, name, provider, model, effort, status, policy, isolated, worktree_path, branch, created_at, updated_at, service_tier)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id, input.projectId, input.name, input.provider, input.model, input.effort, input.status ?? 'idle', input.policy, input.isolated ? 1 : 0, input.worktreePath, input.branch, now, now, input.serviceTier ?? 'standard',
     );
     return this.getSession(id)!;
   }
@@ -140,8 +140,8 @@ export class Store {
       : this.all('SELECT * FROM sessions WHERE archived_at IS NULL ORDER BY created_at ASC, rowid ASC');
     return rows.map(mapSession);
   }
-  updateSession(id: string, patch: Partial<Pick<Session, 'name' | 'provider' | 'model' | 'effort' | 'policy' | 'status' | 'error' | 'providerSessionId' | 'inputTokens' | 'outputTokens' | 'costUsd' | 'pinned' | 'unread'>>): Session {
-    const columns: Record<string, string> = { name: 'name', provider: 'provider', model: 'model', effort: 'effort', policy: 'policy', status: 'status', error: 'error', providerSessionId: 'provider_session_id', inputTokens: 'input_tokens', outputTokens: 'output_tokens', costUsd: 'cost_usd', pinned: 'pinned', unread: 'unread' };
+  updateSession(id: string, patch: Partial<Pick<Session, 'name' | 'provider' | 'model' | 'effort' | 'policy' | 'serviceTier' | 'status' | 'error' | 'providerSessionId' | 'inputTokens' | 'outputTokens' | 'costUsd' | 'pinned' | 'unread'>>): Session {
+    const columns: Record<string, string> = { name: 'name', provider: 'provider', model: 'model', effort: 'effort', policy: 'policy', serviceTier: 'service_tier', status: 'status', error: 'error', providerSessionId: 'provider_session_id', inputTokens: 'input_tokens', outputTokens: 'output_tokens', costUsd: 'cost_usd', pinned: 'pinned', unread: 'unread' };
     // Organizing a session does not count as conversation activity or change its recency.
     const activityChanged = Object.entries(patch).some(([key, value]) => value !== undefined && key !== 'pinned' && key !== 'unread');
     const sets: string[] = activityChanged ? ['updated_at = ?'] : [];
