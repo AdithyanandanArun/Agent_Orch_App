@@ -1,0 +1,213 @@
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import { z } from 'zod';
+import {
+  ApprovalDecisionSchema, CreateProjectSchema, CreateSessionSchema, CreateTaskSchema, HandoffSchema, SendMessageSchema, UpdateSettingsSchema, UpdateTaskSchema,
+} from '@relay/contracts';
+import type { Bootstrap } from '@relay/contracts';
+import { gitStatus } from './git.ts';
+import type { Hub } from './hub.ts';
+import { listDirectory, readTextFile, writeTextFile } from './paths.ts';
+import type { ProviderService } from './provider-service.ts';
+import type { SessionRuntime } from './runtime.ts';
+import type { Store } from './store.ts';
+import type { TaskService } from './tasks.ts';
+import type { HandoffService } from './handoffs.ts';
+import type { WorkspaceService } from './workspace.ts';
+import type { ServerConfig } from './config.ts';
+import type { TerminalManager } from './terminal.ts';
+import { HttpError, badRequest, notFound } from './util.ts';
+
+export interface Services {
+  config: ServerConfig; store: Store; hub: Hub; workspace: WorkspaceService; runtime: SessionRuntime; tasks: TaskService; handoffs: HandoffService;
+  providers: ProviderService; terminals: TerminalManager; startedAt: number; getPort: () => number;
+}
+
+export class Reply {
+  constructor(readonly status: number, readonly body: unknown) {}
+}
+
+interface Ctx { req: IncomingMessage; res: ServerResponse; url: URL; params: Record<string, string>; body<T>(schema: z.ZodType<T>): Promise<T> }
+type Handler = (ctx: Ctx) => Promise<unknown> | unknown;
+interface Route { method: string; regex: RegExp; keys: string[]; handler: Handler }
+
+const MAX_BODY_BYTES = 2 * 1024 * 1024;
+const ID = /^[A-Za-z0-9_.-]{1,100}$/;
+
+function compile(pattern: string): { regex: RegExp; keys: string[] } {
+  const keys: string[] = [];
+  const source = pattern.replace(/:([A-Za-z]+)/g, (_m, key: string) => { keys.push(key); return '([^/]+)'; });
+  return { regex: new RegExp(`^${source}$`), keys };
+}
+
+async function readBody(req: IncomingMessage): Promise<unknown> {
+  const declared = Number(req.headers['content-length'] ?? 0);
+  if (declared > MAX_BODY_BYTES) throw new HttpError(413, 'Request body is too large');
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += (chunk as Buffer).length;
+    if (size > MAX_BODY_BYTES) throw new HttpError(413, 'Request body is too large');
+    chunks.push(chunk as Buffer);
+  }
+  if (!size) return {};
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  } catch {
+    throw badRequest('Request body must be valid JSON');
+  }
+}
+
+export function parse<T>(schema: z.ZodType<T>, value: unknown): T {
+  const result = schema.safeParse(value);
+  if (result.success) return result.data;
+  const issue = result.error.issues[0];
+  const where = issue?.path.length ? `${issue.path.join('.')}: ` : '';
+  throw badRequest(`${where}${issue?.message ?? 'Invalid request'}`);
+}
+
+const executable = z.string().max(4096).refine((v) => !/[\0\r\n]/.test(v), 'Executable path contains control characters');
+const SettingsPatch = UpdateSettingsSchema.extend({ claudeExecutable: executable.optional(), codexExecutable: executable.optional() });
+const PatchSession = z.object({ name: z.string().trim().min(1).max(100) });
+const MessagesQuery = z.object({ limit: z.coerce.number().int().min(1).max(2000).optional(), before: z.string().max(100).optional() });
+const EventsQuery = z.object({ after: z.coerce.number().int().min(0).default(0), projectId: z.string().max(100).optional(), limit: z.coerce.number().int().min(1).max(5000).optional() });
+const WriteFile = z.object({ content: z.string() });
+
+export function buildRouter(s: Services) {
+  const routes: Route[] = [];
+  const add = (method: string, pattern: string, handler: Handler) => routes.push({ method, ...compile(pattern), handler });
+  const touch = () => s.store.touch();
+  const param = (ctx: Ctx, key: string) => {
+    const value = ctx.params[key]!;
+    if (!ID.test(value)) throw notFound('Not found');
+    return value;
+  };
+
+  add('GET', '/api/health', () => {
+    const counts = s.store.counts();
+    const cached = s.providers.cached();
+    return {
+      ok: true, version: s.config.version, node: process.version, startedAt: new Date(s.startedAt).toISOString(), uptimeSeconds: Math.round((Date.now() - s.startedAt) / 1000),
+      host: s.config.host, port: s.getPort(), dataDir: s.config.dataDir,
+      database: { ok: true, schemaVersion: s.store.schemaVersion(), ...counts },
+      runtime: { activeRuns: s.runtime.activeCount(), terminals: s.terminals.count, websocketClients: s.hub.clientCount },
+      providers: cached ? cached.map((p) => ({ id: p.id, available: p.available, version: p.version })) : null,
+      web: { served: Boolean(s.config.webDistDir) },
+    };
+  });
+
+  add('GET', '/api/bootstrap', async () => {
+    const providers = await s.providers.snapshot();
+    const body: Bootstrap = {
+      projects: s.store.listProjects(), sessions: s.store.listSessions(), messages: s.store.bootstrapMessages(300), tasks: s.store.listTasks(),
+      events: s.store.recentEvents(500), approvals: s.store.bootstrapApprovals(50), providers, settings: s.store.getSettings(), version: s.config.version,
+    };
+    return body;
+  });
+
+  add('GET', '/api/projects', () => s.store.listProjects());
+  add('POST', '/api/projects', async (ctx) => {
+    const { project, created } = await s.workspace.createProject(await ctx.body(CreateProjectSchema));
+    return new Reply(created ? 201 : 200, project);
+  });
+  add('GET', '/api/projects/:id/files', async (ctx) => {
+    const scope = s.workspace.resolveScope(param(ctx, 'id'), ctx.url.searchParams.get('sessionId') ?? undefined);
+    return listDirectory(scope.root, ctx.url.searchParams.get('path'));
+  });
+  add('GET', '/api/projects/:id/file', async (ctx) => {
+    const scope = s.workspace.resolveScope(param(ctx, 'id'), ctx.url.searchParams.get('sessionId') ?? undefined);
+    const rel = ctx.url.searchParams.get('path');
+    if (!rel) throw badRequest('path is required');
+    return readTextFile(scope.root, rel);
+  });
+  add('PUT', '/api/projects/:id/file', async (ctx) => {
+    const scope = s.workspace.resolveScope(param(ctx, 'id'), ctx.url.searchParams.get('sessionId') ?? undefined);
+    const rel = ctx.url.searchParams.get('path');
+    if (!rel) throw badRequest('path is required');
+    const { content } = await ctx.body(WriteFile);
+    const saved = await writeTextFile(scope.root, rel, content);
+    s.store.recordEvent({ projectId: scope.project.id, sessionId: scope.session?.id ?? null, type: 'file.saved', summary: `File saved: ${saved.path}`, payload: { path: saved.path, bytes: Buffer.byteLength(content) } });
+    return saved;
+  });
+  add('GET', '/api/projects/:id/git', async (ctx) => {
+    const scope = s.workspace.resolveScope(param(ctx, 'id'), ctx.url.searchParams.get('sessionId') ?? undefined);
+    return gitStatus(scope.root);
+  });
+
+  add('POST', '/api/sessions', async (ctx) => new Reply(201, await s.workspace.createSession(await ctx.body(CreateSessionSchema))));
+  add('PATCH', '/api/sessions/:id', async (ctx) => s.workspace.renameSession(param(ctx, 'id'), (await ctx.body(PatchSession)).name));
+  add('DELETE', '/api/sessions/:id', (ctx) => {
+    s.workspace.archiveSession(param(ctx, 'id'));
+    return { ok: true };
+  });
+  add('GET', '/api/sessions/:id/messages', (ctx) => {
+    const id = param(ctx, 'id');
+    if (!s.store.getSession(id)) throw notFound('Session not found');
+    const query = parse(MessagesQuery, Object.fromEntries(ctx.url.searchParams));
+    return s.store.listMessages(id, { limit: query.limit, beforeId: query.before });
+  });
+  add('POST', '/api/sessions/:id/messages', async (ctx) => {
+    const id = param(ctx, 'id');
+    const { content } = await ctx.body(SendMessageSchema);
+    s.runtime.start(id, content);
+    return new Reply(202, { accepted: true });
+  });
+  add('POST', '/api/sessions/:id/interrupt', (ctx) => {
+    const id = param(ctx, 'id');
+    if (!s.store.getSession(id)) throw notFound('Session not found');
+    s.runtime.interrupt(id);
+    return { ok: true };
+  });
+
+  add('POST', '/api/tasks', async (ctx) => new Reply(201, s.tasks.create(await ctx.body(CreateTaskSchema))));
+  add('PATCH', '/api/tasks/:id', async (ctx) => s.tasks.update(param(ctx, 'id'), await ctx.body(UpdateTaskSchema)));
+  add('POST', '/api/tasks/:id/run', (ctx) => {
+    const task = s.tasks.assertRunnable(param(ctx, 'id'));
+    const prompt = s.tasks.buildPrompt(task);
+    s.runtime.start(task.sessionId!, prompt, { taskId: task.id, userMessage: { content: prompt, kind: 'task' } });
+    return new Reply(202, { accepted: true });
+  });
+
+  add('POST', '/api/handoffs', async (ctx) => new Reply(201, await s.handoffs.create(await ctx.body(HandoffSchema))));
+  add('POST', '/api/approvals/:id', async (ctx) => s.runtime.decide(param(ctx, 'id'), (await ctx.body(ApprovalDecisionSchema)).decision));
+
+  add('GET', '/api/settings', () => s.store.getSettings());
+  add('PATCH', '/api/settings', async (ctx) => {
+    const patch = await ctx.body(SettingsPatch);
+    const before = s.store.getSettings();
+    const next = s.store.tx(() => {
+      const updated = s.store.updateSettings(patch);
+      s.store.recordEvent({ type: 'settings.updated', summary: 'Settings updated', payload: { fields: Object.keys(patch) } });
+      return updated;
+    });
+    if (before.claudeExecutable !== next.claudeExecutable || before.codexExecutable !== next.codexExecutable) s.providers.invalidate();
+    return next;
+  });
+  add('GET', '/api/providers', () => s.providers.list());
+  add('POST', '/api/providers/refresh', async () => {
+    const result = await s.providers.refresh();
+    touch();
+    return result;
+  });
+  add('GET', '/api/events', (ctx) => {
+    const query = parse(EventsQuery, Object.fromEntries(ctx.url.searchParams));
+    return s.store.listEvents({ after: query.after, projectId: query.projectId, limit: query.limit });
+  });
+
+  return async function dispatch(req: IncomingMessage, res: ServerResponse, url: URL): Promise<Reply> {
+    const method = (req.method ?? 'GET').toUpperCase();
+    let pathMatched = false;
+    for (const route of routes) {
+      const match = route.regex.exec(url.pathname);
+      if (!match) continue;
+      pathMatched = true;
+      if (route.method !== method && !(method === 'HEAD' && route.method === 'GET')) continue;
+      const params: Record<string, string> = {};
+      route.keys.forEach((key, i) => { params[key] = decodeURIComponent(match[i + 1]!); });
+      const ctx: Ctx = { req, res, url, params, body: async (schema) => parse(schema, await readBody(req)) };
+      const result = await route.handler(ctx);
+      return result instanceof Reply ? result : new Reply(200, result);
+    }
+    if (pathMatched) throw new HttpError(405, 'Method not allowed');
+    throw notFound('Unknown API route');
+  };
+}

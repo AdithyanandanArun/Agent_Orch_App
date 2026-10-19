@@ -1,0 +1,206 @@
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import path from 'node:path';
+import { ZodError } from 'zod';
+import { type ConfigOptions, type ServerConfig, resolveConfig } from './config.ts';
+import { openDatabase } from './db.ts';
+import { seedExampleWorkspace } from './example.ts';
+import { HandoffService } from './handoffs.ts';
+import { Hub } from './hub.ts';
+import { ProviderService } from './provider-service.ts';
+import { buildRouter, type Services } from './routes.ts';
+import { SessionRuntime, type RuntimeOptions } from './runtime.ts';
+import { Security } from './security.ts';
+import { serveStatic } from './static.ts';
+import { Store } from './store.ts';
+import { TaskService } from './tasks.ts';
+import { TerminalManager, type TerminalOptions } from './terminal.ts';
+import type { Logger, ProviderRuntime } from './types.ts';
+import { HttpError, errorMessage } from './util.ts';
+import { WorkspaceService } from './workspace.ts';
+
+export interface ApplicationOptions extends ConfigOptions {
+  /** Provider adapters and detection. Inject a fake in tests; the CLI entry passes ./providers/index.ts. */
+  providers: ProviderRuntime;
+  env?: NodeJS.ProcessEnv;
+  log?: Logger;
+  /** Create the labelled example workspace on first start (default true). */
+  exampleWorkspace?: boolean;
+  /** Probe provider executables in the background after start (default true). */
+  detectOnStart?: boolean;
+  runtime?: RuntimeOptions;
+  terminal?: TerminalOptions;
+}
+
+export interface RelayApplication {
+  readonly config: ServerConfig;
+  readonly store: Store;
+  readonly server: Server;
+  readonly runtime: SessionRuntime;
+  readonly terminals: TerminalManager;
+  readonly hub: Hub;
+  readonly providers: ProviderService;
+  /** Runs recovery-independent async setup (example workspace). Called by listen(); safe to call repeatedly. */
+  initialize(): Promise<void>;
+  listen(): Promise<{ host: string; port: number; url: string }>;
+  address(): { host: string; port: number; url: string };
+  /** Aborts runs, kills PTYs, closes sockets, the HTTP server and the database. Idempotent. */
+  close(): Promise<void>;
+}
+
+const defaultLogger: Logger = (level, message, detail) => {
+  const line = `[relay] ${message}${detail ? ` ${errorMessage(detail)}` : ''}`;
+  if (level === 'error') console.error(line);
+  else if (level === 'warn') console.warn(line);
+  else console.log(line);
+};
+
+/** Recovery for state left behind by a process that died or was stopped mid-run. */
+export function recoverInterruptedState(store: Store, log: Logger): { sessions: number; approvals: number; tasks: number; messages: number } {
+  return store.tx(() => {
+    const approvals = store.pendingApprovals();
+    for (const approval of approvals) {
+      const session = store.getSession(approval.sessionId, true);
+      store.resolveApproval(approval.id, 'denied', 'expired: server restarted');
+      store.recordEvent({ projectId: session?.projectId ?? null, sessionId: approval.sessionId, type: 'approval.expired', summary: `Approval expired after restart: ${approval.tool}`, payload: { approvalId: approval.id, reason: 'server restarted' } });
+    }
+    const sessions = store.sessionsInStatus(['running', 'waiting']);
+    for (const session of sessions) {
+      store.updateSession(session.id, { status: 'interrupted', error: 'The server restarted while this run was active.' });
+      store.insertMessage({ sessionId: session.id, role: 'system', kind: 'info', content: 'The Relay server restarted while this run was active. The run was interrupted; partial output above (if any) was kept.' });
+      store.recordEvent({ projectId: session.projectId, sessionId: session.id, type: 'session.run.interrupted', summary: `Run interrupted by restart: ${session.name}`, payload: { reason: 'server restarted' } });
+    }
+    const messages = store.finalizeStreamingMessages('partial');
+    const tasks = store.tasksInStatus('running');
+    for (const task of tasks) {
+      store.updateTask(task.id, { status: 'ready' });
+      store.recordEvent({ projectId: task.projectId, sessionId: task.sessionId, type: 'task.run.stopped', summary: `Task run interrupted by restart: ${task.title}`, payload: { taskId: task.id, outcome: 'interrupted' } });
+    }
+    if (approvals.length || sessions.length || tasks.length) log('warn', `Recovered from an unclean stop: ${sessions.length} runs, ${approvals.length} approvals, ${tasks.length} tasks`);
+    return { sessions: sessions.length, approvals: approvals.length, tasks: tasks.length, messages };
+  });
+}
+
+/**
+ * Builds the whole local runtime (database, services, HTTP + WebSocket server) without listening, so tests can pass a
+ * temporary `dataDir`, a fake `providers` implementation and `port: 0`.
+ */
+export function createApplication(options: ApplicationOptions): RelayApplication {
+  const log = options.log ?? defaultLogger;
+  const config = resolveConfig(options, options.env);
+  const store = new Store(openDatabase(path.join(config.dataDir, 'relay.sqlite')));
+  recoverInterruptedState(store, log);
+
+  let boundPort = config.port;
+  const security = new Security({ getPort: () => boundPort, webDevPort: config.webDevPort, extraOrigins: config.allowedOrigins });
+  const hub = new Hub(security, log);
+  const tasks = new TaskService(store);
+  const runtime = new SessionRuntime(store, hub, options.providers, tasks, log, options.runtime);
+  const terminals = new TerminalManager(store, hub, log, options.terminal);
+  const providers = new ProviderService(options.providers, () => store.getSettings(), log);
+  const services: Services = {
+    config, store, hub, runtime, tasks, terminals, providers, handoffs: new HandoffService(store), workspace: new WorkspaceService(store, config.dataDir, runtime),
+    startedAt: Date.now(), getPort: () => boundPort,
+  };
+  hub.bind({ onMessage: (socket, raw) => terminals.handleMessage(socket, raw), onClose: (socket) => terminals.releaseSocket(socket) });
+
+  // Coalesce delta-free state notifications; events are forwarded immediately and carry their record.
+  let pendingNotify: NodeJS.Timeout | null = null;
+  store.subscribe((event) => {
+    if (event) return hub.notify(event);
+    if (pendingNotify) return;
+    pendingNotify = setTimeout(() => { pendingNotify = null; hub.notify(); }, 60);
+  });
+
+  const dispatch = buildRouter(services);
+
+  const send = (res: ServerResponse, status: number, body: unknown) => {
+    const payload = JSON.stringify(body);
+    res.statusCode = status;
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Length', Buffer.byteLength(payload));
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.end(res.req?.method === 'HEAD' ? undefined : payload);
+  };
+
+  const handle = async (req: IncomingMessage, res: ServerResponse) => {
+    try {
+      const verdict = security.checkHttp(req);
+      if (!verdict.ok) return send(res, 403, { error: verdict.reason ?? 'Forbidden' });
+      const url = new URL(req.url ?? '/', 'http://relay.local');
+      if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
+        const reply = await dispatch(req, res, url);
+        return send(res, reply.status, reply.body);
+      }
+      if (url.pathname === '/ws') return send(res, 426, { error: 'WebSocket upgrade required' });
+      if (config.webDistDir && (await serveStatic(config.webDistDir, req, res, config.csp))) return;
+      if (res.headersSent) return;
+      send(res, 404, { error: config.webDistDir ? 'Not found' : 'The web app is not built. Run `pnpm build` or use the Vite dev server on port 5173.' });
+    } catch (error) {
+      if (res.headersSent) return void res.destroy();
+      if (error instanceof HttpError) return send(res, error.status, { error: error.message });
+      if (error instanceof ZodError) return send(res, 400, { error: error.issues[0]?.message ?? 'Invalid request' });
+      if (error instanceof URIError) return send(res, 400, { error: 'Malformed URL' });
+      log('error', `Unhandled error for ${req.method} ${req.url?.split('?')[0]}`, error);
+      send(res, 500, { error: 'Internal server error' });
+    }
+  };
+
+  const server = createServer((req, res) => { void handle(req, res); });
+  server.on('upgrade', (req, socket, head) => hub.handleUpgrade(req, socket, head));
+  server.on('clientError', (_error, socket) => socket.destroy());
+  server.requestTimeout = 60_000;
+  server.headersTimeout = 20_000;
+  hub.start();
+
+  let initialized: Promise<void> | null = null;
+  let closing: Promise<void> | null = null;
+
+  const address = () => ({ host: config.host, port: boundPort, url: `http://${config.host.includes(':') ? `[${config.host}]` : config.host}:${boundPort}` });
+
+  const app: RelayApplication = {
+    config, store, server, runtime, terminals, hub, providers,
+    initialize() {
+      initialized ??= (async () => {
+        if (options.exampleWorkspace !== false) await seedExampleWorkspace(store, config.dataDir, log);
+      })();
+      return initialized;
+    },
+    async listen() {
+      await app.initialize();
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(config.port, config.host, () => {
+          server.off('error', reject);
+          resolve();
+        });
+      });
+      boundPort = (server.address() as AddressInfo).port;
+      store.recordEvent({ type: 'runtime.started', summary: `Relay server started on ${address().url}`, payload: { version: config.version, port: boundPort } });
+      if (options.detectOnStart !== false) providers.warm();
+      return address();
+    },
+    address,
+    close() {
+      closing ??= (async () => {
+        if (pendingNotify) clearTimeout(pendingNotify);
+        await runtime.shutdown();
+        terminals.killAll();
+        await hub.close();
+        await new Promise<void>((resolve) => {
+          if (!server.listening) return resolve();
+          server.close(() => resolve());
+          server.closeIdleConnections();
+          setTimeout(() => { server.closeAllConnections(); }, 500).unref();
+        });
+        try { store.close(); } catch (error) { log('warn', 'Database close failed', error); }
+      })();
+      return closing;
+    },
+  };
+  return app;
+}
+
+/** Alias kept for tests and embedders that think in terms of "build a server". */
+export const buildServer = createApplication;
