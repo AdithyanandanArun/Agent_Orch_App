@@ -6,6 +6,7 @@ import type { TaskService } from './tasks.ts';
 import type { Logger, ProviderRuntime } from './types.ts';
 import { conflict, errorMessage, notFound, redactSecrets, truncate, newId, nowIso } from './util.ts';
 import { captureRunTree, compareRunTrees, unavailableRunChanges, type RunTreeSnapshot } from './run-changes.ts';
+import type { BrowserMcpBridge } from './browser-mcp.ts';
 
 export interface RuntimeOptions {
   /** Milliseconds to wait after an abort before declaring an unresponsive adapter interrupted. */
@@ -51,7 +52,7 @@ export class SessionRuntime {
 
   constructor(
     private readonly store: Store, private readonly hub: Hub, private readonly providers: ProviderRuntime, private readonly tasks: TaskService,
-    private readonly log: Logger, options: RuntimeOptions = {}, private readonly validateSession?: (session: Session) => void,
+    private readonly log: Logger, options: RuntimeOptions = {}, private readonly validateSession?: (session: Session) => void, private readonly browserMcp?: BrowserMcpBridge,
   ) {
     // Covers the supported adapters' interrupt grace and escalating process shutdown.
     this.abortGraceMs = options.abortGraceMs ?? 30_000;
@@ -106,6 +107,7 @@ export class SessionRuntime {
   private async execute(run: ActiveRun, startSession: Session, prompt: string): Promise<void> {
     let outcome: 'completed' | 'failed' | 'interrupted' = 'completed';
     let failure: string | null = null;
+    let browserToken: string | undefined;
     try {
       run.changeBaseline = await captureRunTree(startSession.worktreePath);
       if (run.controller.signal.aborted) {
@@ -114,9 +116,12 @@ export class SessionRuntime {
       }
       const adapter = this.providers.createAdapter(startSession.provider);
       const session = this.store.getSession(run.sessionId) ?? startSession;
+      const settings = this.store.getSettings();
+      const browserMcp = settings.browserAgentEnabled !== false ? this.browserMcp?.create(run.id, session, run.controller.signal, (request) => this.requestApproval(run, request)) : undefined;
+      browserToken = browserMcp?.token;
       const adapterRun = Promise.resolve().then(() => adapter.run({
-        session, prompt, skills: run.skills, signal: run.controller.signal, settings: this.store.getSettings(),
-        onEvent: (event) => this.handleEvent(run, event),
+        session, prompt, skills: run.skills, browserMcp, signal: run.controller.signal, settings,
+        onEvent: (event) => this.handleEvent(run, browserToken ? JSON.parse(JSON.stringify(event).split(browserToken).join('[redacted]')) as AdapterEvent : event),
         requestApproval: (request) => this.requestApproval(run, request),
       }));
       const grace = new Promise<'grace'>((resolve) => {
@@ -135,9 +140,11 @@ export class SessionRuntime {
       if (run.controller.signal.aborted) outcome = 'interrupted';
       else {
         outcome = 'failed';
-        failure = truncate(redactSecrets(errorMessage(error)), 4000);
+        const detail = redactSecrets(errorMessage(error));
+        failure = truncate(browserToken ? detail.split(browserToken).join('[redacted]') : detail, 4000);
       }
     }
+    this.browserMcp?.revoke(run.id);
     let changes: RunChanges;
     try {
       changes = run.cleanupPending

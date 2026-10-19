@@ -57,7 +57,7 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): AgentAdapter 
       }
       const compactPercent = autoCompactPercent(settings);
       const childEnv = { ...claudeEnvironment(env), ...claudeCompactEnv(compactPercent) };
-      const secrets = [childEnv.ANTHROPIC_API_KEY, childEnv.CLAUDE_CODE_OAUTH_TOKEN, childEnv.ANTHROPIC_AUTH_TOKEN];
+      const secrets = [childEnv.ANTHROPIC_API_KEY, childEnv.CLAUDE_CODE_OAUTH_TOKEN, childEnv.ANTHROPIC_AUTH_TOKEN, run.browserMcp?.token];
       const resolved = await resolveBinary(settings, env);
       if (!resolved.ok) throw new ProviderError(resolved.reason, { code: 'executable_unavailable' });
       if (signal.aborted) throw abortError();
@@ -70,6 +70,8 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): AgentAdapter 
       // Never allow a tool call to proceed on an approval that has not been answered, and never past an abort.
       const canUseTool = async (toolName: string, input: Record<string, unknown>, context: { signal: AbortSignal; title?: string }): Promise<PermissionResult> => {
         if (signal.aborted || context.signal.aborted) return { behavior: 'deny', message: 'The run was interrupted.', interrupt: true };
+        // Relay's authenticated browser gateway enforces this run's policy and shared-control ownership.
+        if (run.browserMcp && toolName.startsWith('mcp__relay_browser__')) return { behavior: 'allow', updatedInput: input };
         if (toolName === 'AskUserQuestion') {
           return { behavior: 'deny', message: 'Interactive questions are not available in this environment. Continue with your best judgement and note any assumptions in your reply.' };
         }
@@ -111,6 +113,7 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): AgentAdapter 
         env: { ...childEnv, CLAUDE_AGENT_SDK_CLIENT_APP: 'relay/0.1.0' },
         stderr: (data: string) => stderr.push(data),
         ...(session.providerSessionId ? { resume: session.providerSessionId } : {}),
+        ...(run.browserMcp ? { mcpServers: { relay_browser: { type: 'http' as const, url: run.browserMcp.url, headers: { Authorization: `Bearer ${run.browserMcp.token}` } } } } : {}),
       };
 
       const emit = (event: AdapterEvent): void => {

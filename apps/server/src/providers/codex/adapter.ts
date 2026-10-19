@@ -129,6 +129,7 @@ class CodexRun {
   async execute(): Promise<void> {
     const { session, signal } = this.options;
     const env = cleanEnv(this.ctx.env, ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN']);
+    if (this.options.browserMcp) env.RELAY_BROWSER_MCP_TOKEN = this.options.browserMcp.token;
     this.child = this.ctx.spawn(this.executable, ['app-server'], {
       cwd: session.worktreePath, env, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsHide: true,
     });
@@ -236,7 +237,12 @@ class CodexRun {
       });
       if (this.compaction.notice) this.info(this.compaction.notice);
     }
-    const threadConfig = this.compaction && Object.keys(this.compaction.config).length > 0 ? { config: this.compaction.config } : {};
+    const overrides: Record<string, unknown> = { ...this.compaction?.config };
+    if (this.options.browserMcp) overrides['mcp_servers.relay_browser'] = {
+      url: this.options.browserMcp.url, bearer_token_env_var: 'RELAY_BROWSER_MCP_TOKEN', enabled: true,
+      startup_timeout_sec: 15, tool_timeout_sec: 30, default_tools_approval_mode: 'approve',
+    };
+    const threadConfig = Object.keys(overrides).length ? { config: overrides } : {};
     let result: unknown;
     if (session.providerSessionId) {
       // A failed resume is an error: silently starting a fresh thread would drop the conversation.
