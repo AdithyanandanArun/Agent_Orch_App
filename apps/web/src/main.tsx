@@ -6,6 +6,7 @@ import './styles/ui.css';
 import './styles/app.css';
 import './styles/select-menu.css';
 import './styles/settings.css';
+import './styles/conversation.css';
 import { App } from './App';
 import { Boundary } from './components/ui';
 
