@@ -1,0 +1,509 @@
+import { create } from 'zustand';
+import type { Approval, Bootstrap, Message, Project, ServerEvent, ClientEvent, Session, Task, WorkspaceEvent } from '@relay/contracts';
+import { api, errorMessage } from '../lib/api';
+import { terminalBus } from './terminalBus';
+
+export type View = 'workspace' | 'tasks' | 'activity' | 'map';
+export type ContextTab = 'overview' | 'files' | 'changes' | 'preview';
+export type Scope = 'session' | 'project';
+export type Connection = 'connecting' | 'online' | 'offline';
+export type TerminalStatus = 'idle' | 'starting' | 'running' | 'exited' | 'lost';
+
+export type Dialog =
+  | { kind: 'project' }
+  | { kind: 'session' }
+  | { kind: 'task' }
+  | { kind: 'handoff'; taskId?: string; fromSessionId?: string }
+  | { kind: 'settings' }
+  | { kind: 'palette' }
+  | { kind: 'rename'; sessionId: string }
+  | { kind: 'archive'; sessionId: string }
+  | { kind: 'shortcuts' };
+
+export interface Toast { id: number; tone: 'info' | 'success' | 'error'; text: string }
+export interface StreamEntry { sessionId: string; base: string; text: string }
+
+export interface TerminalState {
+  status: TerminalStatus;
+  terminalId: string | null;
+  exitCode: number | null;
+  projectId: string | null;
+  sessionId: string | null;
+  label: string;
+  note: string | null;
+}
+
+const LS = 'relay.ui.v1';
+interface Persisted {
+  activeProjectId?: string; sessionByProject?: Record<string, string>; view?: View; contextTab?: ContextTab;
+  contextOpen?: boolean; terminalOpen?: boolean; terminalHeight?: number; scope?: Scope;
+}
+const loadPersisted = (): Persisted => {
+  try {
+    return JSON.parse(localStorage.getItem(LS) ?? '{}') as Persisted;
+  } catch {
+    return {};
+  }
+};
+const persisted = loadPersisted();
+const wide = typeof window === 'undefined' ? true : window.innerWidth >= 1240;
+
+interface RelayState {
+  boot: Bootstrap | null;
+  bootError: string | null;
+  bootLoading: boolean;
+  staleError: string | null;
+  connection: Connection;
+  attempt: number;
+  nextRetryAt: number | null;
+
+  activeProjectId: string | null;
+  sessionByProject: Record<string, string>;
+  view: View;
+  contextTab: ContextTab;
+  contextOpen: boolean;
+  terminalOpen: boolean;
+  terminalHeight: number;
+  sidebarOpen: boolean;
+  scope: Scope;
+  dialog: Dialog | null;
+  selectedTaskId: string | null;
+  centerTab: string;
+  mapSelection: string | null;
+
+  streams: Record<string, StreamEntry>;
+  drafts: Record<string, string>;
+  toasts: Toast[];
+  terminal: TerminalState;
+
+  init(): void;
+  refreshNow(): Promise<void>;
+  reconnect(): void;
+  setView(view: View): void;
+  setContextTab(tab: ContextTab): void;
+  toggleContext(open?: boolean): void;
+  toggleTerminal(open?: boolean): void;
+  setTerminalHeight(h: number): void;
+  setSidebarOpen(open: boolean): void;
+  setScope(scope: Scope): void;
+  openDialog(d: Dialog): void;
+  closeDialog(): void;
+  selectProject(id: string): void;
+  selectSession(id: string): void;
+  selectTask(id: string | null): void;
+  setCenterTab(key: string): void;
+  setMapSelection(id: string | null): void;
+  setDraft(sessionId: string, text: string): void;
+  toast(tone: Toast['tone'], text: string): void;
+  dismissToast(id: number): void;
+  startTerminal(cols: number, rows: number): void;
+  stopTerminal(): void;
+  sendTerminalInput(data: string): void;
+  resizeTerminal(cols: number, rows: number): void;
+}
+
+const sameValue = (a: unknown, b: unknown): boolean => a === b || (typeof a === 'object' && typeof b === 'object' && JSON.stringify(a) === JSON.stringify(b));
+const sameItem = <T extends object>(a: T, b: T): boolean => {
+  const ka = Object.keys(a) as (keyof T)[];
+  if (ka.length !== Object.keys(b).length) return false;
+  return ka.every((k) => sameValue(a[k], b[k]));
+};
+
+/** Reuses previous object references for unchanged items so unrelated components do not re-render. */
+function reconcile<T extends { id: string | number }>(prev: T[] | undefined, next: T[]): T[] {
+  if (!prev) return next;
+  const old = new Map(prev.map((p) => [p.id, p]));
+  let changed = prev.length !== next.length;
+  const out = next.map((n, i) => {
+    const o = old.get(n.id);
+    if (o && sameItem(o, n)) {
+      if (prev[i] !== o) changed = true;
+      return o;
+    }
+    changed = true;
+    return n;
+  });
+  return changed ? out : prev;
+}
+
+function reconcileBootstrap(prev: Bootstrap | null, next: Bootstrap): Bootstrap {
+  if (!prev) return next;
+  return {
+    ...next,
+    projects: reconcile<Project>(prev.projects, next.projects),
+    sessions: reconcile<Session>(prev.sessions, next.sessions),
+    messages: reconcile<Message>(prev.messages, next.messages),
+    tasks: reconcile<Task>(prev.tasks, next.tasks),
+    events: reconcile<WorkspaceEvent>(prev.events, next.events),
+    approvals: reconcile<Approval>(prev.approvals, next.approvals),
+    providers: reconcile(prev.providers, next.providers),
+    settings: sameItem(prev.settings, next.settings) ? prev.settings : next.settings,
+  };
+}
+
+/** Choose valid selections without disturbing choices that are still valid. */
+function resolveSelection(s: Pick<RelayState, 'activeProjectId' | 'sessionByProject'>, boot: Bootstrap): Pick<RelayState, 'activeProjectId' | 'sessionByProject'> {
+  let projectId = s.activeProjectId;
+  if (!projectId || !boot.projects.some((p) => p.id === projectId)) {
+    projectId = (boot.projects.find((p) => p.isExample) ?? boot.projects[0])?.id ?? null;
+  }
+  const map = { ...s.sessionByProject };
+  let changed = false;
+  for (const p of boot.projects) {
+    const sessions = boot.sessions.filter((x) => x.projectId === p.id);
+    const cur = map[p.id];
+    if (cur && sessions.some((x) => x.id === cur)) continue;
+    if (!cur && p.id !== projectId) continue;
+    const pick = sessions.slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+    if (pick) map[p.id] = pick.id;
+    else delete map[p.id];
+    changed = true;
+  }
+  return { activeProjectId: projectId, sessionByProject: changed ? map : s.sessionByProject };
+}
+
+/** Drop stream buffers the server snapshot has already caught up with. */
+function pruneStreams(streams: Record<string, StreamEntry>, boot: Bootstrap): Record<string, StreamEntry> {
+  let changed = false;
+  const out: Record<string, StreamEntry> = {};
+  for (const [id, entry] of Object.entries(streams)) {
+    const msg = boot.messages.find((m) => m.id === id);
+    const session = boot.sessions.find((x) => x.id === entry.sessionId);
+    const caughtUp = msg && msg.content.length >= (entry.base + entry.text).length;
+    const orphan = !msg && session && session.status !== 'running';
+    if (caughtUp || orphan || !session) {
+      changed = true;
+      continue;
+    }
+    out[id] = entry;
+  }
+  return changed ? out : streams;
+}
+
+let socket: WebSocket | null = null;
+let retryTimer: number | undefined;
+let refreshTimer: number | undefined;
+let refreshFirstQueuedAt = 0;
+let inflight = false;
+let dirty = false;
+let toastSeq = 1;
+let pendingInput = '';
+let pendingResize: { cols: number; rows: number } | null = null;
+let abandonedStarts = 0;
+let started = false;
+
+const stripAnsi = (v: string): string => v.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\r/g, '').trim();
+const wsUrl = (): string => `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
+const send = (event: ClientEvent): boolean => {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+  socket.send(JSON.stringify(event));
+  return true;
+};
+
+export const useRelay = create<RelayState>((set, get) => {
+  const savePersisted = (): void => {
+    const s = get();
+    const data: Persisted = {
+      activeProjectId: s.activeProjectId ?? undefined, sessionByProject: s.sessionByProject, view: s.view, contextTab: s.contextTab,
+      contextOpen: s.contextOpen, terminalOpen: s.terminalOpen, terminalHeight: s.terminalHeight, scope: s.scope,
+    };
+    try {
+      localStorage.setItem(LS, JSON.stringify(data));
+    } catch {
+      /* storage may be unavailable */
+    }
+  };
+  const patch = (p: Partial<RelayState>): void => {
+    set(p);
+    savePersisted();
+  };
+
+  const scheduleRefresh = (): void => {
+    const now = Date.now();
+    if (!refreshTimer) refreshFirstQueuedAt = now;
+    window.clearTimeout(refreshTimer);
+    // Debounce bursts of state.changed, but never starve the UI during a long stream.
+    const wait = Math.max(0, Math.min(180, 1200 - (now - refreshFirstQueuedAt)));
+    refreshTimer = window.setTimeout(() => {
+      refreshTimer = undefined;
+      void get().refreshNow();
+    }, wait);
+  };
+
+  const markTerminalLost = (): void => {
+    const t = get().terminal;
+    if (t.status === 'running' || t.status === 'starting') {
+      set({ terminal: { ...t, status: 'lost', terminalId: null } });
+    }
+    pendingInput = '';
+    abandonedStarts = 0;
+  };
+
+  const scheduleReconnect = (): void => {
+    window.clearTimeout(retryTimer);
+    const attempt = get().attempt + 1;
+    const delay = Math.min(500 * 2 ** (attempt - 1), 15_000) + Math.random() * 250;
+    set({ attempt, nextRetryAt: Date.now() + delay, connection: 'offline' });
+    retryTimer = window.setTimeout(connect, delay);
+  };
+
+  const handleServerEvent = (ev: ServerEvent): void => {
+    switch (ev.type) {
+      case 'state.changed': {
+        const incoming = ev.event;
+        const boot = get().boot;
+        if (incoming && boot && !boot.events.some((e) => e.id === incoming.id)) {
+          set({ boot: { ...boot, events: [...boot.events, incoming] } });
+        }
+        scheduleRefresh();
+        break;
+      }
+      case 'session.delta': {
+        const { streams, boot } = get();
+        const existing = streams[ev.messageId];
+        const base = existing ? existing.base : boot?.messages.find((m) => m.id === ev.messageId)?.content ?? '';
+        set({ streams: { ...streams, [ev.messageId]: { sessionId: ev.sessionId, base, text: (existing?.text ?? '') + ev.delta } } });
+        break;
+      }
+      case 'terminal.ready': {
+        const t = get().terminal;
+        if (abandonedStarts > 0 || t.status !== 'starting') {
+          // A start we already gave up on (restart/stop while starting): release the orphaned PTY.
+          abandonedStarts = Math.max(0, abandonedStarts - 1);
+          send({ type: 'terminal.stop', terminalId: ev.terminalId });
+          break;
+        }
+        set({ terminal: { ...t, status: 'running', terminalId: ev.terminalId } });
+        if (pendingResize) send({ type: 'terminal.resize', terminalId: ev.terminalId, ...pendingResize });
+        if (pendingInput) send({ type: 'terminal.input', terminalId: ev.terminalId, data: pendingInput });
+        pendingInput = '';
+        break;
+      }
+      case 'terminal.output': {
+        const t = get().terminal;
+        if (t.terminalId === ev.terminalId) terminalBus.push(ev.data);
+        else if (t.status === 'starting' && !t.terminalId) {
+          // The server reports a failed start as output + exit on an id that never got a ready frame.
+          set({ terminal: { ...t, terminalId: ev.terminalId, note: `${t.note ?? ''}${stripAnsi(ev.data)}`.trim() } });
+        }
+        break;
+      }
+      case 'terminal.exit': {
+        const t = get().terminal;
+        if (t.terminalId === ev.terminalId) {
+          set({ terminal: { ...t, status: t.status === 'starting' ? 'lost' : 'exited', exitCode: ev.exitCode } });
+        } else if (abandonedStarts > 0 && ev.exitCode === -1) {
+          abandonedStarts -= 1;
+        }
+        break;
+      }
+    }
+  };
+
+  const connect = (): void => {
+    window.clearTimeout(retryTimer);
+    if (socket && socket.readyState <= WebSocket.OPEN) return;
+    set({ connection: 'connecting', nextRetryAt: null });
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(wsUrl());
+    } catch {
+      scheduleReconnect();
+      return;
+    }
+    socket = ws;
+    ws.onopen = () => {
+      if (socket !== ws) return;
+      // Deltas missed while disconnected would leave gaps, so rebuild from the server snapshot.
+      set({ connection: 'online', attempt: 0, nextRetryAt: null, streams: {} });
+      void get().refreshNow();
+    };
+    ws.onmessage = (msg) => {
+      if (typeof msg.data !== 'string') return;
+      try {
+        handleServerEvent(JSON.parse(msg.data) as ServerEvent);
+      } catch {
+        /* ignore malformed frames */
+      }
+    };
+    ws.onclose = () => {
+      if (socket !== ws) return;
+      socket = null;
+      markTerminalLost();
+      scheduleReconnect();
+    };
+    ws.onerror = () => {
+      /* close follows; reconnect handled there */
+    };
+  };
+
+  const initialTerminal: TerminalState = { status: 'idle', terminalId: null, exitCode: null, projectId: null, sessionId: null, label: '', note: null };
+
+  return {
+    boot: null,
+    bootError: null,
+    bootLoading: true,
+    staleError: null,
+    connection: 'connecting',
+    attempt: 0,
+    nextRetryAt: null,
+
+    activeProjectId: persisted.activeProjectId ?? null,
+    sessionByProject: persisted.sessionByProject ?? {},
+    view: persisted.view ?? 'workspace',
+    contextTab: persisted.contextTab ?? 'overview',
+    contextOpen: wide ? persisted.contextOpen ?? true : false,
+    terminalOpen: persisted.terminalOpen ?? false,
+    terminalHeight: persisted.terminalHeight ?? 260,
+    sidebarOpen: false,
+    scope: persisted.scope ?? 'session',
+    dialog: null,
+    selectedTaskId: null,
+    centerTab: 'session',
+    mapSelection: null,
+
+    streams: {},
+    drafts: {},
+    toasts: [],
+    terminal: initialTerminal,
+
+    init() {
+      if (started) return;
+      started = true;
+      connect();
+      void get().refreshNow();
+      window.addEventListener('online', () => get().reconnect());
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && get().connection !== 'online') get().reconnect();
+      });
+    },
+
+    async refreshNow() {
+      if (inflight) {
+        dirty = true;
+        return;
+      }
+      inflight = true;
+      try {
+        do {
+          dirty = false;
+          try {
+            const next = await api.bootstrap();
+            const s = get();
+            const boot = reconcileBootstrap(s.boot, next);
+            const sel = resolveSelection(s, boot);
+            set({ boot, bootError: null, staleError: null, bootLoading: false, streams: pruneStreams(s.streams, boot), ...sel });
+            savePersisted();
+          } catch (e) {
+            const msg = errorMessage(e);
+            if (get().boot) set({ staleError: msg, bootLoading: false });
+            else set({ bootError: msg, bootLoading: false });
+          }
+        } while (dirty);
+      } finally {
+        inflight = false;
+      }
+    },
+
+    reconnect() {
+      window.clearTimeout(retryTimer);
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        void get().refreshNow();
+        return;
+      }
+      if (socket) {
+        socket.onclose = null;
+        socket.close();
+        socket = null;
+      }
+      set({ attempt: 0 });
+      connect();
+      void get().refreshNow();
+    },
+
+    setView: (view) => patch({ view, sidebarOpen: false }),
+    setContextTab: (contextTab) => patch({ contextTab, contextOpen: true }),
+    toggleContext: (open) => patch({ contextOpen: open ?? !get().contextOpen }),
+    toggleTerminal: (open) => patch({ terminalOpen: open ?? !get().terminalOpen, view: 'workspace' }),
+    setTerminalHeight: (terminalHeight) => patch({ terminalHeight }),
+    setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
+    setScope: (scope) => patch({ scope }),
+    openDialog: (dialog) => set({ dialog }),
+    closeDialog: () => set({ dialog: null }),
+
+    selectProject(id) {
+      const { boot, sessionByProject } = get();
+      if (!boot?.projects.some((p) => p.id === id)) return;
+      const sessions = boot.sessions.filter((s) => s.projectId === id);
+      const remembered = sessionByProject[id];
+      const pick = sessions.find((s) => s.id === remembered) ?? sessions[0];
+      patch({
+        activeProjectId: id, centerTab: 'session', sidebarOpen: false,
+        sessionByProject: pick ? { ...sessionByProject, [id]: pick.id } : sessionByProject,
+      });
+    },
+    selectSession(id) {
+      const s = get().boot?.sessions.find((x) => x.id === id);
+      if (!s) return;
+      patch({
+        activeProjectId: s.projectId, sessionByProject: { ...get().sessionByProject, [s.projectId]: id },
+        view: 'workspace', centerTab: 'session', sidebarOpen: false,
+      });
+    },
+    selectTask: (selectedTaskId) => set({ selectedTaskId }),
+    setCenterTab: (centerTab) => set({ centerTab }),
+    setMapSelection: (mapSelection) => set({ mapSelection }),
+    setDraft: (sessionId, text) => set((s) => ({ drafts: { ...s.drafts, [sessionId]: text } })),
+
+    toast(tone, text) {
+      const id = toastSeq++;
+      set((s) => ({ toasts: [...s.toasts.slice(-3), { id, tone, text }] }));
+      window.setTimeout(() => get().dismissToast(id), tone === 'error' ? 8000 : 4000);
+    },
+    dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
+
+    startTerminal(cols, rows) {
+      const s = get();
+      if (s.terminal.status === 'starting' || s.terminal.status === 'running') return;
+      const project = s.boot?.projects.find((p) => p.id === s.activeProjectId);
+      if (!project) return;
+      const session = s.scope === 'session' ? s.boot?.sessions.find((x) => x.id === s.sessionByProject[project.id]) : undefined;
+      terminalBus.reset();
+      pendingInput = '';
+      pendingResize = { cols, rows };
+      const ok = send({ type: 'terminal.start', projectId: project.id, sessionId: session?.id, cols, rows });
+      set({
+        terminal: {
+          status: ok ? 'starting' : 'lost', terminalId: null, exitCode: null, projectId: project.id, sessionId: session?.id ?? null,
+          label: session ? `${session.name} · ${session.isolated ? 'worktree' : 'project folder'}` : `${project.name} · project folder`,
+          note: ok ? null : 'Not connected to the server.',
+        },
+      });
+    },
+    stopTerminal() {
+      const t = get().terminal;
+      if (t.status === 'starting') abandonedStarts += 1;
+      if (t.terminalId) send({ type: 'terminal.stop', terminalId: t.terminalId });
+      set({ terminal: { ...initialTerminal } });
+    },
+    sendTerminalInput(data) {
+      const t = get().terminal;
+      if (t.status === 'running' && t.terminalId) send({ type: 'terminal.input', terminalId: t.terminalId, data });
+      else if (t.status === 'starting') pendingInput += data;
+    },
+    resizeTerminal(cols, rows) {
+      pendingResize = { cols, rows };
+      const t = get().terminal;
+      if (t.status === 'running' && t.terminalId) send({ type: 'terminal.resize', terminalId: t.terminalId, cols, rows });
+    },
+  };
+});
+
+/* Selectors */
+export const useProject = (): Project | undefined =>
+  useRelay((s) => s.boot?.projects.find((p) => p.id === s.activeProjectId));
+export const useActiveSession = (): Session | undefined =>
+  useRelay((s) => {
+    const id = s.activeProjectId ? s.sessionByProject[s.activeProjectId] : undefined;
+    return id ? s.boot?.sessions.find((x) => x.id === id) : undefined;
+  });

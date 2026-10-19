@@ -1,0 +1,137 @@
+/* Relay design tokens — near-black blue slate with a restrained lavender accent. */
+:root,
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg-app: #090a0f;
+  --bg-sidebar: #0c0e14;
+  --bg-panel: #0f1118;
+  --bg-surface: #141722;
+  --bg-raised: #1a1e2c;
+  --bg-hover: rgba(160, 170, 220, 0.07);
+  --bg-active: rgba(160, 170, 220, 0.12);
+  --bg-inset: #0b0d13;
+  --bg-overlay: rgba(5, 6, 10, 0.66);
+
+  --line-soft: rgba(150, 160, 210, 0.08);
+  --line: rgba(150, 160, 210, 0.14);
+  --line-strong: rgba(150, 160, 210, 0.24);
+
+  --fg-0: #eceef6;
+  --fg-1: #bcc1d4;
+  --fg-2: #848ba3;
+  --fg-3: #5c6379;
+  --fg-on-accent: #120f26;
+
+  --accent: #b2a5ff;
+  --accent-strong: #c6bcff;
+  --accent-dim: #8b7df0;
+  --accent-soft: rgba(178, 165, 255, 0.12);
+  --accent-line: rgba(178, 165, 255, 0.38);
+
+  --ok: #78d6ae;
+  --ok-soft: rgba(120, 214, 174, 0.12);
+  --warn: #f1c26d;
+  --warn-soft: rgba(241, 194, 109, 0.12);
+  --err: #ff8296;
+  --err-soft: rgba(255, 130, 150, 0.12);
+  --info: #7fc3f5;
+  --info-soft: rgba(127, 195, 245, 0.12);
+
+  --codex: #79d8c2;
+  --claude: #f0a984;
+
+  --diff-add-bg: rgba(120, 214, 174, 0.1);
+  --diff-del-bg: rgba(255, 130, 150, 0.1);
+
+  --shadow-pop: 0 18px 50px -12px rgba(0, 0, 0, 0.7), 0 0 0 1px var(--line);
+  --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.025) inset, 0 1px 2px rgba(0, 0, 0, 0.3);
+
+  --scroll-thumb: rgba(150, 160, 210, 0.16);
+  --scroll-thumb-hover: rgba(150, 160, 210, 0.3);
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --bg-app: #f6f6fa;
+  --bg-sidebar: #eeeef5;
+  --bg-panel: #f9f9fc;
+  --bg-surface: #ffffff;
+  --bg-raised: #ffffff;
+  --bg-hover: rgba(40, 45, 90, 0.05);
+  --bg-active: rgba(40, 45, 90, 0.09);
+  --bg-inset: #eceef6;
+  --bg-overlay: rgba(30, 32, 52, 0.38);
+
+  --line-soft: rgba(40, 45, 90, 0.07);
+  --line: rgba(40, 45, 90, 0.13);
+  --line-strong: rgba(40, 45, 90, 0.24);
+
+  --fg-0: #14162a;
+  --fg-1: #3a3e58;
+  --fg-2: #666b86;
+  --fg-3: #8d92aa;
+  --fg-on-accent: #ffffff;
+
+  --accent: #6c5ce0;
+  --accent-strong: #5646cf;
+  --accent-dim: #7f70ea;
+  --accent-soft: rgba(108, 92, 224, 0.1);
+  --accent-line: rgba(108, 92, 224, 0.4);
+
+  --ok: #1d8f66;
+  --ok-soft: rgba(29, 143, 102, 0.1);
+  --warn: #a46a05;
+  --warn-soft: rgba(164, 106, 5, 0.1);
+  --err: #cc3550;
+  --err-soft: rgba(204, 53, 80, 0.09);
+  --info: #1f78b8;
+  --info-soft: rgba(31, 120, 184, 0.09);
+
+  --codex: #12806a;
+  --claude: #c0592c;
+
+  --diff-add-bg: rgba(29, 143, 102, 0.1);
+  --diff-del-bg: rgba(204, 53, 80, 0.09);
+
+  --shadow-pop: 0 18px 50px -14px rgba(30, 32, 70, 0.3), 0 0 0 1px var(--line);
+  --shadow-card: 0 1px 2px rgba(30, 32, 70, 0.06);
+
+  --scroll-thumb: rgba(40, 45, 90, 0.18);
+  --scroll-thumb-hover: rgba(40, 45, 90, 0.32);
+}
+
+:root {
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+
+  --text-2xs: 10.5px;
+  --text-xs: 11.5px;
+  --text-sm: 12.5px;
+  --text-md: 13.5px;
+  --text-lg: 15px;
+  --text-xl: 18px;
+  --text-2xl: 22px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  --radius-xs: 5px;
+  --radius-sm: 7px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+
+  --sidebar-w: 264px;
+  --context-w: 388px;
+  --header-h: 48px;
+
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --dur-fast: 120ms;
+  --dur: 200ms;
+}

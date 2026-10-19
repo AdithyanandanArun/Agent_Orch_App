@@ -1,0 +1,99 @@
+import { create } from 'zustand';
+import { api, errorMessage } from '../lib/api';
+import { basename, languageFor } from '../lib/format';
+import { useRelay } from './store';
+
+export interface EditorTab {
+  key: string;
+  projectId: string;
+  sessionId: string | null;
+  path: string;
+  label: string;
+  language: string;
+  original: string;
+  draft: string;
+  status: 'loading' | 'ready' | 'error';
+  error: string | null;
+  saving: boolean;
+}
+
+interface EditorState {
+  tabs: EditorTab[];
+  open(projectId: string, sessionId: string | null, path: string): void;
+  edit(key: string, draft: string): void;
+  close(key: string): void;
+  reload(key: string): Promise<void>;
+  save(key: string): Promise<boolean>;
+}
+
+export const tabKey = (projectId: string, sessionId: string | null, path: string): string => `${sessionId ? `s:${sessionId}` : `p:${projectId}`}::${path}`;
+export const isDirty = (t: EditorTab): boolean => t.status === 'ready' && t.draft !== t.original;
+
+export const useEditor = create<EditorState>((set, get) => {
+  const update = (key: string, patch: Partial<EditorTab>): void =>
+    set((s) => ({ tabs: s.tabs.map((t) => (t.key === key ? { ...t, ...patch } : t)) }));
+
+  const load = async (tab: EditorTab): Promise<void> => {
+    update(tab.key, { status: 'loading', error: null });
+    try {
+      const doc = await api.readFile(tab.projectId, tab.path, tab.sessionId);
+      update(tab.key, { status: 'ready', original: doc.content, draft: doc.content, error: null });
+    } catch (e) {
+      update(tab.key, { status: 'error', error: errorMessage(e) });
+    }
+  };
+
+  return {
+    tabs: [],
+    open(projectId, sessionId, path) {
+      const key = tabKey(projectId, sessionId, path);
+      if (!get().tabs.some((t) => t.key === key)) {
+        const tab: EditorTab = {
+          key, projectId, sessionId, path, label: basename(path), language: languageFor(path),
+          original: '', draft: '', status: 'loading', error: null, saving: false,
+        };
+        set((s) => ({ tabs: [...s.tabs, tab] }));
+        void load(tab);
+      }
+      useRelay.getState().setCenterTab(key);
+    },
+    edit: (key, draft) => update(key, { draft }),
+    close(key) {
+      const tab = get().tabs.find((t) => t.key === key);
+      if (!tab) return;
+      if (isDirty(tab) && !window.confirm(`Discard unsaved changes to ${tab.path}?`)) return;
+      set((s) => ({ tabs: s.tabs.filter((t) => t.key !== key) }));
+      const relay = useRelay.getState();
+      if (relay.centerTab === key) {
+        const rest = get().tabs;
+        relay.setCenterTab(rest.length ? rest[rest.length - 1]!.key : 'session');
+      }
+    },
+    async reload(key) {
+      const tab = get().tabs.find((t) => t.key === key);
+      if (!tab) return;
+      if (isDirty(tab) && !window.confirm(`Discard unsaved changes to ${tab.path} and reload from disk?`)) return;
+      await load(tab);
+    },
+    async save(key) {
+      const tab = get().tabs.find((t) => t.key === key);
+      if (!tab || tab.status !== 'ready' || tab.saving) return false;
+      const content = tab.draft;
+      update(key, { saving: true });
+      try {
+        await api.writeFile(tab.projectId, tab.path, content, tab.sessionId);
+        update(key, { saving: false, original: content });
+        useRelay.getState().toast('success', `Saved ${tab.path}`);
+        return true;
+      } catch (e) {
+        update(key, { saving: false });
+        useRelay.getState().toast('error', `Could not save ${tab.path}: ${errorMessage(e)}`);
+        return false;
+      }
+    },
+  };
+});
+
+window.addEventListener('beforeunload', (e) => {
+  if (useEditor.getState().tabs.some(isDirty)) e.preventDefault();
+});
