@@ -143,6 +143,8 @@ function reconcileBootstrap(prev: Bootstrap | null, next: Bootstrap): Bootstrap 
   if (!prev) return next;
   return {
     ...next,
+    runs: reconcile(prev.runs, next.runs ?? []),
+    toolCalls: reconcile(prev.toolCalls, next.toolCalls ?? []),
     projects: reconcile<Project>(prev.projects, next.projects),
     sessions: reconcile<Session>(prev.sessions, next.sessions),
     messages: reconcile<Message>(prev.messages, next.messages),

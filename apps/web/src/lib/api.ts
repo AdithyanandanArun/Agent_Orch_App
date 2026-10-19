@@ -1,5 +1,5 @@
 import type {
-  Approval, AppSettings, Bootstrap, FileEntry, GitStatus, Project, ProviderInfo, Session, Task, TaskStatus, WorkspaceEvent,
+  Approval, AppSettings, Bootstrap, FileEntry, GitStatus, Project, ProviderInfo, Session, ToolCall, Task, TaskStatus, WorkspaceEvent,
 } from '@relay/contracts';
 
 export class ApiError extends Error {
@@ -107,6 +107,8 @@ export const api = {
     json<GitStatus>(`/api/projects/${encodeURIComponent(projectId)}/git${q({ sessionId })}`),
   createSession: (input: NewSessionInput) => json<Session>('/api/sessions', 'POST', input),
   updateSession: (id: string, patch: SessionPatch) => json<Session>(`/api/sessions/${encodeURIComponent(id)}`, 'PATCH', patch),
+  runTools: (id: string) => json<ToolCall[]>(`/api/runs/${encodeURIComponent(id)}/tools`),
+  toolCall: (id: string) => json<ToolCall>(`/api/tool-calls/${encodeURIComponent(id)}`),
   renameSession: (id: string, name: string) => json<Session>(`/api/sessions/${encodeURIComponent(id)}`, 'PATCH', { name }),
   archiveSession: (id: string) => json<unknown>(`/api/sessions/${encodeURIComponent(id)}`, 'DELETE'),
   sendMessage: (id: string, content: string) => json<{ accepted: boolean }>(`/api/sessions/${encodeURIComponent(id)}/messages`, 'POST', { content }),
