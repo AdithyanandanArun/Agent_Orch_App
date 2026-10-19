@@ -5,11 +5,6 @@ import { api } from '../lib/api';
 import { cx } from '../lib/format';
 import { formatElapsed, runElapsed, runStatusLabel } from '../lib/activity';
 
-type ActivityApi = typeof api & {
-  runTools?: (runId: string) => Promise<ToolCall[]>;
-  toolCall?: (id: string) => Promise<ToolCall>;
-};
-
 interface ToolNode { call: ToolCall; children: ToolNode[] }
 
 function toolTree(calls: ToolCall[], runId: string): ToolNode[] {
@@ -108,8 +103,7 @@ function ToolDetail({ node, activeRun }: { node: ToolNode; activeRun: boolean })
   const title = row.summary.trim() || row.command?.trim() || row.name || 'Tool activity';
 
   const fetchFull = (): void => {
-    const loader = (api as ActivityApi).toolCall;
-    if (!loader) return;
+    const loader = api.toolCall;
     setLoading(true);
     setLoadError(false);
     void loader(row.id).then((full) => setCall(full)).catch(() => {
@@ -132,8 +126,7 @@ function ToolDetail({ node, activeRun }: { node: ToolNode; activeRun: boolean })
   const onToggle = (event: SyntheticEvent<HTMLDetailsElement>): void => {
     expanded.current = event.currentTarget.open;
     if (!event.currentTarget.open || requested.current) return;
-    const loader = (api as ActivityApi).toolCall;
-    if (!loader) return;
+    const loader = api.toolCall;
     requested.current = true;
     setLoading(true);
     setLoadError(false);
@@ -189,8 +182,7 @@ export function RunActivity({ run, initialCalls }: { run: SessionRun; initialCal
   const tree = useMemo(() => toolTree(calls, run.id), [calls, run.id]);
   const onToggle = (event: SyntheticEvent<HTMLDetailsElement>): void => {
     if (!event.currentTarget.open || requested.current) return;
-    const loader = (api as ActivityApi).runTools;
-    if (!loader) return;
+    const loader = api.runTools;
     requested.current = true;
     setLoading(true);
     setLoadError(false);
