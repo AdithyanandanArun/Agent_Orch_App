@@ -19,12 +19,22 @@ These are interaction and visual references. Relay's implementation remains orig
 - Tasks, activity and the agent map are under the sidebar footer's More menu. Search opens session/command search; the new-session and open-project actions are compact toolbar buttons.
 - New Session creates and selects a session directly using saved defaults. There is no session-creation dialog and no automatic model call. Errors appear as notifications.
 - Settings exposes the default provider, a separate remembered model for each provider, and default effort. Changing a default affects future sessions only.
-- Settings is a full workspace page with General, Providers and Appearance sections and a return action. It is not a drawer or modal. General contains model, effort, workspace and permission defaults; Providers exposes real diagnostics with optional connection details and executable overrides.
+- Settings is a full workspace page with General, Project, Providers and Appearance sections and a return action. It is not a drawer or modal. General contains model, effort, workspace and permission defaults; Providers exposes real diagnostics with optional connection details and executable overrides.
 - Model, effort, policy, task/session assignments and filters use the same custom choice popover, including selected-state marks, grouped models, arrow-key navigation, typeahead, Escape dismissal and viewport-aware placement. Dialogs use restrained surfaces and the same form styling.
 - The composer can change a session's model and effort between runs. The next run receives the updated values, and the existing provider conversation identifier is preserved.
 - A new session can select either provider through the model picker. Once a provider conversation exists, changing providers requires a new session; model changes within that provider remain available.
 - Run configuration is locked during an active turn or provider cleanup. Renaming remains available. Server validation enforces the same rules as the UI.
 - Settings and session changes are stored in SQLite. Existing application data needs no destructive migration. Previous project/session selection is retained when the simpler UI preferences are initialized.
+
+## Session context menu
+
+The user's second screenshot supplies the reference for grouped text actions, thin separators, a Copy submenu and quiet charcoal surfaces. Relay includes the applicable actions: pin/unpin, rename, mark read/unread, copy details, Project settings and archive. Unsupported settle, snooze, auto-settle, title regeneration and permanent deletion actions are omitted.
+
+Right-clicking a row does not select its conversation. Shift+F10 and a three-dot row button offer the same actions. Arrow keys, Home/End and Escape navigate/dismiss the menu; Copy opens with ArrowRight. Submenus flip at viewport edges. Focus returns to the source row unless an action opens a dialog/page or an outside click moves focus elsewhere. Pinning preserves keyboard focus as the row moves into the Pinned group.
+
+Pins and manual unread markers persist in SQLite through an additive migration. Pin/read changes do not reorder conversations by recency or add noise to Activity. An unread marker stays set through background refreshes and is cleared when the user explicitly opens that session; this is not automatic new-message tracking. Archive uses the existing confirmation and backend active-run/cleanup guard, preserving session data and worktrees.
+
+Project settings opens the project's full Settings page, with an editable display name and a copyable canonical folder path. It does not introduce project-level model/default overrides.
 
 ## Checks for this revision
 

@@ -39,7 +39,9 @@ See [provider research](docs/provider-research.md) for the T3 architecture inves
 
 ## Workspace behavior
 
-**New Session** creates and selects a session immediately from the sidebar toolbar. Set its default provider, model and effort in **Settings → General → New sessions**. Settings opens as a full page with General, Providers and Appearance sections. Each provider remembers its own default model. Existing sessions keep their choices, and their model and effort can be changed in the composer between runs. A provider conversation is retained when switching models within that provider; use a new session to switch providers after a conversation has started.
+**New Session** creates and selects a session immediately from the sidebar toolbar. Set its default provider, model and effort in **Settings → General → New sessions**. Settings opens as a full page with General, Project, Providers and Appearance sections. Each provider remembers its own default model. Existing sessions keep their choices, and their model and effort can be changed in the composer between runs. A provider conversation is retained when switching models within that provider; use a new session to switch providers after a conversation has started.
+
+Right-click a session, use its three-dot action button, or press **Shift+F10** on a focused session to pin/unpin, rename, mark read/unread, copy its name/ID/branch/folder, open Project settings, or archive it. Pins and manual unread markers are saved across reloads; opening a session marks it read. Project settings lets you change the display name and copy its folder path. Archiving asks for confirmation and keeps the session’s data, worktree and branch. Active sessions must be interrupted before archiving.
 
 Git worktrees are the default; a repository needs an initial commit before Relay can create one. Settings also offers an explicit project-folder workspace default. A worktree separates file edits and is not an operating-system sandbox. The context pane and terminal start closed; open them when needed. Tasks, activity and the agent map are available under **More** in the sidebar.
 

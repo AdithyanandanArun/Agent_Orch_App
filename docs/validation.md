@@ -61,3 +61,14 @@ Implemented the user's supplied design reference with neutral surfaces, white em
 - Existing application data and saved provider/model/effort preferences were retained. No model calls or synthetic production conversations were created for the design review.
 
 Automated tests and paid/live provider turns were not run for this design pass. This evidence describes compilation and visual inspection, not exhaustive interaction or accessibility validation.
+
+
+## Session context menu — 2026-10-19
+
+- Workspace type checking and the production build passed after integration, including the server type check.
+- Git whitespace checks passed.
+- Reviewed the session action menu, Copy submenu and Project settings in the native collaborative browser. Keyboard menu entry focuses the first action. The Rename dialog receives the right-clicked row's name and focuses its input without selecting that conversation; the dialog was dismissed without saving.
+- Corrected initial menu focus after hidden positioning, focus restoration when pinning changes groups, and project Settings focus/context handling.
+- Pin/unread persistence uses schema migration 2 with default-false columns. The implementation preserves activity timestamps for organization changes and retains active-run/cleanup restrictions for run settings and archive.
+
+Automated tests, persistence/restart exercises, clipboard writes, project renames, archive operations and live model calls were not run for this change. Browser review opened and dismissed UI surfaces without changing session or project data.
