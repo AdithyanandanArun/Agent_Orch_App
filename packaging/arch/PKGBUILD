@@ -1,0 +1,67 @@
+pkgname=relay-workspace-bin
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Local development workspace for independent coding-agent sessions'
+arch=('x86_64')
+url='https://github.com/AdithyanandanArun/Agent_Orch_App'
+license=('unknown')
+depends=(
+  'alsa-lib'
+  'at-spi2-core'
+  'cairo'
+  'dbus'
+  'expat'
+  'gcc-libs'
+  'glib2'
+  'glibc'
+  'gtk3'
+  'libcups'
+  'libdrm'
+  'libx11'
+  'libxcb'
+  'libxcomposite'
+  'libxdamage'
+  'libxext'
+  'libxfixes'
+  'libxkbcommon'
+  'libxrandr'
+  'mesa'
+  'nspr'
+  'nss'
+  'pango'
+  'systemd-libs'
+  'xdg-utils'
+)
+optdepends=(
+  'git: version control and isolated session worktrees'
+)
+options=('!strip')
+
+_archive="relay-workspace-${pkgver}-linux-x64.tar.gz"
+if [[ -f "${_archive}" ]]; then
+  source=("${_archive}")
+else
+  source=("${_archive}::https://github.com/AdithyanandanArun/Agent_Orch_App/releases/download/v${pkgver}/relay-workspace-${pkgver}-linux-x64.tar.gz")
+fi
+sha256sums=('REPLACE_WITH_RELEASE_SHA256')
+
+package() {
+  local _release="${srcdir}/relay-workspace-${pkgver}-linux-x64"
+  local _app="${pkgdir}/opt/relay-workspace"
+
+  install -d "${_app}"
+  cp -a "${_release}/." "${_app}/"
+  chown -R root:root "${_app}"
+
+  # Electron's Chromium sandbox requires setuid root; package extraction is root-owned.
+  install -o root -g root -m 4755 "${_release}/chrome-sandbox" "${_app}/chrome-sandbox"
+
+  install -d "${pkgdir}/usr/bin"
+  ln -s /opt/relay-workspace/relay-workspace "${pkgdir}/usr/bin/relay-workspace"
+  install -Dm644 "${_release}/relay-workspace.desktop" "${pkgdir}/usr/share/applications/relay-workspace.desktop"
+  install -Dm644 "${_release}/relay-workspace.svg" "${pkgdir}/usr/share/icons/hicolor/scalable/apps/relay-workspace.svg"
+
+  install -d "${pkgdir}/usr/share/licenses/${pkgname}"
+  cp -a "${_release}/resources/licenses/." "${pkgdir}/usr/share/licenses/${pkgname}/"
+  chown -R root:root "${pkgdir}/usr/share/licenses/${pkgname}"
+}
