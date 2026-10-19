@@ -4,6 +4,7 @@ import type { WorkspaceEvent } from '@relay/contracts';
 import { useRelay, useProject } from '../store/store';
 import { clockTime, cx, dayLabel, relativeTime, useNow } from '../lib/format';
 import { Badge, EmptyState } from '../components/ui';
+import { SelectMenu } from '../components/SelectMenu';
 
 const toneFor = (type: string): 'ok' | 'warn' | 'err' | 'info' | 'accent' | 'neutral' => {
   if (/error|fail|denied/.test(type)) return 'err';
@@ -75,15 +76,9 @@ export function ActivityView() {
         </div>
         <span className="spacer" />
         <label className="sr-only" htmlFor="ev-type">Event type</label>
-        <select id="ev-type" className="select select--sm" value={type} onChange={(e) => setType(e.target.value)}>
-          <option value="">All types</option>
-          {types.map((t) => <option key={t} value={t}>{t}</option>)}
-        </select>
+        <SelectMenu id="ev-type" label="Event type" value={type} onChange={setType} options={[{ value: '', label: 'All types' }, ...types.map((value) => ({ value, label: value }))]} />
         <label className="sr-only" htmlFor="ev-session">Session</label>
-        <select id="ev-session" className="select select--sm" value={sessionId} onChange={(e) => setSessionId(e.target.value)}>
-          <option value="">All sessions</option>
-          {(sessions ?? []).filter((s) => allProjects || s.projectId === project?.id).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-        </select>
+        <SelectMenu id="ev-session" label="Session" value={sessionId} onChange={setSessionId} options={[{ value: '', label: 'All sessions' }, ...(sessions ?? []).filter((s) => allProjects || s.projectId === project?.id).map((s) => ({ value: s.id, label: s.name }))]} />
         <label className="check check--inline"><input type="checkbox" checked={allProjects} onChange={(e) => setAllProjects(e.target.checked)} /> All projects</label>
       </div>
       <div className="activity__scroll">

@@ -5,6 +5,7 @@ import { useRelay, useProject } from '../store/store';
 import { api, errorMessage } from '../lib/api';
 import { cx, relativeTime, useNow } from '../lib/format';
 import { Badge, Button, EmptyState, Field, IconButton, InlineError, PROVIDER_NAME, ProviderMark } from '../components/ui';
+import { SelectMenu } from '../components/SelectMenu';
 
 const COLUMNS: { id: TaskStatus; label: string; hint: string }[] = [
   { id: 'backlog', label: 'Backlog', hint: 'Not yet scheduled' },
@@ -139,15 +140,10 @@ function TaskDrawer({ task, tasks, sessions }: { task: Task; tasks: Task[]; sess
         <Field label="Acceptance criteria" htmlFor="td-ac" hint="Sent with the task when it is run."><textarea id="td-ac" className="textarea" value={criteria} onChange={(e) => setCriteria(e.target.value)} rows={3} /></Field>
         <div className="form-row">
           <Field label="Status" htmlFor="td-status" hint="“Running” is only set by dispatching a run.">
-            <select id="td-status" className="select" value={status} onChange={(e) => setStatus(e.target.value as TaskStatus)}>
-              {statusOptions.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
-            </select>
+            <SelectMenu id="td-status" label="Task status" value={status} onChange={(value) => setStatus(value as TaskStatus)} options={statusOptions.map((c) => ({ value: c.id, label: c.label }))} />
           </Field>
           <Field label="Assigned session" htmlFor="td-session">
-            <select id="td-session" className="select" value={sessionId} onChange={(e) => setSessionId(e.target.value)}>
-              <option value="">Unassigned</option>
-              {sessions.map((s) => <option key={s.id} value={s.id}>{s.name} · {PROVIDER_NAME[s.provider]}</option>)}
-            </select>
+            <SelectMenu id="td-session" label="Assigned session" value={sessionId} onChange={setSessionId} options={[{ value: '', label: 'Unassigned' }, ...sessions.map((s) => ({ value: s.id, label: `${s.name} · ${PROVIDER_NAME[s.provider]}` }))]} />
           </Field>
         </div>
         <fieldset className="fieldset">
@@ -218,11 +214,7 @@ export function TasksView() {
           </div>
           <span className="spacer" />
           <label className="sr-only" htmlFor="task-filter">Filter by session</label>
-          <select id="task-filter" className="select select--sm" value={filter} onChange={(e) => setFilter(e.target.value)}>
-            <option value="">All sessions</option>
-            <option value="none">Unassigned</option>
-            {sessions.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
+          <SelectMenu id="task-filter" label="Filter by session" value={filter} onChange={setFilter} options={[{ value: '', label: 'All sessions' }, { value: 'none', label: 'Unassigned' }, ...sessions.map((s) => ({ value: s.id, label: s.name }))]} />
         </div>
         {error ? <div className="viewbar__error"><InlineError>{error}</InlineError></div> : null}
         {tasks.length === 0 ? (
