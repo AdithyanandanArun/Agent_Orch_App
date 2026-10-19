@@ -28,7 +28,7 @@ export interface SessionRun {
 export interface ToolCall {
   id: string; runId: string; sessionId: string; providerId: string; parentProviderId: string | null;
   name: string; category: ToolCategory; status: ToolStatus; summary: string; command: string | null;
-  input: string; output: string; cwd: string | null; exitCode: number | null; processId: string | null;
+  input: string; output: string; outputTruncated?: boolean; cwd: string | null; exitCode: number | null; processId: string | null;
   startedAt: string; finishedAt: string | null; durationMs: number | null;
 }
 /** Provider-supplied fields; host assigns durable IDs and timestamps. Missing fields retain their previous value. */

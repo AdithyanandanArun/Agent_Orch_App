@@ -211,7 +211,10 @@ export class SessionRuntime {
     if (activity.cwd !== undefined) call.cwd = activity.cwd === null ? null : truncate(redactSecrets(activity.cwd), 4096);
     if (activity.processId !== undefined) call.processId = activity.processId === null ? null : truncate(String(activity.processId), 200);
     if (activity.exitCode !== undefined) call.exitCode = typeof activity.exitCode === 'number' && Number.isFinite(activity.exitCode) ? activity.exitCode : null;
-    if (activity.output !== undefined) buffer.output = activity.output.slice(-MAX_TOOL_CHARS);
+    if (activity.output !== undefined) {
+      buffer.call.outputTruncated = activity.output.length > MAX_TOOL_CHARS;
+      buffer.output = activity.output.slice(-MAX_TOOL_CHARS);
+    }
     if (call.status !== 'running' && !terminal) {
       call.finishedAt = at;
       call.durationMs = buffer.tick === null ? null : Math.max(0, Math.round(performance.now() - buffer.tick));
@@ -236,7 +239,9 @@ export class SessionRuntime {
       buffer = run.tools.get(id);
     }
     if (!buffer || buffer.call.finishedAt) return;
-    buffer.output = (buffer.output + delta).slice(-MAX_TOOL_CHARS);
+    const next = buffer.output + delta;
+    buffer.call.outputTruncated ||= next.length > MAX_TOOL_CHARS;
+    buffer.output = next.slice(-MAX_TOOL_CHARS);
     buffer.dirty = true;
     if (!run.activityTimer) run.activityTimer = setTimeout(() => {
       run.activityTimer = null;

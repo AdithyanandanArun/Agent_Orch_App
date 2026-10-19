@@ -204,7 +204,7 @@ export class Store {
     const rows = this.all(`SELECT t.data FROM tool_calls t JOIN session_runs r ON r.id = t.run_id
       WHERE t.run_id IN (${runIds.map(() => '?').join(',')}) ORDER BY (r.status = 'running') DESC, t.rowid DESC LIMIT ?`, ...runIds, limit);
     // Full bounded output is loaded on demand when a tool disclosure opens.
-    return rows.reverse().map((row) => { const call = JSON.parse(row.data as string) as ToolCall; return { ...call, input: call.input.slice(0, 4000), output: call.output.slice(-2000) }; });
+    return rows.reverse().map((row) => { const call = JSON.parse(row.data as string) as ToolCall; return { ...call, input: call.input.slice(0, 4000), output: call.output.slice(-2000), outputTruncated: Boolean(call.outputTruncated || call.output.length > 2000) }; });
   }
   recoverRuns(): void {
     const at = nowIso();
