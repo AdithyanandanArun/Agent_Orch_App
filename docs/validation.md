@@ -48,3 +48,16 @@ The Electron 44.9.0 development launcher was smoke-tested under a temporary Xvfb
 The initial Claude adapter was checked against SDK fixtures, not a live API turn: `ANTHROPIC_API_KEY` was absent. The subsequent local-login correction removes that API-key requirement and delegates authentication to Claude Code. A read-only CLI auth-status check found an existing Claude subscription login on the development machine. The running server's provider-refresh endpoint returned HTTP 200 and Claude `available: true` using `/home/adithyan/.npm-global/bin/claude` 2.1.292. Workspace type checking and the web production build passed. Existing authentication expectations were updated; the test suite and live model turns were not run for this correction. Remaining quota is unverified.
 
 Remote computer membership, distributed delivery, voice, browser control leases, automatic scheduling, automatic integration and signed desktop releases remain future milestones. Real multi-agent speedup, quality and total task cost have not yet been benchmarked. The next decisive product test remains an integrated feature built by two independent providers against a versioned contract.
+
+## Screenshot-directed design pass — 2026-10-19
+
+Implemented the user's supplied design reference with neutral surfaces, white emphasis, rare blue accents, soft user bubbles, plain assistant responses without provider icons, and shared custom choice popovers. Settings is a full workspace page with General, Providers and Appearance sections. The sidebar, composer, dialogs, task assignment controls and activity filters follow the same design language.
+
+- Workspace type checking passed after the final keyboard-focus corrections.
+- Production build passed, including the server type check.
+- Git whitespace checks passed.
+- Native collaborative-browser screenshots were available for this pass. Inspected the actual conversation with existing messages, the full Settings page and its open model-choice popover; assistant response markup has no provider avatar or repeated model header.
+- A read-only implementation review identified menu ArrowUp entry and Settings-page focus handoff issues. Both were corrected; menu Tab dismissal also restores the anchor before normal tab navigation.
+- Existing application data and saved provider/model/effort preferences were retained. No model calls or synthetic production conversations were created for the design review.
+
+Automated tests and paid/live provider turns were not run for this design pass. This evidence describes compilation and visual inspection, not exhaustive interaction or accessibility validation.
