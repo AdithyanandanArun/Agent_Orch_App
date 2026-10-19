@@ -1,5 +1,5 @@
 /* ——— App shell ——— */
-.app { display: grid; grid-template-columns: var(--sidebar-w) minmax(0, 1fr); height: 100vh; height: 100dvh; background: var(--bg-app); }
+.app { display: grid; grid-template-columns: var(--sidebar-w) minmax(0, 1fr); height: 100vh; height: 100dvh; overflow: clip; background: var(--bg-app); }
 .skip { position: absolute; left: 8px; top: -40px; z-index: 300; background: var(--accent); color: var(--fg-on-accent); padding: 6px 10px; border-radius: 6px; }
 .skip:focus { top: 8px; }
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg-app); }
