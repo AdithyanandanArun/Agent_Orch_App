@@ -6,7 +6,7 @@ import { Workspace } from './views/Workspace';
 import { TasksView } from './views/Tasks';
 import { ActivityView } from './views/Activity';
 import { ConnectionBanner, StartupScreen, Toasts } from './components/Shell';
-import { ArchiveDialog, HandoffDialog, ProjectDialog, RenameDialog, SessionDialog, TaskDialog } from './components/Dialogs';
+import { ArchiveDialog, HandoffDialog, ProjectDialog, RenameDialog, TaskDialog } from './components/Dialogs';
 import { SettingsSheet } from './components/Settings';
 import { Palette, ShortcutsDialog } from './components/Palette';
 import { Boundary, Spinner } from './components/ui';
@@ -19,7 +19,6 @@ function Dialogs() {
   if (!dialog) return null;
   switch (dialog.kind) {
     case 'project': return <ProjectDialog />;
-    case 'session': return <SessionDialog />;
     case 'task': return <TaskDialog />;
     case 'handoff': return <HandoffDialog taskId={dialog.taskId} fromSessionId={dialog.fromSessionId} />;
     case 'settings': return <SettingsSheet />;

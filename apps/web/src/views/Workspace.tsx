@@ -1,5 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useRef } from 'react';
-import { FileCode2 } from 'lucide-react';
+import { FileCode2, X } from 'lucide-react';
 import { useRelay, useProject } from '../store/store';
 import { isDirty, useEditor } from '../store/editor';
 import { cx } from '../lib/format';

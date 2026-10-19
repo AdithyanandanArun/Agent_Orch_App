@@ -39,7 +39,9 @@ See [provider research](docs/provider-research.md) for the T3 architecture inves
 
 ## Workspace behavior
 
-Create independent sessions with their own model, effort and permission policy. Git worktrees are the default; a repository needs an initial commit before Relay can create one. Nonisolated sessions are an explicit choice. A worktree separates file edits and is not an operating-system sandbox.
+**New Session** creates and selects a session immediately. Set its default provider, model and effort in **Settings → New sessions**. Each provider remembers its own default model. Existing sessions keep their choices, and their model and effort can be changed in the composer between runs. A provider conversation is retained when switching models within that provider; use a new session to switch providers after a conversation has started.
+
+Git worktrees are the default; a repository needs an initial commit before Relay can create one. Settings also offers an explicit project-folder workspace default. A worktree separates file edits and is not an operating-system sandbox. The context pane and terminal start closed; open them when needed. Tasks, activity and the agent map are available under **More** in the sidebar.
 
 Tasks include an owner, prerequisites and acceptance criteria. A successful assigned run enters review. Artifact handoffs identify a committed file and revision, record an event and add context for the receiving session's next turn. Handoffs do not merge branches or silently launch inference.
 
@@ -60,6 +62,7 @@ The Electron launcher starts the same Node server on a selected loopback port. I
 
 - [Original vision](docs/vision.md)
 - [Product and interaction specification](docs/product-experience.md)
+- [Minimal workspace revision and T3 UI references](docs/ui-direction.md)
 - [Architecture decisions](docs/architecture.md)
 - [Implementation contract](docs/implementation-contract.md)
 - [Provider research](docs/provider-research.md)

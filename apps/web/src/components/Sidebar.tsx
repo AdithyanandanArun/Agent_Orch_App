@@ -2,7 +2,7 @@ import { Activity, Check, ChevronsUpDown, FolderOpen, FolderPlus, Kanban, Layout
 import type { Session } from '@relay/contracts';
 import { useRelay, useProject, type View } from '../store/store';
 import { cx, relativeTime, useNow } from '../lib/format';
-import { Button, IconButton, Menu, MenuItem, MenuLabel, MenuSeparator, ProviderMark, RelayGlyph, StatusDot, PROVIDER_NAME } from './ui';
+import { Button, IconButton, Menu, MenuItem, MenuLabel, MenuSeparator, ProviderMark, RelayGlyph, StatusDot } from './ui';
 
 const SECONDARY: { view: View; label: string; icon: typeof Kanban }[] = [
   { view: 'tasks', label: 'Tasks', icon: Kanban },
@@ -96,18 +96,17 @@ export function Sidebar() {
               if (!items.length) return null;
               return (
                 <div key={g.id} className="sgroup" role="group" aria-label={g.label}>
-                  <div className="sgroup__label">{g.label} <span>{items.length}</span></div>
+                  {g.id !== 'idle' ? <div className="sgroup__label">{g.label} <span>{items.length}</span></div> : null}
                   {items.map((s) => (
                     <button
                       key={s.id} type="button" role="listitem" className={cx('sitem', s.id === activeSessionId && view === 'workspace' && 'is-active')}
-                      onClick={() => selectSession(s.id)} aria-current={s.id === activeSessionId ? 'true' : undefined}
+                      onClick={() => selectSession(s.id)} aria-current={s.id === activeSessionId ? 'true' : undefined} title={`${s.name} · ${s.model}`}
                     >
                       <ProviderMark provider={s.provider} />
                       <span className="sitem__text">
                         <strong>{s.name}</strong>
-                        <small>{PROVIDER_NAME[s.provider]} · {s.model} · {relativeTime(s.updatedAt, now)}</small>
                       </span>
-                      <StatusDot status={s.status} label={false} />
+                      {s.status === 'idle' ? <span className="sitem__age">{relativeTime(s.updatedAt, now)}</span> : <StatusDot status={s.status} label={false} />}
                     </button>
                   ))}
                 </div>
@@ -122,13 +121,7 @@ export function Sidebar() {
           {connection === 'offline' ? <WifiOff size={13} aria-hidden="true" /> : <Wifi size={13} aria-hidden="true" />}
           <span>{connLabel}</span>
         </button>
-        <span className="providers-mini" aria-label="Provider executables">
-          {(boot?.providers ?? []).map((p) => (
-            <span key={p.id} className={cx('pm', p.available ? 'is-ok' : 'is-off')} title={p.available ? `${p.name} configured${p.version ? ` (${p.version})` : ''}. Credentials are validated on each run.` : `${p.name} needs setup${p.reason ? `: ${p.reason}` : ''}`}>
-              <i aria-hidden="true" /> {p.name}
-            </span>
-          ))}
-        </span>
+        <span className="spacer" />
         <IconButton label="Settings" onClick={() => openDialog({ kind: 'settings' })}><Settings size={15} /></IconButton>
       </div>
     </aside>

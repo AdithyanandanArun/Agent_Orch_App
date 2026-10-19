@@ -1,6 +1,9 @@
 import type { AdapterEvent, AppSettings, RunOptions, Session } from '@relay/contracts';
 
-export const settings: AppSettings = { defaultPolicy: 'supervised', theme: 'dark', claudeExecutable: '', codexExecutable: '' };
+export const settings: AppSettings = {
+  defaultProvider: 'codex', defaultCodexModel: 'gpt-6.1-sol', defaultClaudeModel: 'claude-sonnet-5-5', defaultEffort: 'high', defaultIsolated: true,
+  defaultPolicy: 'supervised', theme: 'dark', claudeExecutable: '', codexExecutable: '',
+};
 
 export function makeSession(overrides: Partial<Session> = {}): Session {
   return {

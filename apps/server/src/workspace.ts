@@ -1,7 +1,7 @@
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { CreateProjectSchema, CreateSessionSchema } from '@relay/contracts';
+import type { CreateProjectSchema, CreateSessionSchema, UpdateSessionSchema } from '@relay/contracts';
 import type { Project, Session } from '@relay/contracts';
 import type { z } from 'zod';
 import { addWorktree, repoInfo } from './git.ts';
@@ -42,14 +42,21 @@ export class WorkspaceService {
   async createSession(input: CreateSession): Promise<Session> {
     const project = this.store.getProject(input.projectId);
     if (!project) throw notFound('Project not found');
+    const settings = this.store.getSettings();
+    const provider = input.provider ?? settings.defaultProvider;
+    const model = input.model ?? (provider === 'codex' ? settings.defaultCodexModel : settings.defaultClaudeModel);
+    const name = input.name ?? `Session ${this.store.listSessions(project.id).length + 1}`;
+    const effort = input.effort ?? settings.defaultEffort;
+    const policy = input.policy ?? settings.defaultPolicy;
+    const isolated = input.isolated ?? settings.defaultIsolated;
     const id = newId('ses');
     let worktreePath = project.path;
     let branch: string | null = null;
     const info = await repoInfo(project.path);
-    if (input.isolated) {
-      if (!info.isRepo) throw unprocessable('This project is not a Git repository, so an isolated worktree cannot be created. Create the session with isolated=false to work directly in the folder.');
-      if (!info.hasHead) throw unprocessable('This repository has no commits yet. Make an initial commit before creating an isolated session, or opt out of isolation.');
-      branch = `relay/${slugify(input.name)}-${id.slice(4, 12)}`;
+    if (isolated) {
+      if (!info.isRepo) throw unprocessable('This project is not a Git repository. Choose Project folder in Settings → Session permissions and workspace to work directly in this folder, then create the session again.');
+      if (!info.hasHead) throw unprocessable('This repository has no commits yet. Make an initial commit, or choose Project folder in Settings → Session permissions and workspace, then create the session again.');
+      branch = `relay/${slugify(name)}-${id.slice(4, 12)}`;
       const target = path.join(this.dataDir, 'worktrees', project.id, id);
       await addWorktree(project.path, target, branch);
       // A project that lives in a sub-directory of its repository keeps the same relative position in the worktree.
@@ -58,18 +65,34 @@ export class WorkspaceService {
       branch = info.branch;
     }
     return this.store.tx(() => {
-      const session = this.store.insertSession({ id, projectId: project.id, name: input.name, provider: input.provider, model: input.model, effort: input.effort, policy: input.policy, isolated: input.isolated, worktreePath, branch });
+      const session = this.store.insertSession({ id, projectId: project.id, name, provider, model, effort, policy, isolated, worktreePath, branch });
       this.store.recordEvent({ projectId: project.id, sessionId: id, type: 'session.created', summary: `Session created: ${session.name}`, payload: { provider: session.provider, model: session.model, isolated: session.isolated, branch } });
       return session;
     });
   }
 
-  renameSession(id: string, name: string): Session {
+  updateSession(id: string, patch: z.infer<typeof UpdateSessionSchema>): Session {
     const session = this.store.getSession(id);
     if (!session) throw notFound('Session not found');
+    const changingRun = (['provider', 'model', 'effort', 'policy'] as const).some((key) => patch[key] !== undefined && patch[key] !== session[key]);
+    if (changingRun && (this.runtime.isActive(id) || session.status === 'running' || session.status === 'waiting')) {
+      throw conflict('Wait for this run to finish or interrupt it before changing its model or effort');
+    }
+    if (patch.provider && patch.provider !== session.provider) {
+      if (session.providerSessionId) throw conflict('This conversation belongs to its current provider. Start a new session to use another provider.');
+      const settings = this.store.getSettings();
+      patch = { ...patch, model: patch.model ?? (patch.provider === 'codex' ? settings.defaultCodexModel : settings.defaultClaudeModel) };
+    }
+    const changes = Object.fromEntries(Object.entries(patch).filter(([key, value]) => value !== undefined && value !== session[key as keyof Session]));
+    if (!Object.keys(changes).length) return session;
     return this.store.tx(() => {
-      const updated = this.store.updateSession(id, { name });
-      this.store.recordEvent({ projectId: session.projectId, sessionId: id, type: 'session.renamed', summary: `Session renamed: ${session.name} → ${name}`, payload: { from: session.name, to: name } });
+      const updated = this.store.updateSession(id, changes);
+      const renamed = Object.keys(changes).length === 1 && 'name' in changes;
+      this.store.recordEvent({
+        projectId: session.projectId, sessionId: id, type: renamed ? 'session.renamed' : 'session.updated',
+        summary: renamed ? `Session renamed: ${session.name} → ${updated.name}` : `Session settings updated: ${updated.name}`,
+        payload: renamed ? { from: session.name, to: updated.name } : { fields: Object.keys(changes), model: updated.model, effort: updated.effort, provider: updated.provider },
+      });
       return updated;
     });
   }
@@ -96,4 +119,3 @@ export class WorkspaceService {
     return { project, root: session.worktreePath, session };
   }
 }
-

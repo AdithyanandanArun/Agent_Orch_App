@@ -1,4 +1,4 @@
-import { Command, GitBranch, Menu as MenuIcon, PanelRight, Pencil, SquareTerminal, Archive, MoreHorizontal, Square, ListPlus } from 'lucide-react';
+import { Command, Menu as MenuIcon, PanelRight, Pencil, SquareTerminal, Archive, MoreHorizontal, Square, ListPlus } from 'lucide-react';
 import { useRelay, useActiveSession, useProject } from '../store/store';
 import { api, errorMessage } from '../lib/api';
 import { Button, IconButton, Menu, MenuItem, MenuSeparator, MOD, Kbd } from './ui';
@@ -34,8 +34,8 @@ export function Header() {
     <header className="header">
       <IconButton label="Open sidebar" className="header__burger" onClick={() => setSidebarOpen(true)}><MenuIcon size={16} /></IconButton>
       <div className="crumbs" aria-label="Current view">
-        <span className="crumbs__project">{project?.name ?? 'No project'}</span>
-        {view !== 'workspace' ? <span className="crumbs__current">{TITLES[view]}</span> : session?.branch ? <span className="chip chip--mono" title={session.isolated ? 'Isolated session branch' : 'Branch the session works on'}><GitBranch size={12} aria-hidden="true" />{session.branch}</span> : null}
+        <span className="crumbs__project" title={session?.branch ?? undefined}>{view === 'workspace' ? session?.name ?? project?.name ?? 'No project' : project?.name ?? 'No project'}</span>
+        {view !== 'workspace' ? <span className="crumbs__current">{TITLES[view]}</span> : null}
       </div>
       <div className="header__actions">
         {view === 'workspace' && session?.status === 'running' ? (

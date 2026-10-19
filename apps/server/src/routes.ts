@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { z } from 'zod';
 import {
-  ApprovalDecisionSchema, CreateProjectSchema, CreateSessionSchema, CreateTaskSchema, HandoffSchema, SendMessageSchema, UpdateSettingsSchema, UpdateTaskSchema,
+  ApprovalDecisionSchema, CreateProjectSchema, CreateSessionSchema, CreateTaskSchema, HandoffSchema, SendMessageSchema, UpdateSessionSchema, UpdateSettingsSchema, UpdateTaskSchema,
 } from '@relay/contracts';
 import type { Bootstrap } from '@relay/contracts';
 import { gitStatus } from './git.ts';
@@ -67,7 +67,6 @@ export function parse<T>(schema: z.ZodType<T>, value: unknown): T {
 
 const executable = z.string().max(4096).refine((v) => !/[\0\r\n]/.test(v), 'Executable path contains control characters');
 const SettingsPatch = UpdateSettingsSchema.extend({ claudeExecutable: executable.optional(), codexExecutable: executable.optional() });
-const PatchSession = z.object({ name: z.string().trim().min(1).max(100) });
 const MessagesQuery = z.object({ limit: z.coerce.number().int().min(1).max(2000).optional(), before: z.string().max(100).optional() });
 const EventsQuery = z.object({ after: z.coerce.number().int().min(0).default(0), projectId: z.string().max(100).optional(), limit: z.coerce.number().int().min(1).max(5000).optional() });
 const WriteFile = z.object({ content: z.string() });
@@ -134,7 +133,7 @@ export function buildRouter(s: Services) {
   });
 
   add('POST', '/api/sessions', async (ctx) => new Reply(201, await s.workspace.createSession(await ctx.body(CreateSessionSchema))));
-  add('PATCH', '/api/sessions/:id', async (ctx) => s.workspace.renameSession(param(ctx, 'id'), (await ctx.body(PatchSession)).name));
+  add('PATCH', '/api/sessions/:id', async (ctx) => s.workspace.updateSession(param(ctx, 'id'), await ctx.body(UpdateSessionSchema)));
   add('DELETE', '/api/sessions/:id', (ctx) => {
     s.workspace.archiveSession(param(ctx, 'id'));
     return { ok: true };

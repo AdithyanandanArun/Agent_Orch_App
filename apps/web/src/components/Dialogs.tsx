@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { AlertTriangle } from 'lucide-react';
-import type { Provider } from '@relay/contracts';
 import { useRelay, useActiveSession, useProject } from '../store/store';
 import { api, errorMessage } from '../lib/api';
 import { basename } from '../lib/format';
-import { Button, Field, InlineError, Modal, PROVIDER_NAME, ProviderMark, Segmented, Switch } from './ui';
+import { Button, Field, InlineError, Modal, PROVIDER_NAME } from './ui';
 
 function useSubmit(onDone: () => void) {
   const [busy, setBusy] = useState(false);
@@ -53,87 +52,6 @@ export function ProjectDialog() {
         <Field label="Name" htmlFor="pf-name">
           <input id="pf-name" className="input" value={name} maxLength={100} onChange={(e) => { setTouched(true); setName(e.target.value); }} />
         </Field>
-        {error ? <InlineError>{error}</InlineError> : null}
-      </form>
-    </Modal>
-  );
-}
-
-export function SessionDialog() {
-  const close = useRelay.getState().closeDialog;
-  const project = useProject();
-  const providers = useRelay((s) => s.boot?.providers ?? []);
-  const settings = useRelay((s) => s.boot?.settings);
-  const existing = useRelay((s) => s.boot?.sessions.filter((x) => x.projectId === s.activeProjectId).length ?? 0);
-  const firstAvailable = providers.find((p) => p.available)?.id ?? 'codex';
-  const [provider, setProvider] = useState<Provider>(firstAvailable);
-  const info = providers.find((p) => p.id === provider);
-  const [model, setModel] = useState(info?.models[0]?.id ?? '');
-  const [name, setName] = useState(`${PROVIDER_NAME[firstAvailable]} ${existing + 1}`);
-  const [nameTouched, setNameTouched] = useState(false);
-  const [effort, setEffort] = useState<'low' | 'medium' | 'high'>('high');
-  const [policy, setPolicy] = useState<'supervised' | 'balanced'>(settings?.defaultPolicy ?? 'supervised');
-  const [isolated, setIsolated] = useState(true);
-  const { busy, error, run } = useSubmit(close);
-
-  useEffect(() => {
-    setModel(info?.models[0]?.id ?? '');
-    if (!nameTouched) setName(`${PROVIDER_NAME[provider]} ${existing + 1}`);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [provider]);
-
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    if (!project) return;
-    void run(async () => {
-      const s = await api.createSession({ projectId: project.id, name: name.trim(), provider, model: model.trim(), effort, policy, isolated });
-      await useRelay.getState().refreshNow();
-      useRelay.getState().selectSession(s.id);
-    });
-  };
-
-  return (
-    <Modal title="New session" description={`An independent agent working in ${project?.name ?? 'this project'}.`} onClose={close}
-      footer={<><Button variant="ghost" onClick={close}>Cancel</Button><Button variant="primary" type="submit" form="session-form" busy={busy} disabled={!project || !name.trim() || !model.trim()} why={!project ? 'Open a project first' : 'Name and model are required'}>Create session</Button></>}>
-      <form id="session-form" className="form" onSubmit={submit}>
-        <Field label="Provider">
-          <Segmented
-            label="Provider" value={provider} onChange={setProvider}
-            options={(['codex', 'claude'] as const).map((id) => ({ value: id, label: <><ProviderMark provider={id} size={14} />{PROVIDER_NAME[id]}</> }))}
-          />
-          {info ? (
-            info.available ? (
-              <p className="field__hint">{info.name} is configured{info.version ? ` (${info.version})` : ''}. Model access, authentication and quota are checked when a run starts. View login details in Settings.</p>
-            ) : (
-              <p className="field__hint field__hint--warn"><AlertTriangle size={12} /> {info.name} {info.executable ? 'setup needed' : 'executable unavailable'}{info.reason ? `: ${info.reason}` : ''} You can still create the session; complete provider setup and Re-check in Settings before running it.</p>
-            )
-          ) : (
-            <p className="field__hint">Provider availability has not been reported by the server yet. You can still create the session; check Settings if runs fail.</p>
-          )}
-        </Field>
-        <Field label="Name" htmlFor="sf-name"><input id="sf-name" data-autofocus className="input" value={name} maxLength={100} onChange={(e) => { setNameTouched(true); setName(e.target.value); }} /></Field>
-        <div className="form-row">
-          <Field label="Model" htmlFor="sf-model" hint={info && info.models.length === 0 ? 'No models were reported by the provider; enter a model ID.' : undefined}>
-            {info && info.models.length > 0 ? (
-              <select id="sf-model" className="select" value={model} onChange={(e) => setModel(e.target.value)}>
-                {info.models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-              </select>
-            ) : (
-              <input id="sf-model" className="input input--mono" value={model} onChange={(e) => setModel(e.target.value)} spellCheck={false} />
-            )}
-          </Field>
-          <Field label="Effort">
-            <Segmented label="Effort" value={effort} onChange={setEffort} options={[{ value: 'low', label: 'Low' }, { value: 'medium', label: 'Medium' }, { value: 'high', label: 'High' }]} />
-          </Field>
-        </div>
-        <Field label="Approval policy" hint={policy === 'supervised' ? 'Supervised: the agent asks before using tools that change things.' : 'Balanced: fewer interruptions; the provider decides which actions need approval.'}>
-          <Segmented label="Approval policy" value={policy} onChange={setPolicy} options={[{ value: 'supervised', label: 'Supervised' }, { value: 'balanced', label: 'Balanced' }]} />
-        </Field>
-        <Switch
-          checked={isolated} onChange={setIsolated} label="Isolated worktree"
-          description={isolated ? 'Edits happen on a dedicated Git branch in a separate worktree under Relay’s data folder. Requires a Git repository with at least one commit.' : undefined}
-        />
-        {!isolated ? <div className="inline-warn" role="note"><AlertTriangle size={14} /> This session will edit the project folder directly. Other sessions and your own changes can collide with it.</div> : null}
         {error ? <InlineError>{error}</InlineError> : null}
       </form>
     </Modal>

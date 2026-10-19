@@ -12,7 +12,6 @@ export type TerminalStatus = 'idle' | 'starting' | 'running' | 'exited' | 'lost'
 
 export type Dialog =
   | { kind: 'project' }
-  | { kind: 'session' }
   | { kind: 'task' }
   | { kind: 'handoff'; taskId?: string; fromSessionId?: string }
   | { kind: 'settings' }
@@ -34,20 +33,23 @@ export interface TerminalState {
   note: string | null;
 }
 
-const LS = 'relay.ui.v1';
+const LS = 'relay.ui.v2';
 interface Persisted {
   activeProjectId?: string; sessionByProject?: Record<string, string>; view?: View; contextTab?: ContextTab;
   contextOpen?: boolean; terminalOpen?: boolean; terminalHeight?: number; scope?: Scope;
 }
 const loadPersisted = (): Persisted => {
   try {
-    return JSON.parse(localStorage.getItem(LS) ?? '{}') as Persisted;
+    const current = localStorage.getItem(LS);
+    if (current) return JSON.parse(current) as Persisted;
+    const previous = JSON.parse(localStorage.getItem('relay.ui.v1') ?? '{}') as Persisted;
+    // Keep the user's project/session selection while starting the simpler layout with optional panels closed.
+    return { activeProjectId: previous.activeProjectId, sessionByProject: previous.sessionByProject, scope: previous.scope };
   } catch {
     return {};
   }
 };
 const persisted = loadPersisted();
-const wide = typeof window === 'undefined' ? true : window.innerWidth >= 1240;
 
 interface RelayState {
   boot: Bootstrap | null;
@@ -66,6 +68,7 @@ interface RelayState {
   terminalOpen: boolean;
   terminalHeight: number;
   sidebarOpen: boolean;
+  creatingSession: boolean;
   scope: Scope;
   dialog: Dialog | null;
   selectedTaskId: string | null;
@@ -91,6 +94,7 @@ interface RelayState {
   closeDialog(): void;
   selectProject(id: string): void;
   selectSession(id: string): void;
+  createSession(): Promise<void>;
   selectTask(id: string | null): void;
   setCenterTab(key: string): void;
   setMapSelection(id: string | null): void;
@@ -185,7 +189,7 @@ let socket: WebSocket | null = null;
 let retryTimer: number | undefined;
 let refreshTimer: number | undefined;
 let refreshFirstQueuedAt = 0;
-let inflight = false;
+let inflight: Promise<void> | null = null;
 let dirty = false;
 let toastSeq = 1;
 let pendingInput = '';
@@ -371,11 +375,12 @@ export const useRelay = create<RelayState>((set, get) => {
     activeProjectId: persisted.activeProjectId ?? null,
     sessionByProject: persisted.sessionByProject ?? {},
     view: persisted.view ?? 'workspace',
-    contextTab: persisted.contextTab ?? 'overview',
-    contextOpen: wide ? persisted.contextOpen ?? true : false,
+    contextTab: persisted.contextTab ?? 'files',
+    contextOpen: persisted.contextOpen ?? false,
     terminalOpen: persisted.terminalOpen ?? false,
     terminalHeight: persisted.terminalHeight ?? 260,
     sidebarOpen: false,
+    creatingSession: false,
     scope: persisted.scope ?? 'session',
     dialog: null,
     selectedTaskId: null,
@@ -396,13 +401,12 @@ export const useRelay = create<RelayState>((set, get) => {
       document.addEventListener('visibilitychange', handleVisibility);
     },
 
-    async refreshNow() {
+    refreshNow() {
       if (inflight) {
         dirty = true;
-        return;
+        return inflight;
       }
-      inflight = true;
-      try {
+      inflight = (async () => {
         do {
           dirty = false;
           try {
@@ -418,9 +422,8 @@ export const useRelay = create<RelayState>((set, get) => {
             else set({ bootError: msg, bootLoading: false });
           }
         } while (dirty);
-      } finally {
-        inflight = false;
-      }
+      })().finally(() => { inflight = null; });
+      return inflight;
     },
 
     reconnect() {
@@ -467,6 +470,25 @@ export const useRelay = create<RelayState>((set, get) => {
         activeProjectId: s.projectId, sessionByProject: { ...get().sessionByProject, [s.projectId]: id },
         view: 'workspace', centerTab: 'session', sidebarOpen: false,
       });
+    },
+    async createSession() {
+      const { activeProjectId, creatingSession, connection } = get();
+      if (creatingSession) return;
+      if (!activeProjectId) { get().toast('error', 'Open a project first.'); return; }
+      if (connection !== 'online') { get().toast('error', 'Reconnect to the server to create a session.'); return; }
+      set({ creatingSession: true });
+      try {
+        const session = await api.createSession({ projectId: activeProjectId });
+        await get().refreshNow();
+        // Keep the server result usable even if the subsequent bootstrap request failed.
+        set((s) => ({ boot: s.boot ? { ...s.boot, sessions: [...s.boot.sessions.filter((x) => x.id !== session.id), session] } : s.boot }));
+        get().selectSession(session.id);
+        window.requestAnimationFrame(() => document.getElementById(`composer-${session.id}`)?.focus());
+      } catch (error) {
+        get().toast('error', errorMessage(error));
+      } finally {
+        set({ creatingSession: false });
+      }
     },
     selectTask: (selectedTaskId) => set({ selectedTaskId }),
     setCenterTab: (centerTab) => set({ centerTab }),

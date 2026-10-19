@@ -5,7 +5,7 @@ Relay is a working title for an independent local development environment. The f
 ## First complete workflow
 
 1. Open a local Git project. Show its real branch and files; retain the selection after reload.
-2. Create a named Codex or Claude session, choose the model, effort and policy, and create an isolated worktree by default. Explain any prerequisites instead of silently sharing the main checkout.
+2. Click New Session to create and select a session immediately using saved provider, model and effort defaults. Adjust its model/effort in the composer, and rename it when useful. Create an isolated worktree by default; explain prerequisites and the explicit project-folder setting when a worktree cannot be created.
 3. Send a task. Stream actual provider output and tool events, preserve messages, show actionable errors, and allow interruption.
 4. Create a second independent session. Each session has its own provider conversation, worktree and lifecycle.
 5. Create tasks with acceptance criteria and dependencies. Show why blocked work is blocked. Dispatch a ready task only when explicitly requested.
@@ -19,7 +19,7 @@ Relay is a working title for an independent local development environment. The f
 - Tasks: task status, dependencies, owner, acceptance criteria and explicit dispatch.
 - Agent map: actual session and task relationships; selecting a node leads to useful detail.
 - Activity: durable project events and artifact announcements.
-- Settings: diagnostics, executable overrides, policy and appearance.
+- Settings: new-session defaults and appearance, with diagnostics, executable overrides and permissions under disclosures.
 
 Project selection scopes the workspace. Session selection scopes chat and code inspection. Creating a session never silently launches inference. Unavailable provider executables and absent product authentication are separate states. An example workspace must be labeled and contain no simulated live traffic or invented performance claims.
 
@@ -29,7 +29,7 @@ Keyboard access, focus indication, labeled form inputs, Escape dismissal, a comm
 
 ## Design direction
 
-A quiet development environment with dark slate surfaces, restrained lavender emphasis, thin separators, small monospaced technical metadata and readable conversation text. Use a single spacing, type and color system. The agent graph explains work relationships; it should remain useful with one idle session.
+A quiet development environment with neutral surfaces, a muted accent, thin separators and readable conversation text. Optional context and terminal panels start closed. Keep secondary project views in More, and show advanced details when requested. Use a single spacing, type and color system. The agent graph explains work relationships; it should remain useful with one idle session. See [the minimal workspace revision](ui-direction.md) for current references and behavior.
 
 ## Future product work
 

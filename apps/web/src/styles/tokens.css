@@ -1,4 +1,4 @@
-/* Relay design tokens — near-black blue slate with a restrained lavender accent. */
+/* Relay design tokens — neutral surfaces with a muted accent. */
 :root,
 :root[data-theme='dark'] {
   color-scheme: dark;
@@ -54,14 +54,14 @@
 :root[data-theme='light'] {
   color-scheme: light;
 
-  --bg-app: #f6f6fa;
-  --bg-sidebar: #eeeef5;
-  --bg-panel: #f9f9fc;
+  --bg-app: #f8f8f8;
+  --bg-sidebar: #f0f0f1;
+  --bg-panel: #fafafa;
   --bg-surface: #ffffff;
   --bg-raised: #ffffff;
   --bg-hover: rgba(40, 45, 90, 0.05);
   --bg-active: rgba(40, 45, 90, 0.09);
-  --bg-inset: #eceef6;
+  --bg-inset: #ededee;
   --bg-overlay: rgba(30, 32, 52, 0.38);
 
   --line-soft: rgba(40, 45, 90, 0.07);
@@ -74,11 +74,11 @@
   --fg-3: #8d92aa;
   --fg-on-accent: #ffffff;
 
-  --accent: #6c5ce0;
-  --accent-strong: #5646cf;
-  --accent-dim: #7f70ea;
-  --accent-soft: rgba(108, 92, 224, 0.1);
-  --accent-line: rgba(108, 92, 224, 0.4);
+  --accent: #666174;
+  --accent-strong: #514c60;
+  --accent-dim: #7a7588;
+  --accent-soft: rgba(102, 97, 116, 0.08);
+  --accent-line: rgba(102, 97, 116, 0.35);
 
   --ok: #1d8f66;
   --ok-soft: rgba(29, 143, 102, 0.1);

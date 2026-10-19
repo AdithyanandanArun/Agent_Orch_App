@@ -20,7 +20,7 @@ export function Palette() {
     const st = useRelay.getState();
     const go = (fn: () => void) => () => { st.closeDialog(); fn(); };
     const list: Cmd[] = [
-      { id: 'new-session', group: 'Create', label: 'New session', icon: <Plus size={15} />, run: go(() => st.openDialog({ kind: 'session' })), disabled: project ? undefined : 'Open a project first' },
+      { id: 'new-session', group: 'Create', label: 'New session', icon: <Plus size={15} />, run: go(() => { void st.createSession(); }), disabled: !project ? 'Open a project first' : s.creatingSession ? 'Creating session…' : undefined },
       { id: 'new-task', group: 'Create', label: 'New task', icon: <ListPlus size={15} />, run: go(() => st.openDialog({ kind: 'task' })), disabled: project ? undefined : 'Open a project first' },
       { id: 'new-project', group: 'Create', label: 'Open project…', icon: <FolderPlus size={15} />, run: go(() => st.openDialog({ kind: 'project' })) },
       { id: 'v-workspace', group: 'Go to', label: 'Workspace', icon: <LayoutPanelLeft size={15} />, run: go(() => st.setView('workspace')) },
@@ -58,7 +58,7 @@ export function Palette() {
     );
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [s.boot?.sessions, s.boot?.projects, s.boot?.settings.theme, project?.id, session?.id, session?.status, session?.name, s.terminalOpen, s.contextOpen]);
+  }, [s.boot?.sessions, s.boot?.projects, s.boot?.settings.theme, project?.id, session?.id, session?.status, session?.name, s.terminalOpen, s.contextOpen, s.creatingSession]);
 
   const results = useMemo(() => {
     if (!query.trim()) return commands;

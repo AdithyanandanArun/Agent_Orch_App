@@ -60,9 +60,10 @@ const q = (params: Record<string, string | number | null | undefined>): string =
 };
 
 export interface NewSessionInput {
-  projectId: string; name: string; provider: 'codex' | 'claude'; model: string;
-  effort: 'low' | 'medium' | 'high'; policy: 'supervised' | 'balanced'; isolated: boolean;
+  projectId: string; name?: string; provider?: Session['provider']; model?: string;
+  effort?: Session['effort']; policy?: Session['policy']; isolated?: boolean;
 }
+export type SessionPatch = Partial<Pick<Session, 'name' | 'provider' | 'model' | 'effort' | 'policy'>>;
 export interface NewTaskInput {
   projectId: string; title: string; description: string; acceptanceCriteria: string; sessionId: string | null; dependsOn: string[];
 }
@@ -104,6 +105,7 @@ export const api = {
   git: (projectId: string, sessionId: string | null) =>
     json<GitStatus>(`/api/projects/${encodeURIComponent(projectId)}/git${q({ sessionId })}`),
   createSession: (input: NewSessionInput) => json<Session>('/api/sessions', 'POST', input),
+  updateSession: (id: string, patch: SessionPatch) => json<Session>(`/api/sessions/${encodeURIComponent(id)}`, 'PATCH', patch),
   renameSession: (id: string, name: string) => json<Session>(`/api/sessions/${encodeURIComponent(id)}`, 'PATCH', { name }),
   archiveSession: (id: string) => json<unknown>(`/api/sessions/${encodeURIComponent(id)}`, 'DELETE'),
   sendMessage: (id: string, content: string) => json<{ accepted: boolean }>(`/api/sessions/${encodeURIComponent(id)}/messages`, 'POST', { content }),

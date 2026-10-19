@@ -5,7 +5,10 @@ import { newId, nowIso } from './util.ts';
 
 type Row = Record<string, unknown>;
 
-export const DEFAULT_SETTINGS: AppSettings = { defaultPolicy: 'supervised', theme: 'dark', claudeExecutable: '', codexExecutable: '' };
+export const DEFAULT_SETTINGS: AppSettings = {
+  defaultProvider: 'codex', defaultCodexModel: 'gpt-6.1-sol', defaultClaudeModel: 'claude-sonnet-5-5', defaultEffort: 'high', defaultIsolated: true,
+  defaultPolicy: 'supervised', theme: 'dark', claudeExecutable: '', codexExecutable: '',
+};
 
 export interface NewSession {
   id?: string; projectId: string; name: string; provider: Provider; model: string; effort: Session['effort']; policy: Policy; isolated: boolean;
@@ -131,8 +134,8 @@ export class Store {
       : this.all('SELECT * FROM sessions WHERE archived_at IS NULL ORDER BY created_at ASC, rowid ASC');
     return rows.map(mapSession);
   }
-  updateSession(id: string, patch: Partial<Pick<Session, 'name' | 'status' | 'error' | 'providerSessionId' | 'inputTokens' | 'outputTokens' | 'costUsd'>>): Session {
-    const columns: Record<string, string> = { name: 'name', status: 'status', error: 'error', providerSessionId: 'provider_session_id', inputTokens: 'input_tokens', outputTokens: 'output_tokens', costUsd: 'cost_usd' };
+  updateSession(id: string, patch: Partial<Pick<Session, 'name' | 'provider' | 'model' | 'effort' | 'policy' | 'status' | 'error' | 'providerSessionId' | 'inputTokens' | 'outputTokens' | 'costUsd'>>): Session {
+    const columns: Record<string, string> = { name: 'name', provider: 'provider', model: 'model', effort: 'effort', policy: 'policy', status: 'status', error: 'error', providerSessionId: 'provider_session_id', inputTokens: 'input_tokens', outputTokens: 'output_tokens', costUsd: 'cost_usd' };
     const sets: string[] = ['updated_at = ?'];
     const params: SQLInputValue[] = [nowIso()];
     for (const [key, value] of Object.entries(patch)) {

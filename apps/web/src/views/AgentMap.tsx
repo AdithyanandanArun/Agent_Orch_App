@@ -50,6 +50,7 @@ export default function AgentMap() {
   const project = useProject();
   const boot = useRelay((s) => s.boot);
   const selected = useRelay((s) => s.mapSelection);
+  const creatingSession = useRelay((s) => s.creatingSession);
 
   const { nodes, edges, sessions, tasks } = useMemo(() => {
     const sessions = (boot?.sessions ?? []).filter((s) => s.projectId === project?.id);
@@ -95,7 +96,7 @@ export default function AgentMap() {
   if (!project) return <EmptyState icon={<Network size={20} />} title="No project">Open a project to see its sessions and tasks.</EmptyState>;
   if (sessions.length === 0 && tasks.length === 0) {
     return (
-      <EmptyState icon={<Network size={20} />} title="Nothing to map yet" action={<Button variant="primary" onClick={() => useRelay.getState().openDialog({ kind: 'session' })}>New session</Button>}>
+      <EmptyState icon={<Network size={20} />} title="Nothing to map yet" action={<Button variant="primary" busy={creatingSession} disabled={creatingSession || !project} onClick={() => void useRelay.getState().createSession()}>New session</Button>}>
         The map is drawn from this project&apos;s real sessions, tasks, dependencies and recorded handoffs.
       </EmptyState>
     );

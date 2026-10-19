@@ -188,7 +188,7 @@ export function SessionPane() {
           <ArrowDown size={13} /> Latest
         </button>
       ) : null}
-      <Composer session={session} />
+      <Composer key={session.id} session={session} />
     </div>
   );
 }
