@@ -62,6 +62,26 @@ export interface ProviderSkill {
   source: 'provider' | 'project' | 'user'; enabled: boolean;
 }
 export interface ProviderCatalog { commands: ProviderCommand[]; skills: ProviderSkill[]; warnings: string[] }
+export interface UsageWindow {
+  id: string; label: string; scope?: string;
+  usedPercent: number | null; remainingPercent: number | null;
+  resetAt: string | null; windowMinutes: number | null;
+}
+export interface UsageCredits {
+  balance: string | null; unit: string | null; unlimited: boolean | null; resetAt: string | null;
+}
+export interface UsageResetGrant {
+  id: string; label: string; expiresAt: string | null; grantedAt: string | null;
+}
+export interface ProviderUsage {
+  provider: Provider; fetchedAt: string; status: 'available' | 'partial' | 'unavailable'; plan: string | null;
+  windows: UsageWindow[]; credits: UsageCredits | null;
+  resets: { available: number | null; grants: UsageResetGrant[]; detailsKnown: boolean; replenishesAt: string | null } | null;
+  notices: string[];
+}
+export interface SessionUsage extends ProviderUsage {
+  session: { id: string; inputTokens: number; outputTokens: number; costUsd: number | null };
+}
 export interface AppSettings {
   defaultProvider: Provider; defaultCodexModel: string; defaultClaudeModel: string; defaultEffort: Effort; defaultIsolated: boolean;
   defaultPolicy: Policy; defaultServiceTier?: string; theme: 'dark' | 'light'; claudeExecutable: string; codexExecutable: string;
