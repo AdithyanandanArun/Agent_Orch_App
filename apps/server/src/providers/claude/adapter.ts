@@ -1,6 +1,6 @@
 import type { AgentAdapter, AppSettings, RunOptions } from '@relay/contracts';
 import type { Options, PermissionResult, Query } from '@anthropic-ai/claude-agent-sdk';
-import { ProviderError, TextTail, abortError, errorMessage, isAbortError, redactSecrets } from '../common.js';
+import { ProviderError, TextTail, abortError, errorMessage, isAbortError, isRecord, redactSecrets } from '../common.js';
 import { bundledClaudeCandidates, resolveExecutableCached, type ResolveResult } from '../discovery.js';
 import { ClaudeMessageMapper, claudePermissionMode, describeToolUse, previewInput } from './messages.js';
 import { claudeEnvironment } from './auth.js';
@@ -126,6 +126,11 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): AgentAdapter 
           }
         }
         for await (const message of stream) {
+          if (session.providerSessionId && isRecord(message) && message.type === 'system' && message.subtype === 'init' && !message.parent_tool_use_id &&
+            typeof message.session_id === 'string' && message.session_id !== session.providerSessionId) {
+            controller.abort();
+            throw new ProviderError('Claude resumed a different conversation. Relay stopped the run to preserve the selected conversation.', { code: 'resume_failed' });
+          }
           mapper.handle(message);
           if (signal.aborted) break;
         }
