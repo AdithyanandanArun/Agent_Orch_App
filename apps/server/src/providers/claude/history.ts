@@ -58,7 +58,8 @@ function toConversation(info: SDKSessionInfo): ExternalConversation {
     provider: 'claude',
     id: info.sessionId,
     title: publicLabel(title, 'Claude conversation'),
-    directory: typeof info.cwd === 'string' ? truncate(redactSecrets(info.cwd), 4096) : null,
+    // Preserve the native cwd exactly: callers use this value to reopen the original workspace.
+    directory: typeof info.cwd === 'string' ? info.cwd : null,
     updatedAt: isoTime(info.lastModified),
     createdAt: isoTime(info.createdAt),
     // Session metadata does not report a model. Details may fill this from a real assistant message.
@@ -184,11 +185,11 @@ export async function readClaudeConversation(
     if (!extracted) return [];
     return [{ role: message.type as 'user' | 'assistant', ...extracted }];
   });
-  const recent = eligible.slice(-MAX_MESSAGES);
   let usedBytes = 0;
-  let truncated = eligible.length > recent.length;
-  const messages: ExternalConversationMessage[] = [];
-  for (const item of recent) {
+  let truncated = eligible.length > MAX_MESSAGES;
+  const newestFirst: ExternalConversationMessage[] = [];
+  for (let index = eligible.length - 1; index >= Math.max(0, eligible.length - MAX_MESSAGES); index -= 1) {
+    const item = eligible[index];
     const redacted = redactSecrets(item.content);
     const remaining = MAX_TOTAL_BYTES - usedBytes;
     if (remaining <= 0) {
@@ -201,10 +202,11 @@ export async function readClaudeConversation(
       truncated = true;
       break;
     }
-    messages.push({ role: item.role, content: fitted.text, createdAt: item.createdAt });
+    newestFirst.push({ role: item.role, content: fitted.text, createdAt: item.createdAt });
     usedBytes += fitted.bytes;
-    if (fitted.truncated || usedBytes >= MAX_TOTAL_BYTES) break;
+    if (fitted.truncated) truncated = true;
   }
+  const messages = newestFirst.reverse();
 
   const model = [...eligible].reverse().find((message) => message.role === 'assistant' && message.model)?.model ?? null;
   conversation.model = model;
