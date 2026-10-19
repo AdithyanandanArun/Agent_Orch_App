@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowUp, MoreHorizontal, Square } from 'lucide-react';
+import { ArrowUp, Square } from 'lucide-react';
 import type { Session } from '@relay/contracts';
 import { useRelay } from '../store/store';
 import { api, errorMessage, type SessionPatch } from '../lib/api';
@@ -109,14 +109,9 @@ export function Composer({ session }: { session: Session }) {
             <SelectMenu className="composer__select" label="Effort" value={session.effort} disabled={disabled}
               options={[{ value: 'low', label: 'Low' }, { value: 'medium', label: 'Medium' }, { value: 'high', label: 'High' }]}
               onChange={(value) => void configure({ effort: value as Session['effort'] })} placement="top" />
-            <details className="composer__details">
-              <summary aria-label="Session options" title="Session options"><MoreHorizontal size={15} /></summary>
-              <div className="composer__options">
-                <SelectMenu className="composer__select composer__select--policy" label="Approval policy" value={session.policy} disabled={disabled}
-                  options={[{ value: 'supervised', label: 'Supervised' }, { value: 'balanced', label: 'Balanced' }]}
-                  onChange={(value) => void configure({ policy: value as Session['policy'] })} placement="top" />
-              </div>
-            </details>
+            <SelectMenu className="composer__select composer__select--policy" label="Approval policy" value={session.policy} disabled={disabled}
+              options={[{ value: 'supervised', label: 'Supervised' }, { value: 'balanced', label: 'Balanced' }]}
+              onChange={(value) => void configure({ policy: value as Session['policy'] })} placement="top" />
           </div>
           <div className="composer__send">
             {running ? (

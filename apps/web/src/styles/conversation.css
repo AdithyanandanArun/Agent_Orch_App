@@ -153,7 +153,7 @@
 .composer__select:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
 .composer__select:disabled { opacity: 0.45; }
 .composer__select--model { max-width: min(250px, 42vw); }
-.composer__select--policy { width: 100%; justify-content: space-between; }
+.composer__select--policy { width: auto; }
 
 .composer__details { position: relative; }
 .composer__details summary { color: var(--fg-2); }
