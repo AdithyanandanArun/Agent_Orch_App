@@ -91,7 +91,7 @@ function runSummary(run: SessionRun): string[] {
   const searches = counts.search ?? 0;
   if (searches > 0) parts.push(`Searched ${searches} ${searches === 1 ? 'time' : 'times'}`);
   const agents = counts.agent ?? 0;
-  if (agents > 0) parts.push(`Ran ${agents} ${agents === 1 ? 'subagent' : 'subagents'}`);
+  if (agents > 0) parts.push(`${agents} agent ${agents === 1 ? 'call' : 'calls'}`);
   const files = counts.file ?? 0;
   if (files > 0) parts.push(`Used file tools ${files} ${files === 1 ? 'time' : 'times'}`);
   return parts;
@@ -254,7 +254,7 @@ export function RunActivity({ run, initialCalls }: { run: SessionRun; initialCal
         <ChevronRight size={13} className="run-activity__chevron" aria-hidden="true" />
         {run.status === 'running' ? <span className="run-activity__pulse" aria-hidden="true" /> : <span className={cx('run-activity__mark', `is-${run.status}`)} aria-hidden="true" />}
         <span className="run-activity__status" role={run.status === 'running' ? 'timer' : undefined} aria-live="off">{runStatusLabel(run, elapsed)}</span>
-        {summary.length ? <span className="run-activity__counts">{summary.join(' · ')}</span> : null}
+        {summary.length ? <span className="run-activity__counts" title={summary.join(' · ')}>{summary.join(' · ')}</span> : null}
       </summary>
       <div className="run-activity__body">
         {!run.toolCount && !tree.length ? <p className="run-activity__empty">No tool calls were reported for this run.</p> : null}

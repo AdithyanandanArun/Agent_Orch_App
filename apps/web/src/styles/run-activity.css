@@ -4,7 +4,7 @@
   border-radius: 10px;
   background: color-mix(in srgb, var(--bg-panel) 60%, transparent);
   color: var(--fg-2);
-  font-size: 11px;
+  font-size: 12px;
   overflow: hidden;
 }
 
@@ -31,6 +31,7 @@
 .run-activity__mark.is-failed { background: var(--err); }
 .run-activity__status { flex: none; color: var(--fg-1); font-weight: 550; font-variant-numeric: tabular-nums; }
 .run-activity__counts { min-width: 0; overflow: hidden; color: var(--fg-3); text-overflow: ellipsis; white-space: nowrap; }
+.run-activity[open] .run-activity__counts { overflow: visible; text-overflow: clip; white-space: normal; }
 .run-activity__body { display: grid; gap: 9px; padding: 10px 11px 11px; border-top: 1px solid var(--line-soft); }
 .run-activity__chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .run-activity__chips span { padding: 3px 7px; border: 1px solid var(--line-soft); border-radius: 999px; color: var(--fg-2); font-size: 10px; }
@@ -44,7 +45,7 @@
   background: var(--bg-panel);
   overflow: hidden;
   color: var(--fg-2);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .run-tool__summary {
@@ -64,18 +65,18 @@
 .run-tool__summary > svg:not(.run-tool__chevron) { flex: none; color: var(--fg-3); }
 .run-tool__chevron { flex: none; transition: transform 120ms ease; }
 .run-tool[open] > .run-tool__summary .run-tool__chevron { transform: rotate(90deg); }
-.run-tool__title { min-width: 0; max-width: 42%; overflow: hidden; color: var(--fg-1); text-overflow: ellipsis; white-space: nowrap; }
-.run-tool__command { min-width: 0; overflow: hidden; color: var(--fg-3); font: 10px/1.4 var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
-.run-tool__status { flex: none; margin-left: auto; color: var(--fg-3); font-size: 9px; text-transform: capitalize; }
+.run-tool__title { min-width: 0; flex: 1; overflow: hidden; color: var(--fg-1); text-overflow: ellipsis; white-space: nowrap; }
+.run-tool__command { min-width: 0; max-width: 40%; overflow: hidden; color: var(--fg-3); font: 11.5px/1.4 var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.run-tool__status { flex: none; margin-left: auto; color: var(--fg-3); font-size: 10px; text-transform: capitalize; }
 .run-tool__status.is-running { color: var(--fg-1); }
 .run-tool__status.is-completed { color: var(--ok); }
 .run-tool__status.is-failed { color: var(--err); }
 .run-tool__status.is-interrupted { color: var(--warn); }
 .run-tool__body { display: grid; gap: 8px; padding: 9px 10px 10px; border-top: 1px solid var(--line-soft); }
 .run-tool__facts { display: flex; flex-wrap: wrap; gap: 8px 16px; }
-.run-tool__field { display: grid; gap: 3px; min-width: 0; color: var(--fg-3); font-size: 10px; }
+.run-tool__field { display: grid; gap: 3px; min-width: 0; color: var(--fg-3); font-size: 11px; }
 .run-tool__field code,
-.run-tool__field pre { min-width: 0; margin: 0; color: var(--fg-1); font: 10.5px/1.55 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.run-tool__field pre { min-width: 0; margin: 0; color: var(--fg-1); font: 11.5px/1.55 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .run-tool__field pre { max-height: 240px; overflow: auto; padding: 7px 8px; border-radius: 6px; background: var(--bg-inset); }
 .run-tool__loading,
 .run-tool__load-error { display: inline-flex; align-items: center; gap: 6px; color: var(--fg-3); font-size: 10px; }
