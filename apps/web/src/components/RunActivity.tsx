@@ -165,6 +165,7 @@ function ToolDetail({ node, activeRun }: { node: ToolNode; activeRun: boolean })
   useEffect(() => () => { requestGeneration.current += 1; }, []);
 
   const onToggle = (event: SyntheticEvent<HTMLDetailsElement>): void => {
+    if (event.target !== event.currentTarget) return;
     expanded.current = event.currentTarget.open;
     if (!event.currentTarget.open) {
       requestGeneration.current += 1;
@@ -226,6 +227,7 @@ export function RunActivity({ run, initialCalls }: { run: SessionRun; initialCal
   const summary = useMemo(() => runSummary(run), [run]);
   const tree = useMemo(() => toolTree(calls, run.id), [calls, run.id]);
   const onToggle = (event: SyntheticEvent<HTMLDetailsElement>): void => {
+    if (event.target !== event.currentTarget) return;
     expanded.current = event.currentTarget.open;
     if (!event.currentTarget.open) {
       requestGeneration.current += 1;

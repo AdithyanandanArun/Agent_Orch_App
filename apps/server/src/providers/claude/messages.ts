@@ -156,6 +156,7 @@ export class ClaudeMessageMapper {
     }
     switch (message.subtype) {
       case 'init': {
+        if (str(message.parent_tool_use_id)) return;
         this.noteSession(message.session_id);
         const model = str(message.model);
         if (model && model !== this.requestedModel && !model.startsWith(this.requestedModel) && !this.requestedModel.startsWith(model)) {
@@ -327,6 +328,7 @@ export class ClaudeMessageMapper {
   }
 
   private result(message: Record<string, unknown>): void {
+    if (str(message.parent_tool_use_id)) return;
     this.noteSession(message.session_id);
     this.finished = true;
     this.emitUsage(message);

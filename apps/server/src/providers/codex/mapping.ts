@@ -33,7 +33,8 @@ function compact(entries: Record<string, unknown>): Record<string, unknown> {
 }
 
 function safeStructured(value: unknown, depth = 0): unknown {
-  if (depth > 6 || value === null || typeof value === 'boolean' || typeof value === 'number') return value;
+  if (depth > 6) return '[omitted nested value]';
+  if (value === null || typeof value === 'boolean' || typeof value === 'number') return value;
   if (typeof value === 'string') {
     if (value.length > 128 && /^[A-Za-z0-9+/]+={0,2}$/.test(value)) return '[omitted binary-like value]';
     return truncate(value, 4_000);
