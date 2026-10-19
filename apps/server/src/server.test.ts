@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { EXAMPLE_ARTIFACT_PATH, EXAMPLE_CLIENT_SESSION_ID, EXAMPLE_CONTRACT_SESSION_ID, EXAMPLE_PROJECT_ID } from './example.ts';
+import { SCHEMA_VERSION } from './db.ts';
 import { makeRepo, rawRequest, runGit, startTestApp, waitFor, type TestApp } from './test-utils.ts';
 
 const apps: TestApp[] = [];
@@ -38,7 +39,7 @@ describe('bootstrap and example workspace', () => {
   it('reports health with database and runtime details', async () => {
     const t = await boot();
     const health = (await t.api('GET', '/api/health')).json;
-    expect(health).toMatchObject({ ok: true, host: '127.0.0.1', port: t.port, database: { ok: true, schemaVersion: 1, sessions: 2 }, runtime: { activeRuns: 0 } });
+    expect(health).toMatchObject({ ok: true, host: '127.0.0.1', port: t.port, database: { ok: true, schemaVersion: SCHEMA_VERSION, sessions: 2 }, runtime: { activeRuns: 0 } });
   });
 
   it('keeps all state across restarts, appends events monotonically and seeds the example once', async () => {

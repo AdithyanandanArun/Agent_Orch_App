@@ -58,9 +58,9 @@ describe('claude adapter', () => {
 
     expect(run.events[0]).toEqual({ type: 'session', providerSessionId: 'sess-1' });
     expect(text(run.events)).toBe('Hello\n\nDone');
-    expect(run.events.filter((e) => e.type === 'tool')).toEqual([
-      { type: 'tool', name: 'Bash', content: 'Run command: ls -la' },
-      { type: 'tool', name: 'Bash:result', content: 'file.txt' },
+    expect(run.events.filter((e) => e.type === 'tool.activity').map((e) => e.activity)).toMatchObject([
+      { id: 'tu1', name: 'Bash', category: 'command', status: 'running', command: 'ls -la' },
+      { id: 'tu1', name: 'Bash', category: 'command', status: 'completed', output: 'file.txt' },
     ]);
     expect(run.events.at(-1)).toEqual({ type: 'usage', inputTokens: 1010, outputTokens: 40, costUsd: 0.0123 });
     expect(closes).toHaveBeenCalled();

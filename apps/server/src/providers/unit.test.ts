@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createAdapter } from './index.js';
 import { TextTail, redactSecrets } from './common.js';
-import { CodexUsageTracker, codexPolicy, describeTurnError, itemToolEvent } from './codex/mapping.js';
+import { CodexUsageTracker, codexPolicy, describeTurnError, itemToolActivity } from './codex/mapping.js';
 import { ClaudeMessageMapper, claudePermissionMode } from './claude/messages.js';
 
 describe('createAdapter', () => {
@@ -53,9 +53,9 @@ describe('codex mapping', () => {
   });
 
   it('produces tool events for commands and file changes, and nothing for plain messages', () => {
-    expect(itemToolEvent({ type: 'agentMessage', id: '1', text: 'x' }, 'completed')).toBeNull();
-    expect(itemToolEvent({ type: 'fileChange', id: 'f', status: 'completed', changes: [{ path: 'a.ts', kind: { type: 'add' }, diff: '+x' }] }, 'completed'))
-      .toEqual({ type: 'tool', name: 'file_change', content: 'add a.ts\n[completed]\n+x' });
+    expect(itemToolActivity({ type: 'agentMessage', id: '1', text: 'x' }, 'completed')).toBeNull();
+    expect(itemToolActivity({ type: 'fileChange', id: 'f', status: 'completed', changes: [{ path: 'a.ts', kind: { type: 'add' }, diff: '+x' }] }, 'completed'))
+      .toMatchObject({ id: 'f', name: 'file_change', category: 'file', status: 'completed', summary: 'add a.ts', output: '+x' });
   });
 });
 

@@ -72,7 +72,10 @@ describe('codex adapter', () => {
 
     expect(run.events[0]).toEqual({ type: 'session', providerSessionId: 'thr_1' });
     expect(text(run.events)).toBe('Looking now.\n\nDone.');
-    expect(run.events.filter((e) => e.type === 'tool').map((e) => (e.type === 'tool' ? e.content : ''))).toEqual(['$ npm test', '$ npm test\n[completed exit 0]\nok']);
+    expect(run.events.filter((e) => e.type === 'tool.activity').map((e) => e.activity)).toMatchObject([
+      { id: 'c1', name: 'shell', category: 'command', status: 'running', command: 'npm test', cwd: '/w' },
+      { id: 'c1', name: 'shell', category: 'command', status: 'completed', command: 'npm test', exitCode: 0, output: 'ok\n' },
+    ]);
     expect(run.events.at(-1)).toEqual({ type: 'usage', inputTokens: 700, outputTokens: 120, costUsd: null });
     expect(run.approvals[0]).toMatchObject({ tool: 'shell', input: { command: 'npm test', cwd: '/w' } });
     expect(child.closed).toBe(true);
