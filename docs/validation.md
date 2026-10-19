@@ -92,6 +92,7 @@ Added durable run records and tool lifecycle records through additive schema mig
 
 - Workspace type checking passed after final integration, including existing provider assertions updated to the new event contract and Electron entry-point syntax checks.
 - Production web build and server compilation passed.
+- The final `pnpm package:arch` command completed successfully with these changes. The standalone archive and Arch package were rebuilt locally, and the checked-in Arch recipe/`.SRCINFO` were updated to the new archive checksum. Bash syntax checking and `.SRCINFO` generation passed.
 - The running local server returned healthy bootstrap responses containing the new run/tool collections. Source review covered stable invocation IDs, progress deduplication, bounded/redacted captured output, interrupted-run recovery, nested disclosure events and stale detail-request handling.
 - Native collaborative-browser snapshots failed during final inspection. The available conversation initially had no structured tool history, so the new populated activity tree was not visually verified against a live provider run.
 
