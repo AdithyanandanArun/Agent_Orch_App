@@ -4,6 +4,7 @@ import './styles/tokens.css';
 import './styles/base.css';
 import './styles/ui.css';
 import './styles/app.css';
+import './styles/shell.css';
 import './styles/select-menu.css';
 import './styles/settings.css';
 import './styles/conversation.css';

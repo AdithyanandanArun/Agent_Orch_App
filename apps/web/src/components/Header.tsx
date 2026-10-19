@@ -1,7 +1,7 @@
-import { ArrowLeft, Command, Menu as MenuIcon, PanelRight, Pencil, SquareTerminal, Archive, MoreHorizontal, Square, ListPlus } from 'lucide-react';
+import { ArrowLeft, Menu as MenuIcon, PanelRight, Pencil, SquareTerminal, Archive, MoreHorizontal, Square, ListPlus } from 'lucide-react';
 import { useRelay, useActiveSession, useProject } from '../store/store';
 import { api, errorMessage } from '../lib/api';
-import { Button, IconButton, Menu, MenuItem, MenuSeparator, MOD, Kbd } from './ui';
+import { Button, IconButton, Menu, MenuItem, MenuSeparator } from './ui';
 import { useState } from 'react';
 
 const TITLES = { workspace: 'Workspace', tasks: 'Tasks', activity: 'Activity', map: 'Agent map', settings: 'Settings' } as const;
@@ -12,8 +12,7 @@ export function Header() {
   const session = useActiveSession();
   const contextOpen = useRelay((s) => s.contextOpen);
   const terminalOpen = useRelay((s) => s.terminalOpen);
-  const creatingSession = useRelay((s) => s.creatingSession);
-  const { openDialog, toggleContext, toggleTerminal, setSidebarOpen, createSession } = useRelay.getState();
+  const { openDialog, toggleContext, toggleTerminal, setSidebarOpen } = useRelay.getState();
   const [stopping, setStopping] = useState(false);
 
   const interrupt = async () => {
@@ -39,21 +38,17 @@ export function Header() {
     <header className="header">
       <IconButton label="Open sidebar" className="header__burger" onClick={() => setSidebarOpen(true)}><MenuIcon size={16} /></IconButton>
       <div className="crumbs" aria-label="Current view">
-        <span className="crumbs__project" title={session?.branch ?? undefined}>{view === 'workspace' ? session?.name ?? project?.name ?? 'No project' : project?.name ?? 'No project'}</span>
-        {view !== 'workspace' ? <span className="crumbs__current">{TITLES[view]}</span> : null}
+        <span className="crumbs__project">{project?.name ?? 'No project'}</span>
+        <span className="crumbs__sep" aria-hidden="true">/</span>
+        <span className="crumbs__current" title={session?.branch ?? undefined}>{view === 'workspace' ? session?.name ?? 'Workspace' : TITLES[view]}</span>
       </div>
       <div className="header__actions">
         {view === 'workspace' && session?.status === 'running' ? (
           <Button size="sm" variant="danger" busy={stopping} onClick={interrupt}><Square size={11} fill="currentColor" /> Interrupt</Button>
         ) : null}
-        <Button variant="ghost" size="sm" onClick={() => openDialog({ kind: 'palette' })} aria-label="Open command menu" className="cmdk-btn">
-          <Command size={13} aria-hidden="true" /> <Kbd>{MOD}</Kbd><Kbd>K</Kbd>
-        </Button>
         {view === 'tasks' ? (
-          <Button size="sm" variant="primary" onClick={() => openDialog({ kind: 'task' })} disabled={!project} why="Open a project first"><ListPlus size={14} /> New task</Button>
-        ) : (
-          <Button size="sm" variant="primary" onClick={() => void createSession()} busy={creatingSession} disabled={!project || creatingSession} why={!project ? 'Open a project first' : undefined}>New session</Button>
-        )}
+          <Button size="sm" onClick={() => openDialog({ kind: 'task' })} disabled={!project} why="Open a project first"><ListPlus size={14} /> New task</Button>
+        ) : null}
         {view === 'workspace' ? (
           <>
             <IconButton label={terminalOpen ? 'Hide terminal' : 'Show terminal'} active={terminalOpen} onClick={() => toggleTerminal()}><SquareTerminal size={16} /></IconButton>
