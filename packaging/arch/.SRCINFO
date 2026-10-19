@@ -36,6 +36,6 @@ pkgbase = relay-workspace-bin
 	options = !strip
 	options = !debug
 	source = relay-workspace-0.1.0-linux-x64.tar.gz::https://github.com/AdithyanandanArun/Agent_Orch_App/releases/download/v0.1.0/relay-workspace-0.1.0-linux-x64.tar.gz
-	sha256sums = dd2a33a5d6010b71c9eb32d4482cfe238fa2ebf5c359c9fd263a4f1a132f735c
+	sha256sums = 429ddcdfa700b773f9f058b46b520c7dc9927d04289192f3b4583b832ee702d7
 
 pkgname = relay-workspace-bin

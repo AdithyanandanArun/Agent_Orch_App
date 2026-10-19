@@ -107,7 +107,7 @@ async function removeBrokenLinks(directory) {
       } else {
         const resolved = await realpath(path);
         const boundary = resolve(server) + '/';
-        if (!resolved.startsWith(boundary)) throw new Error(`Runtime dependency escapes the release directory: ${path}`);
+        if (resolved !== resolve(server) && !resolved.startsWith(boundary)) throw new Error(`Runtime dependency escapes the release directory: ${path}`);
       }
     } else if (entry.isDirectory()) await removeBrokenLinks(path);
   }
