@@ -4,7 +4,7 @@ import type {
   AppSettings, ConversationListOptions, ExternalConversation, ExternalConversationDetails,
   ExternalConversationList, ExternalConversationMessage,
 } from '@relay/contracts';
-import { ProviderError, TextTail, isRecord, redactSecrets, truncate } from '../common.js';
+import { ProviderError, TextTail, cleanEnv, isRecord, redactSecrets, truncate } from '../common.js';
 import { resolveExecutableCached } from '../discovery.js';
 import { shutdownChild, type ChildLike } from '../process.js';
 import { JsonRpcConnection, RpcError } from './rpc.js';
@@ -16,7 +16,9 @@ const MAX_PAGE_SIZE = 50;
 const MAX_CURSOR_CHARS = 2_048;
 const MAX_MESSAGES = 200;
 const MAX_TEXT_BYTES = 2 * 1024 * 1024;
-const MAX_PAGES = 100;
+const MAX_MESSAGE_BYTES = 20 * 1024;
+const MAX_PAGES = 8;
+const READ_BUDGET_MS = 20_000;
 const CLIENT_INFO = { name: 'relay', title: 'Relay', version: '0.1.0' };
 
 interface RpcRuntime {
@@ -46,6 +48,7 @@ function mapThread(value: unknown): ExternalConversation | null {
   if (!id || !/^[A-Za-z0-9][A-Za-z0-9_.:-]*$/.test(id)) return null;
   const name = safeString(value.name, 500);
   const preview = safeString(value.preview, 500);
+  const active = isRecord(value.status) && value.status.type === 'active';
   return {
     provider: 'codex', id,
     title: name ?? preview ?? 'Codex conversation',
@@ -53,6 +56,7 @@ function mapThread(value: unknown): ExternalConversation | null {
     updatedAt: dateFromSeconds(value.updatedAt) ?? dateFromSeconds(value.recencyAt),
     createdAt: dateFromSeconds(value.createdAt),
     model: safeString(value.model, 150),
+    ...(active ? { unavailableReason: 'This conversation is currently active in Codex.' } : {}),
   };
 }
 
@@ -74,7 +78,13 @@ function safeRpcError(error: unknown): Error {
   return new ProviderError('Codex history could not be read.', { code: 'history_failed' });
 }
 
-async function start(settings: AppSettings): Promise<RpcRuntime> {
+function remainingMs(deadlineAt: number): number {
+  const remaining = deadlineAt - Date.now();
+  if (remaining <= 0) throw new ProviderError('Codex history read exceeded its time limit.', { code: 'history_timeout' });
+  return Math.max(1, Math.ceil(remaining));
+}
+
+async function start(settings: AppSettings, deadlineAt = Date.now() + INITIALIZE_TIMEOUT_MS): Promise<RpcRuntime> {
   let resolved: Awaited<ReturnType<typeof resolveExecutableCached>>;
   try {
     resolved = await resolveExecutableCached({ name: 'codex', override: settings.codexExecutable });
@@ -86,7 +96,8 @@ async function start(settings: AppSettings): Promise<RpcRuntime> {
   let child: ChildLike;
   try {
     child = spawn(resolved.executable.path, ['app-server'], {
-      cwd: tmpdir(), env: process.env, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsHide: true,
+      cwd: tmpdir(), env: cleanEnv(process.env, ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN']),
+      stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsHide: true,
     }) as unknown as ChildLike;
   } catch (error) {
     throw new ProviderError(`Codex app-server could not be started: ${truncate(redactSecrets(error instanceof Error ? error.message : String(error)), 300)}`, { code: 'process_start_failed', cause: error });
@@ -106,7 +117,7 @@ async function start(settings: AppSettings): Promise<RpcRuntime> {
     await conn.request('initialize', {
       clientInfo: CLIENT_INFO,
       capabilities: { experimentalApi: false, optOutNotificationMethods: ['item/reasoning/textDelta', 'item/reasoning/summaryTextDelta'] },
-    }, INITIALIZE_TIMEOUT_MS);
+    }, Math.min(INITIALIZE_TIMEOUT_MS, remainingMs(deadlineAt)));
     conn.notify('initialized', {});
   } catch (error) {
     await shutdownChild(child, { closed: conn.closed, group: process.platform !== 'win32', graceMs: 0, termMs: 500, killMs: 500 });
@@ -170,16 +181,33 @@ function itemText(item: Record<string, unknown>): { role: 'user' | 'assistant'; 
   return parts.length ? { role: 'user', content: parts.join('') } : null;
 }
 
+function clipUtf8(value: string, maxBytes: number): string {
+  const bytes = Buffer.from(value, 'utf8');
+  if (bytes.length <= maxBytes) return value;
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  for (let end = maxBytes; end >= Math.max(0, maxBytes - 4); end -= 1) {
+    try { return decoder.decode(bytes.subarray(0, end)); } catch { /* move before an incomplete UTF-8 sequence */ }
+  }
+  return '';
+}
+
+function isMethodNotFound(error: unknown): boolean {
+  return error instanceof RpcError && error.code === -32601;
+}
+
 /** Reads bounded public user/assistant text from a native thread using the app-server item pager. */
 export async function readCodexConversation(settings: AppSettings, id: string): Promise<ExternalConversationDetails> {
   if (typeof id !== 'string' || id.length < 1 || id.length > 200 || !/^[A-Za-z0-9][A-Za-z0-9_.:-]*$/.test(id)) {
     throw new ProviderError('Codex conversation id is invalid.', { code: 'invalid_conversation_id' });
   }
-  const runtime = await start(settings);
+  const deadlineAt = Date.now() + READ_BUDGET_MS;
+  const runtime = await start(settings, deadlineAt);
   let failure: unknown;
   let result: ExternalConversationDetails | undefined;
   try {
-    const read = resultData(await runtime.conn.request('thread/read', { threadId: id, includeTurns: false }, REQUEST_TIMEOUT_MS));
+    const read = resultData(await runtime.conn.request(
+      'thread/read', { threadId: id, includeTurns: false }, Math.min(REQUEST_TIMEOUT_MS, remainingMs(deadlineAt)),
+    ));
     const conversation = mapThread(read.thread);
     if (!conversation || conversation.id !== id) throw new ProviderError('Codex did not return the requested conversation.', { code: 'conversation_unavailable' });
 
@@ -189,25 +217,49 @@ export async function readCodexConversation(settings: AppSettings, id: string): 
     let truncated = false;
     let pages = 0;
     while (pages < MAX_PAGES) {
-      const page = resultData(await runtime.conn.request('thread/items/list', {
-        threadId: id, ...(cursor ? { cursor } : {}), limit: MAX_PAGE_SIZE, sortDirection: 'asc',
-      }, REQUEST_TIMEOUT_MS));
+      if (Date.now() >= deadlineAt) { truncated = true; break; }
+      let page: Record<string, unknown>;
+      try {
+        page = resultData(await runtime.conn.request('thread/items/list', {
+          threadId: id, ...(cursor ? { cursor } : {}), limit: MAX_PAGE_SIZE, sortDirection: 'desc',
+        }, Math.min(REQUEST_TIMEOUT_MS, remainingMs(deadlineAt))));
+      } catch (error) {
+        if (isMethodNotFound(error)) {
+          result = {
+            conversation, messages: [], truncated: true,
+            notices: ['This Codex version does not support paged conversation history; only conversation metadata is available.'],
+          };
+          break;
+        }
+        if (error instanceof ProviderError && (error.code === 'history_timeout' || error.code === 'timeout') && messages.length > 0) {
+          truncated = true;
+          break;
+        }
+        throw error;
+      }
       pages += 1;
       const rows = Array.isArray(page.data) ? page.data : [];
       for (const row of rows) {
         if (!isRecord(row) || !isRecord(row.item)) continue;
         const text = itemText(row.item);
         if (!text) continue;
-        const content = redactSecrets(text.content);
-        const contentBytes = Buffer.byteLength(content, 'utf8');
-        if (messages.length >= MAX_MESSAGES || bytes + contentBytes > MAX_TEXT_BYTES) {
+        if (messages.length >= MAX_MESSAGES || bytes >= MAX_TEXT_BYTES) {
           truncated = true;
           break;
         }
+        const redacted = redactSecrets(text.content);
+        const availableBytes = Math.min(MAX_MESSAGE_BYTES, MAX_TEXT_BYTES - bytes);
+        const content = clipUtf8(redacted, availableBytes);
+        const contentBytes = Buffer.byteLength(content, 'utf8');
+        if (contentBytes < Buffer.byteLength(redacted, 'utf8')) truncated = true;
         bytes += contentBytes;
         messages.push({ role: text.role, content, createdAt: dateFromMilliseconds(row.startedAtMs) ?? dateFromMilliseconds(row.completedAtMs) });
+        if (bytes >= MAX_TEXT_BYTES) { truncated = true; break; }
       }
-      if (truncated) break;
+      if (messages.length >= MAX_MESSAGES || bytes >= MAX_TEXT_BYTES) {
+        if (validCursor(page.nextCursor)) truncated = true;
+        break;
+      }
       const next = validCursor(page.nextCursor);
       if (page.nextCursor !== null && page.nextCursor !== undefined && !next) {
         truncated = true;
@@ -218,7 +270,10 @@ export async function readCodexConversation(settings: AppSettings, id: string): 
       cursor = next;
     }
     if (pages >= MAX_PAGES && cursor) truncated = true;
-    result = { conversation, messages, truncated, notices: truncated ? ['Conversation history was clipped at Relay’s import limits.'] : [] };
+    if (!result) {
+      messages.reverse();
+      result = { conversation, messages, truncated, notices: truncated ? ['Conversation history was clipped at Relay’s import limits.'] : [] };
+    }
   } catch (error) {
     failure = safeRpcError(error);
   } finally {
