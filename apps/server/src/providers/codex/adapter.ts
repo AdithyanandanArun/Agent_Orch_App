@@ -8,6 +8,10 @@ import {
   describePermissionsApproval, describeTurnError, itemToolActivity, legacyDecision, permissionsResponse, summarizeChanges,
   type ApprovalPrompt, type FileChangeSummary,
 } from './mapping.js';
+import {
+  autoCompactPercent, describeCodexCompaction, planCodexCompaction, rememberReportedWindow, reportedContextWindow, verifyCodexWindow,
+  type CodexCompactionPlan,
+} from '../compaction.js';
 import { parseCodexModels, validateCodexEffort } from './capabilities.js';
 import { JsonRpcConnection, RPC_METHOD_NOT_FOUND, RpcError, type CloseInfo } from './rpc.js';
 
@@ -18,13 +22,15 @@ export interface CodexTimeouts {
   interruptMs: number;
   /** How long to wait for turn/completed after turn/interrupt before the process is killed. */
   interruptGraceMs: number;
+  /** Bound for the optional config/read used to discover an explicit model_context_window. */
+  configReadMs: number;
   shutdownGraceMs: number;
   termMs: number;
   killMs: number;
 }
 
 export const DEFAULT_CODEX_TIMEOUTS: CodexTimeouts = {
-  initializeMs: 20_000, threadMs: 60_000, turnStartMs: 60_000, interruptMs: 5_000, interruptGraceMs: 10_000,
+  initializeMs: 20_000, threadMs: 60_000, turnStartMs: 60_000, interruptMs: 5_000, interruptGraceMs: 10_000, configReadMs: 5_000,
   shutdownGraceMs: 1_500, termMs: 3_000, killMs: 2_000,
 };
 
@@ -86,6 +92,8 @@ class CodexRun {
   private threadId: string | null = null;
   private turnId: string | null = null;
   private omitEffort = false;
+  private compaction: CodexCompactionPlan | null = null;
+  private windowChecked = false;
   private phase: 'setup' | 'turn' | 'done' = 'setup';
   private abortRequested = false;
   private interruptSent = false;
@@ -219,16 +227,26 @@ class CodexRun {
     if (serviceTier && !model?.serviceTiers?.some((tier) => tier.id === serviceTier)) {
       throw new ProviderError(`Service tier "${truncate(serviceTier, 80)}" is not supported by Codex model ${session.model}.`, { code: 'unsupported_service_tier' });
     }
+    // Native per-thread override of model_auto_compact_token_limit; never edits the user's global Codex config.
+    const percent = autoCompactPercent(this.options.settings);
+    if (percent !== null) {
+      this.compaction = await planCodexCompaction({
+        percent, model: session.model, env: this.ctx.env,
+        readConfig: () => this.conn.request('config/read', { includeLayers: false, cwd: session.worktreePath }, this.ctx.timeouts.configReadMs),
+      });
+      if (this.compaction.notice) this.info(this.compaction.notice);
+    }
+    const threadConfig = this.compaction && Object.keys(this.compaction.config).length > 0 ? { config: this.compaction.config } : {};
     let result: unknown;
     if (session.providerSessionId) {
       // A failed resume is an error: silently starting a fresh thread would drop the conversation.
-      result = await this.conn.request('thread/resume', { ...common, threadId: session.providerSessionId, excludeTurns: true }, this.ctx.timeouts.threadMs)
+      result = await this.conn.request('thread/resume', { ...common, ...threadConfig, threadId: session.providerSessionId, excludeTurns: true }, this.ctx.timeouts.threadMs)
         .catch((error: unknown) => {
           if (error instanceof RpcError) throw new ProviderError(`Codex could not resume thread ${session.providerSessionId}: ${error.message}`, { code: 'resume_failed', cause: error });
           throw error;
         });
     } else {
-      result = await this.conn.request('thread/start', { ...common, serviceName: 'relay' }, this.ctx.timeouts.threadMs);
+      result = await this.conn.request('thread/start', { ...common, ...threadConfig, serviceName: 'relay' }, this.ctx.timeouts.threadMs);
     }
     const thread = isRecord(result) && isRecord(result.thread) ? result.thread : null;
     const id = thread && typeof thread.id === 'string' ? thread.id : null;
@@ -299,6 +317,7 @@ class CodexRun {
       }
       case 'thread/tokenUsage/updated':
         this.usage.update(params.tokenUsage);
+        this.checkReportedWindow(params.tokenUsage);
         break;
       case 'error': {
         const message = describeTurnError(params.error, 'Codex reported an error');
@@ -329,7 +348,7 @@ class CodexRun {
   private onItem(item: Record<string, unknown>, phase: 'started' | 'completed'): void {
     const id = typeof item.id === 'string' ? item.id : null;
     if (item.type === 'contextCompaction') {
-      if (phase === 'completed') this.emit({ type: 'info', content: 'Codex compacted the conversation context.' });
+      if (phase === 'completed') this.emit({ type: 'info', content: describeCodexCompaction(this.compaction) });
       return;
     }
     if (item.type === 'agentMessage') {
@@ -348,6 +367,17 @@ class CodexRun {
     }
     const activity = itemToolActivity(item, phase);
     if (activity) this.emit({ type: 'tool.activity', activity });
+  }
+
+  /** Learns Codex's own effective window and tells the user if the threshold was derived from a different capacity. */
+  private checkReportedWindow(tokenUsage: unknown): void {
+    const reported = reportedContextWindow(tokenUsage);
+    if (reported === null) return;
+    rememberReportedWindow(this.options.session.model, reported);
+    if (this.windowChecked || !this.compaction) return;
+    this.windowChecked = true;
+    const notice = verifyCodexWindow(this.compaction, reported);
+    if (notice) this.info(notice);
   }
 
   private onReroute(params: Record<string, unknown>): void {

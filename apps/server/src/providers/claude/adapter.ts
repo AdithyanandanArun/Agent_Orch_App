@@ -1,9 +1,10 @@
-import type { AgentAdapter, AppSettings, RunOptions } from '@relay/contracts';
+import type { AdapterEvent, AgentAdapter, AppSettings, RunOptions } from '@relay/contracts';
 import type { Options, PermissionResult, Query } from '@anthropic-ai/claude-agent-sdk';
 import { ProviderError, TextTail, abortError, errorMessage, isAbortError, isRecord, redactSecrets } from '../common.js';
 import { bundledClaudeCandidates, resolveExecutableCached, type ResolveResult } from '../discovery.js';
 import { ClaudeMessageMapper, claudePermissionMode, describeToolUse, previewInput } from './messages.js';
 import { claudeEnvironment } from './auth.js';
+import { autoCompactPercent, claudeCompactEnv, describeClaudeCompaction } from '../compaction.js';
 
 export type QueryFn = (params: { prompt: string; options: Options }) => Query | AsyncGenerator<unknown, void>;
 
@@ -54,7 +55,8 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): AgentAdapter 
       if (session.serviceTier && !['standard', 'fast'].includes(session.serviceTier)) {
         throw new ProviderError(`Claude does not support service tier "${session.serviceTier}".`, { code: 'unsupported_service_tier' });
       }
-      const childEnv = claudeEnvironment(env);
+      const compactPercent = autoCompactPercent(settings);
+      const childEnv = { ...claudeEnvironment(env), ...claudeCompactEnv(compactPercent) };
       const secrets = [childEnv.ANTHROPIC_API_KEY, childEnv.CLAUDE_CODE_OAUTH_TOKEN, childEnv.ANTHROPIC_AUTH_TOKEN];
       const resolved = await resolveBinary(settings, env);
       if (!resolved.ok) throw new ProviderError(resolved.reason, { code: 'executable_unavailable' });
@@ -111,9 +113,10 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): AgentAdapter 
         ...(session.providerSessionId ? { resume: session.providerSessionId } : {}),
       };
 
-      const mapper = new ClaudeMessageMapper(session.model, (event) => {
+      const emit = (event: AdapterEvent): void => {
         try { onEvent(event); } catch { /* host listener errors must not break the stream */ }
-      });
+      };
+      const mapper = new ClaudeMessageMapper(session.model, emit);
       let stream: Query | AsyncGenerator<unknown, void> | undefined;
       try {
         const query = deps.query ?? (await loadSdkQuery());
@@ -131,6 +134,8 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): AgentAdapter 
             controller.abort();
             throw new ProviderError('Claude resumed a different conversation. Relay stopped the run to preserve the selected conversation.', { code: 'resume_failed' });
           }
+          const compaction = describeClaudeCompaction(message, compactPercent);
+          if (compaction) emit({ type: 'info', content: compaction });
           mapper.handle(message);
           if (signal.aborted) break;
         }
