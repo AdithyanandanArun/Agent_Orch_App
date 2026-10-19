@@ -49,6 +49,7 @@ export interface ProviderModel {
   defaultReasoningEffort?: string;
   serviceTiers?: { id: string; name: string; description?: string }[];
   defaultServiceTier?: string;
+  policies?: Policy[];
 }
 export interface ProviderInfo { id: Provider; name: string; available: boolean; version: string | null; executable: string | null; reason: string | null; models: ProviderModel[]; policies?: Policy[] }
 export interface ProviderCommand {
