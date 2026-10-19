@@ -6,7 +6,8 @@ import { z } from 'zod';
 import { BrowserActionSchema } from '@relay/contracts';
 import type { BrowserAction, BrowserMcpConnection, BrowserSessionState, BrowserSnapshot, BrowserTab, Session } from '@relay/contracts';
 import type { Store } from './store.ts';
-import { errorMessage, redactSecrets, truncate } from './util.ts';
+import { errorMessage, truncate } from './util.ts';
+import { redactSecrets } from './providers/common.ts';
 
 interface BrowserAutomation {
   status(sessionId: string): BrowserSessionState;
@@ -18,7 +19,7 @@ type ApprovalRequest = { tool: string; description: string; input: Record<string
 interface Binding {
   runId: string; session: Session; signal: AbortSignal;
   requestApproval: (request: ApprovalRequest) => Promise<boolean>;
-  approval?: Promise<boolean>; shown: boolean;
+  approval?: Promise<boolean>; shown: boolean; revoked: boolean;
 }
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 const tabId = z.string().min(1).max(100).optional();
@@ -33,17 +34,17 @@ export class BrowserMcpBridge {
   create(runId: string, session: Session, signal: AbortSignal, requestApproval: Binding['requestApproval']): BrowserMcpConnection {
     if (this.bindings.size >= 64) throw new Error('Too many active browser tool connections');
     const token = randomBytes(32).toString('base64url');
-    this.bindings.set(hash(token), { runId, session, signal, requestApproval, shown: false });
+    this.bindings.set(hash(token), { runId, session, signal, requestApproval, shown: false, revoked: false });
     return { url: `http://127.0.0.1:${this.getPort()}/api/browser/mcp`, token };
   }
 
   revoke(runId: string): void {
-    for (const [key, binding] of this.bindings) if (binding.runId === runId) this.bindings.delete(key);
+    for (const [key, binding] of this.bindings) if (binding.runId === runId) { binding.revoked = true; this.bindings.delete(key); }
   }
-  close(): void { this.bindings.clear(); }
+  close(): void { for (const binding of this.bindings.values()) binding.revoked = true; this.bindings.clear(); }
 
   private ensure(binding: Binding): void {
-    if (binding.signal.aborted || !this.store.getSession(binding.session.id)) throw new Error('This browser tool connection has expired');
+    if (binding.revoked || binding.signal.aborted || !this.store.getSession(binding.session.id)) throw new Error('This browser tool connection has expired');
     if (this.store.getSettings().browserAgentEnabled === false) throw new Error('Agent browser access is disabled in Settings → Browser');
   }
 
@@ -77,7 +78,7 @@ export class BrowserMcpBridge {
     const output = (value: unknown) => ({ content: [{ type: 'text' as const, text: truncate(redactSecrets(JSON.stringify(value) ?? 'null'), 64_000) }] });
     const register = (name: string, description: string, shape: z.ZodRawShape, readOnly: boolean, operation: (args: Record<string, unknown>) => Promise<unknown> | unknown) => {
       server.registerTool(name, { description, inputSchema: shape, annotations: { readOnlyHint: readOnly, destructiveHint: !readOnly, openWorldHint: true } }, async (args) => {
-        try { this.ensure(binding); return output(await operation(args)); }
+        try { this.ensure(binding); const result = await operation(args); this.ensure(binding); return output(result); }
         catch (error) { return { content: [{ type: 'text' as const, text: truncate(redactSecrets(errorMessage(error)), 1000) }], isError: true }; }
       });
     };
