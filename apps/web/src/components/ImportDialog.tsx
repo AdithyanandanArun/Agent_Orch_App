@@ -168,7 +168,13 @@ export function ImportDialog() {
       }}>
         <section className="import-dialog__list" aria-label="Conversation history">
           <div className="import-dialog__top">
-            <div className="import-dialog__tabs" role="tablist" aria-label="Provider">
+            <div className="import-dialog__tabs" role="tablist" aria-label="Provider" onKeyDown={(event) => {
+              if (importing || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+              event.preventDefault();
+              const index = event.key === 'Home' ? 0 : event.key === 'End' ? PROVIDERS.length - 1 : (PROVIDERS.findIndex((item) => item.id === provider) + (event.key === 'ArrowRight' ? 1 : -1) + PROVIDERS.length) % PROVIDERS.length;
+              setProvider(PROVIDERS[index]!.id);
+              event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')[index]?.focus({ preventScroll: true });
+            }}>
               {PROVIDERS.map((item) => <button key={item.id} type="button" role="tab" disabled={importing} aria-selected={provider === item.id} className={cx('import-dialog__tab', provider === item.id && 'is-active')} onClick={() => setProvider(item.id)}>{item.label}</button>)}
             </div>
             <label className="import-dialog__folder-toggle"><input type="checkbox" checked={allFolders || !project} disabled={!project || importing} onChange={(event) => setAllFolders(event.target.checked)} /><span>All folders</span></label>
@@ -180,9 +186,17 @@ export function ImportDialog() {
           {loading ? <div className="import-dialog__state"><Spinner label="Loading conversations" /><span>Reading local conversation history…</span></div> : null}
           {!loading && !listError && conversations.length === 0 ? <div className="import-dialog__state"><Folder size={20} /><strong>No conversations found</strong><span>Relay only reads history available from this machine.</span></div> : null}
           {!loading && conversations.length > 0 && visible.length === 0 ? <div className="import-dialog__state"><Search size={18} /><strong>No matches in loaded history</strong><span>Load more history to search older conversations.</span></div> : null}
-          <div className="import-dialog__rows" role="listbox" aria-label={`${provider} conversations`} aria-busy={loading}>
+          <div className="import-dialog__rows" role="listbox" aria-label={`${provider} conversations`} aria-busy={loading} onKeyDown={(event) => {
+            if (importing || !visible.length || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+            event.preventDefault();
+            const rows = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="option"]')];
+            const current = rows.indexOf(document.activeElement as HTMLButtonElement);
+            const index = event.key === 'Home' ? 0 : event.key === 'End' ? rows.length - 1 : Math.max(0, Math.min(rows.length - 1, current + (event.key === 'ArrowDown' ? 1 : -1)));
+            setSelected(visible[index]!);
+            rows[index]?.focus();
+          }}>
             {visible.map((item) => <button key={item.id} type="button" role="option" disabled={importing} aria-selected={picked?.id === item.id} className={cx('import-dialog__row', picked?.id === item.id && 'is-selected')} onClick={() => setSelected(item)}>
-              <span className="import-dialog__row-title">{item.title || 'Untitled conversation'} {item.importedSessionId ? <span className="import-dialog__imported"><Check size={11} /> Imported</span> : null}</span>
+              <span className="import-dialog__row-title"><span className="import-dialog__title-text" title={item.title}>{item.title || 'Untitled conversation'}</span>{item.importedSessionId ? <span className="import-dialog__imported"><Check size={11} /> Imported</span> : null}</span>
               <span className="import-dialog__row-meta"><span><Clock3 size={12} />{shortDate(item.updatedAt ?? item.createdAt)}</span><span className="import-dialog__row-path" title={item.directory ?? 'Original folder unavailable'}>{item.directory ?? 'Folder unavailable'}</span></span>
               {item.unavailableReason || !item.directory ? <span className="import-dialog__row-warning"><AlertTriangle size={12} />Unavailable to import</span> : null}
             </button>)}
