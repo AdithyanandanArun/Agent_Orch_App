@@ -10,6 +10,7 @@
     "build": "pnpm --filter @relay/web build && pnpm --filter @relay/server build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm --filter @relay/server test",
+    "smoke": "node scripts/smoke.mjs",
     "start": "pnpm --filter @relay/server start",
     "desktop": "pnpm --filter @relay/desktop start"
   },

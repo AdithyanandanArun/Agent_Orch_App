@@ -19,6 +19,7 @@ Open **http://127.0.0.1:5173**. The local API listens on port **4310**. The clea
 pnpm typecheck
 pnpm test
 pnpm build
+pnpm smoke
 pnpm start
 ```
 
@@ -61,5 +62,6 @@ The Electron launcher starts the same Node server on a selected loopback port. I
 - [Implementation contract](docs/implementation-contract.md)
 - [Provider research](docs/provider-research.md)
 - [Milestones and acceptance evidence](docs/roadmap.md)
+- [Observed validation and remaining limits](docs/validation.md)
 
 The implementation is original. T3 Code is an architectural research reference and is not a source-code dependency. No license grant has been selected for this project yet.
