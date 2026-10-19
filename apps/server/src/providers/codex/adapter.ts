@@ -5,7 +5,7 @@ import { resolveExecutableCached, type ResolveResult } from '../discovery.js';
 import { shutdownChild, type ChildLike } from '../process.js';
 import {
   CodexUsageTracker, codexPolicy, commandDecision, describeCommandApproval, describeFileChangeApproval, describeLegacyApproval,
-  describePermissionsApproval, describeTurnError, itemToolEvent, legacyDecision, permissionsResponse, summarizeChanges,
+  describePermissionsApproval, describeTurnError, itemToolActivity, legacyDecision, permissionsResponse, summarizeChanges,
   type ApprovalPrompt, type FileChangeSummary,
 } from './mapping.js';
 import { JsonRpcConnection, RPC_METHOD_NOT_FOUND, RpcError, type CloseInfo } from './rpc.js';
@@ -40,7 +40,7 @@ export interface CodexAdapterDeps {
 /** Notifications that only add volume for a host that does not render raw reasoning or live command output. */
 export const CODEX_OPT_OUT_NOTIFICATIONS = [
   'item/reasoning/textDelta', 'item/reasoning/summaryTextDelta', 'item/reasoning/summaryPartAdded',
-  'item/commandExecution/outputDelta', 'command/exec/outputDelta', 'process/outputDelta', 'fs/changed',
+  'command/exec/outputDelta', 'process/outputDelta', 'fs/changed',
   'mcpServer/startupStatus/updated', 'mcpServer/event/stream/notification',
 ];
 
@@ -93,6 +93,8 @@ class CodexRun {
   private lastTextItem: string | null = null;
   private emittedText = false;
   private readonly changesByItem = new Map<string, FileChangeSummary[]>();
+  private readonly activityIds = new Map<string, string>();
+  private fallbackActivityId = 0;
   private readonly warned = new Set<string>();
   private graceTimer: NodeJS.Timeout | undefined;
 
@@ -277,6 +279,11 @@ class CodexRun {
       case 'item/completed':
         if (isRecord(params.item)) this.onItem(params.item, method === 'item/started' ? 'started' : 'completed');
         break;
+      case 'item/commandExecution/outputDelta': {
+        const id = typeof params.itemId === 'string' ? this.activityIds.get(params.itemId) ?? params.itemId : null;
+        if (id && typeof params.delta === 'string' && params.delta) this.emit({ type: 'tool.output', id, delta: params.delta });
+        break;
+      }
       case 'thread/tokenUsage/updated':
         this.usage.update(params.tokenUsage);
         break;
@@ -308,6 +315,10 @@ class CodexRun {
 
   private onItem(item: Record<string, unknown>, phase: 'started' | 'completed'): void {
     const id = typeof item.id === 'string' ? item.id : null;
+    if (item.type === 'contextCompaction') {
+      if (phase === 'completed') this.emit({ type: 'info', content: 'Codex compacted the conversation context.' });
+      return;
+    }
     if (item.type === 'agentMessage') {
       if (phase === 'completed' && id && typeof item.text === 'string') {
         const streamed = this.textByItem.get(id) ?? '';
@@ -317,8 +328,11 @@ class CodexRun {
       return;
     }
     if (item.type === 'fileChange' && id) this.changesByItem.set(id, summarizeChanges(item.changes));
-    const event = itemToolEvent(item, phase);
-    if (event) this.emit(event);
+    const key = id ?? `${String(item.type ?? 'tool')}:${this.turnId ?? 'turn'}:${this.fallbackActivityId++}`;
+    const activityId = this.activityIds.get(key) ?? key;
+    this.activityIds.set(key, activityId);
+    const activity = itemToolActivity(item, phase, activityId);
+    if (activity) this.emit({ type: 'tool.activity', activity });
   }
 
   private onReroute(params: Record<string, unknown>): void {

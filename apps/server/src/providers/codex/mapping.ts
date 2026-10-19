@@ -1,5 +1,5 @@
 import { resolve } from 'node:path';
-import type { AdapterEvent, Policy } from '@relay/contracts';
+import type { AdapterEvent, Policy, ToolActivity, ToolCategory, ToolStatus } from '@relay/contracts';
 import { describeValue, isRecord, truncate, truncateTail } from '../common.js';
 
 /**
@@ -134,42 +134,61 @@ function outputTail(value: unknown, max: number): string {
   return text ? `\n${truncateTail(text.trimEnd(), max)}` : '';
 }
 
-/** Maps item lifecycle notifications to host-visible tool events. Returns null for items without a tool record. */
-export function itemToolEvent(item: Record<string, unknown>, phase: 'started' | 'completed'): AdapterEvent | null {
+/** Maps app-server items to one evolving tool card. Returns null for non-tool items. */
+export function itemToolActivity(item: Record<string, unknown>, phase: 'started' | 'completed', fallbackId?: string): ToolActivity | null {
   const done = phase === 'completed';
+  const id = str(item.id) ?? fallbackId;
+  if (!id) return null;
+  const rawStatus = str(item.status);
+  const status: ToolStatus = !done ? 'running' : rawStatus === 'failed' || rawStatus === 'declined' ? 'failed' : rawStatus === 'interrupted' ? 'interrupted' : 'completed';
+  const base = { id, status, ...(typeof item.durationMs === 'number' ? { durationMs: item.durationMs } : {}) };
   switch (item.type) {
     case 'commandExecution': {
       const command = str(item.command) ?? '(unknown command)';
-      if (!done) return { type: 'tool', name: 'shell', content: truncate(`$ ${command}`, 1_500) };
-      const exit = typeof item.exitCode === 'number' ? ` exit ${item.exitCode}` : '';
-      return { type: 'tool', name: 'shell', content: `$ ${truncate(command, 600)}\n[${str(item.status) ?? 'finished'}${exit}]${outputTail(item.aggregatedOutput, 2_000)}` };
+      return { ...base, name: 'shell', category: 'command', summary: truncate(`$ ${command}`, 1_500), command: truncate(command, 4_000), input: describeValue({ command, cwd: item.cwd }, 4_000), cwd: str(item.cwd) ?? null,
+        ...(typeof item.exitCode === 'number' ? { exitCode: item.exitCode } : {}), ...(typeof item.processId === 'string' ? { processId: item.processId } : {}),
+        ...(str(item.aggregatedOutput) ? { output: truncateTail(str(item.aggregatedOutput)!, 20_000) } : {}) };
     }
     case 'fileChange': {
       const changes = summarizeChanges(item.changes);
       const list = changes.map((change) => `${change.kind} ${change.path}`).join('\n') || '(no file list)';
-      if (!done) return { type: 'tool', name: 'file_change', content: truncate(list, 1_500) };
       const diff = changes.map((change) => change.diff ?? '').filter(Boolean).join('\n');
-      return { type: 'tool', name: 'file_change', content: `${truncate(list, 1_000)}\n[${str(item.status) ?? 'finished'}]${diff ? `\n${truncate(diff, 3_000)}` : ''}` };
+      return { ...base, name: 'file_change', category: 'file', summary: truncate(list, 1_500), input: truncate(describeValue(item.changes, 4_000), 4_000), ...(diff ? { output: truncate(diff, 8_000) } : {}) };
     }
     case 'mcpToolCall': {
       const name = `mcp:${str(item.server) ?? '?'}/${str(item.tool) ?? '?'}`;
-      if (!done) return { type: 'tool', name, content: describeValue(item.arguments, 800) };
       const failure = isRecord(item.error) ? str(item.error.message) : str(item.error);
-      return { type: 'tool', name, content: `[${str(item.status) ?? 'finished'}]${failure ? ` ${truncate(failure, 600)}` : ''}` };
+      const identity = `${str(item.server) ?? ''} ${str(item.tool) ?? ''}`.toLowerCase();
+      const category: ToolCategory = /browser|playwright|puppeteer/.test(identity) || (/t3_code/.test(identity) && /preview_/.test(identity)) ? 'browser' : 'other';
+      return { ...base, name, category, summary: name, input: describeValue(item.arguments, 4_000), ...(failure ? { output: truncate(failure, 8_000) } : {}) };
     }
-    case 'dynamicToolCall':
-      return { type: 'tool', name: `tool:${str(item.tool) ?? '?'}`, content: done ? `[${str(item.status) ?? 'finished'}]` : describeValue(item.arguments, 800) };
-    case 'webSearch':
-      return done ? null : { type: 'tool', name: 'web_search', content: truncate(str(item.query) ?? describeValue(item.action, 300), 600) };
-    case 'collabAgentToolCall':
-      return { type: 'tool', name: `agent:${str(item.tool) ?? '?'}`, content: done ? `[${str(item.status) ?? 'finished'}]` : truncate(str(item.prompt) ?? '', 600) };
-    case 'imageView':
-      return done ? null : { type: 'tool', name: 'image_view', content: str(item.path) ?? '' };
-    case 'contextCompaction':
-      return done ? { type: 'info', content: 'Codex compacted the conversation context.' } : null;
+    case 'dynamicToolCall': {
+      const name = str(item.tool) ?? '?';
+      const identity = `${str(item.server) ?? ''} ${name}`.toLowerCase();
+      const category: ToolCategory = /browser|playwright/.test(identity) || (/t3_code/.test(identity) && /preview_/.test(identity)) ? 'browser' : 'other';
+      return { ...base, name: `tool:${name}`, category, summary: truncate(name, 300), input: describeValue(item.arguments, 4_000), ...(str(item.content) ? { output: truncate(str(item.content)!, 20_000) } : {}) };
+    }
+    case 'webSearch': {
+      const action = isRecord(item.action) ? item.action : {};
+      const actionType = str(action.type);
+      const category: ToolCategory = actionType === 'search' ? 'search' : actionType === 'openPage' || actionType === 'findInPage' ? 'browser' : 'other';
+      const name = actionType === 'search' ? 'web_search' : actionType === 'openPage' ? 'web_open_page' : actionType === 'findInPage' ? 'web_find_in_page' : 'web_action';
+      const summary = actionType === 'search' ? str(action.query) ?? (Array.isArray(action.queries) ? action.queries.filter((query): query is string => typeof query === 'string').join(', ') : 'Search web')
+        : str(action.url) ?? str(action.pattern) ?? 'Web action';
+      return { ...base, name, category, summary: truncate(summary, 600), input: describeValue(action, 4_000), ...(str(item.result) ? { output: truncate(str(item.result)!, 20_000) } : {}) };
+    }
+    case 'collabAgentToolCall': return { ...base, name: `agent:${str(item.tool) ?? '?'}`, category: 'agent', summary: truncate(str(item.prompt) ?? 'Delegate task', 600), input: describeValue(item, 4_000), ...(str(item.output) ? { output: truncate(str(item.output)!, 20_000) } : {}) };
+    case 'imageView': return { ...base, name: 'image_view', category: 'other', summary: str(item.path) ?? 'View image', input: str(item.path) ?? '' };
     default:
       return null;
   }
+}
+
+/** Compatibility projection for existing mapper checks; provider adapters emit structured activity. */
+export function itemToolEvent(item: Record<string, unknown>, phase: 'started' | 'completed'): AdapterEvent | null {
+  if (item.type === 'contextCompaction') return phase === 'completed' ? { type: 'info', content: 'Codex compacted the conversation context.' } : null;
+  const activity = itemToolActivity(item, phase, str(item.id) ?? 'compat-item');
+  return activity ? { type: 'tool', name: activity.name, content: truncate(`${activity.summary}${activity.output ? `\n${activity.output}` : ''}`, 8_000) } : null;
 }
 
 interface Counters { input: number; output: number }

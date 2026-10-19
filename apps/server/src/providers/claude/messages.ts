@@ -1,4 +1,4 @@
-import type { AdapterEvent, Policy } from '@relay/contracts';
+import type { AdapterEvent, Policy, ToolActivity, ToolCategory } from '@relay/contracts';
 import { ProviderError, describeValue, isRecord, truncate } from '../common.js';
 
 export type ClaudePermissionMode = 'default' | 'acceptEdits';
@@ -63,7 +63,10 @@ export class ClaudeMessageMapper {
   private sessionId: string | null = null;
   private currentMessageId: string | null = null;
   private readonly streamedMessages = new Set<string>();
-  private readonly toolNames = new Map<string, string>();
+  private readonly tools = new Map<string, { name: string; input: string; parentId: string | null }>();
+  private readonly seenTools = new Set<string>();
+  private readonly completedTools = new Set<string>();
+  private readonly streamTools = new Map<number, { id: string; name: string; parentId: string | null; partial: string }>();
   private emittedText = false;
   private textBlockOpen = false;
   private lastAssistantError: string | null = null;
@@ -88,6 +91,19 @@ export class ClaudeMessageMapper {
     this.emit({ type: 'text', text: separator + delta });
   }
 
+  private toolActivity(id: string, name: string, input: string, parentId: string | null, status: ToolActivity['status'], output?: string, durationMs?: number): void {
+    const category: ToolCategory = name === 'Bash' ? 'command'
+      : /websearch|webfetch|search|browser|playwright/i.test(name) ? (/search/i.test(name) ? 'search' : 'browser')
+      : /write|edit|notebook|read|glob|grep/i.test(name) ? 'file'
+      : /agent|task/i.test(name) ? 'agent' : 'other';
+    let parsed: Record<string, unknown> = {};
+    try { const value: unknown = JSON.parse(input); if (isRecord(value)) parsed = value; } catch { /* partial JSON remains visible as plain input */ }
+    const command = name === 'Bash' && typeof parsed.command === 'string' ? parsed.command : null;
+    const cwd = typeof parsed.cwd === 'string' ? parsed.cwd : null;
+    const summary = command ? truncate(`$ ${command}`, 1_500) : describeToolUse(name, parsed);
+    this.emit({ type: 'tool.activity', activity: { id, name, category, status, parentId, summary, input: truncate(input || '{}', 8_000), ...(command ? { command: truncate(command, 4_000) } : {}), ...(cwd ? { cwd } : {}), ...(output !== undefined ? { output: truncate(output, 20_000) } : {}), ...(durationMs !== undefined ? { durationMs } : {}) } });
+  }
+
   /** Processes one SDK message. Throws ProviderError for failures that must end the run. */
   handle(message: unknown): void {
     if (!isRecord(message) || typeof message.type !== 'string') return;
@@ -96,12 +112,42 @@ export class ClaudeMessageMapper {
       case 'stream_event': return this.streamEvent(message);
       case 'assistant': return this.assistant(message);
       case 'user': return this.user(message);
+      case 'tool_progress': return this.toolProgress(message);
       case 'result': return this.result(message);
       default: return; // task, hook, status and other bookkeeping messages are not surfaced
     }
   }
 
   private system(message: Record<string, unknown>): void {
+    if (message.subtype === 'task_started') {
+      if (typeof message.task_id === 'string' && message.ambient !== true && message.skip_transcript !== true) {
+        const name = typeof message.subagent_type === 'string' ? `agent:${message.subagent_type}` : `task:${str(message.task_type) ?? 'background'}`;
+        const parentId = str(message.parent_task_id) ?? str(message.tool_use_id) ?? null;
+        const prompt = str(message.prompt) ?? str(message.description) ?? 'Claude background task';
+        this.tools.set(message.task_id, { name, input: prompt, parentId });
+        this.seenTools.add(message.task_id);
+        this.toolActivity(message.task_id, name, prompt, parentId, 'running');
+      }
+      return;
+    }
+    if (message.subtype === 'task_progress') {
+      const id = str(message.task_id);
+      const task = id ? this.tools.get(id) : undefined;
+      const usage = isRecord(message.usage) ? message.usage : {};
+      if (id && task && message.ambient !== true) this.toolActivity(id, task.name, task.input, task.parentId, 'running', str(message.summary) ?? str(message.description), typeof usage.duration_ms === 'number' ? usage.duration_ms : undefined);
+      return;
+    }
+    if (message.subtype === 'task_notification') {
+      const id = str(message.task_id);
+      const task = id ? this.tools.get(id) : undefined;
+      if (id && task) {
+        const status = message.status === 'failed' ? 'failed' : message.status === 'stopped' ? 'interrupted' : 'completed';
+        const text = [str(message.summary), str(message.output_file) ? `Output file: ${str(message.output_file)}` : ''].filter(Boolean).join('\n');
+        const usage = isRecord(message.usage) ? message.usage : {};
+        this.toolActivity(id, task.name, task.input, task.parentId, status, text, typeof usage.duration_ms === 'number' ? usage.duration_ms : undefined);
+      }
+      return;
+    }
     switch (message.subtype) {
       case 'init': {
         this.noteSession(message.session_id);
@@ -126,7 +172,7 @@ export class ClaudeMessageMapper {
 
   private streamEvent(message: Record<string, unknown>): void {
     this.noteSession(message.session_id);
-    if (message.parent_tool_use_id) return; // subagent output is represented by its tool calls
+    const parentId = str(message.parent_tool_use_id) ?? null;
     const event = isRecord(message.event) ? message.event : null;
     if (!event) return;
     switch (event.type) {
@@ -138,6 +184,13 @@ export class ClaudeMessageMapper {
       case 'content_block_start': {
         const block = isRecord(event.content_block) ? event.content_block : null;
         if (block?.type === 'text') this.textBlockOpen = false;
+        if (block?.type === 'tool_use' && typeof block.id === 'string') {
+          const name = str(block.name) ?? 'tool';
+          this.streamTools.set(typeof event.index === 'number' ? event.index : -1, { id: block.id, name, parentId, partial: '' });
+          this.tools.set(block.id, { name, input: '{}', parentId });
+          this.seenTools.add(block.id);
+          this.toolActivity(block.id, name, '{}', parentId, 'running');
+        }
         return;
       }
       case 'content_block_delta': {
@@ -145,6 +198,14 @@ export class ClaudeMessageMapper {
         if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
           if (this.currentMessageId) this.streamedMessages.add(this.currentMessageId);
           this.text(delta.text);
+        }
+        if (delta?.type === 'input_json_delta' && typeof delta.partial_json === 'string') {
+          const stream = this.streamTools.get(typeof event.index === 'number' ? event.index : -1);
+          if (stream) {
+            stream.partial += delta.partial_json;
+            this.tools.set(stream.id, { name: stream.name, input: stream.partial, parentId: stream.parentId });
+            this.toolActivity(stream.id, stream.name, stream.partial, stream.parentId, 'running');
+          }
         }
         return;
       }
@@ -157,7 +218,7 @@ export class ClaudeMessageMapper {
     this.noteSession(message.session_id);
     const inner = isRecord(message.message) ? message.message : null;
     if (!inner || !Array.isArray(inner.content)) return;
-    const subagent = Boolean(message.parent_tool_use_id);
+    const parentId = str(message.parent_tool_use_id) ?? null;
     if (typeof message.error === 'string') {
       this.lastAssistantError = message.error;
       return; // synthetic API-error text is reported through the result message instead
@@ -166,14 +227,24 @@ export class ClaudeMessageMapper {
     const streamed = id !== undefined && this.streamedMessages.has(id);
     for (const block of inner.content) {
       if (!isRecord(block)) continue;
-      if (block.type === 'text' && typeof block.text === 'string' && !streamed && !subagent) {
+      if (block.type === 'text' && typeof block.text === 'string' && !streamed && !parentId) {
         this.textBlockOpen = false;
         this.text(block.text);
       } else if (block.type === 'tool_use') {
         const name = str(block.name) ?? 'tool';
-        if (typeof block.id === 'string') this.toolNames.set(block.id, name);
+        if (typeof block.id === 'string' && this.seenTools.has(block.id)) {
+          if (this.completedTools.has(block.id)) continue; // SDK replay after result must not reopen a finished call.
+          const input = JSON.stringify(isRecord(block.input) ? block.input : {});
+          this.tools.set(block.id, { name, input, parentId });
+          this.toolActivity(block.id, name, input, parentId, 'running');
+          continue;
+        }
+        if (typeof block.id === 'string') {
+          this.seenTools.add(block.id);
+          this.tools.set(block.id, { name, input: JSON.stringify(isRecord(block.input) ? block.input : {}), parentId });
+        }
         const input = isRecord(block.input) ? block.input : {};
-        this.emit({ type: 'tool', name: subagent ? `subagent:${name}` : name, content: describeToolUse(name, input) });
+        if (typeof block.id === 'string') this.toolActivity(block.id, name, JSON.stringify(input), parentId, 'running');
       }
     }
   }
@@ -184,10 +255,26 @@ export class ClaudeMessageMapper {
     if (!inner || !Array.isArray(inner.content)) return;
     for (const block of inner.content) {
       if (!isRecord(block) || block.type !== 'tool_result') continue;
-      const name = (typeof block.tool_use_id === 'string' ? this.toolNames.get(block.tool_use_id) : undefined) ?? 'tool';
-      const body = truncate(toolResultText(block.content).trim(), 2_000);
-      this.emit({ type: 'tool', name: `${name}:result`, content: `${block.is_error === true ? '[error] ' : ''}${body}` });
+      const id = typeof block.tool_use_id === 'string' ? block.tool_use_id : null;
+      const tool = id ? this.tools.get(id) : undefined;
+      if (!id || !tool) continue;
+      const body = toolResultText(block.content).trim();
+      this.toolActivity(id, tool.name, tool.input, tool.parentId, block.is_error === true ? 'failed' : 'completed', body);
+      this.completedTools.add(id);
     }
+  }
+
+  private toolProgress(message: Record<string, unknown>): void {
+    const id = str(message.tool_use_id);
+    // Progress frames have provider-stable tool IDs; heartbeat frames are not tool events.
+    if (!id || message.heartbeat === true) return;
+    const name = str(message.tool_name) ?? this.tools.get(id)?.name ?? 'tool';
+    const parentId = message.parent_tool_use_id === null ? null : str(message.parent_tool_use_id) ?? this.tools.get(id)?.parentId ?? null;
+    const input = this.tools.get(id)?.input ?? '{}';
+    this.tools.set(id, { name, input, parentId });
+    this.seenTools.add(id);
+    const seconds = typeof message.elapsed_time_seconds === 'number' ? message.elapsed_time_seconds : undefined;
+    this.toolActivity(id, name, input, parentId, 'running', `${name} running${seconds !== undefined ? ` (${seconds}s)` : ''}`, seconds === undefined ? undefined : Math.round(seconds * 1_000));
   }
 
   private result(message: Record<string, unknown>): void {
