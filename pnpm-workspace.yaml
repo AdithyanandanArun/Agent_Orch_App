@@ -1,7 +1,7 @@
 packages:
   - apps/*
   - packages/*
-onlyBuiltDependencies:
-  - esbuild
-  - electron
-  - node-pty
+allowBuilds:
+  esbuild: true
+  node-pty: true
+  electron: true
