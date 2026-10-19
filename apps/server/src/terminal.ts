@@ -45,6 +45,8 @@ export interface TerminalOptions { shell?: string; spawner?: PtySpawner }
 /** Real PTY terminals over the shared WebSocket. A terminal is owned by the socket that created it and dies with it. */
 export class TerminalManager {
   private readonly terminals = new Map<string, Terminal>();
+  private readonly pending = new Map<WebSocket, number>();
+  private pendingTotal = 0;
   private readonly shell: string;
   private readonly spawner: PtySpawner;
 
@@ -94,15 +96,12 @@ export class TerminalManager {
   }
 
   private fail(socket: WebSocket, message: string): void {
-    // The shared ServerEvent union has no error frame, so failures are reported as a short-lived terminal that prints the reason.
-    const id = newId('trm');
-    this.hub.send(socket, { type: 'terminal.output', terminalId: id, data: `\r\n[relay] ${message}\r\n` });
-    this.hub.send(socket, { type: 'terminal.exit', terminalId: id, exitCode: -1 });
+    this.hub.send(socket, { type: 'terminal.error', message });
   }
 
   private async start(socket: WebSocket, request: Extract<ClientEvent, { type: 'terminal.start' }>): Promise<void> {
     const mine = [...this.terminals.values()].filter((t) => t.owner === socket && !t.exited).length;
-    if (mine >= MAX_TERMINALS_PER_SOCKET || this.terminals.size >= MAX_TERMINALS_TOTAL) return this.fail(socket, 'Too many open terminals');
+    if (mine + (this.pending.get(socket) ?? 0) >= MAX_TERMINALS_PER_SOCKET || this.terminals.size + this.pendingTotal >= MAX_TERMINALS_TOTAL) return this.fail(socket, 'Too many open terminals');
     const project = this.store.getProject(request.projectId);
     if (!project) return this.fail(socket, 'Unknown project');
     let cwd = project.path;
@@ -118,11 +117,19 @@ export class TerminalManager {
     env.TERM = 'xterm-256color';
     env.COLORTERM = 'truecolor';
     let pty: PtyHandle;
+    // Reserve capacity synchronously: multiple starts can be awaiting the native spawner at once.
+    this.pending.set(socket, (this.pending.get(socket) ?? 0) + 1);
+    this.pendingTotal++;
     try {
       pty = await this.spawner(this.shell, process.platform === 'win32' ? [] : ['-i'], { cwd, cols: request.cols, rows: request.rows, env });
     } catch (error) {
       this.log('error', 'Failed to start PTY', error);
       return this.fail(socket, `Could not start a terminal: ${errorMessage(error)}`);
+    } finally {
+      const remaining = (this.pending.get(socket) ?? 1) - 1;
+      if (remaining > 0) this.pending.set(socket, remaining);
+      else this.pending.delete(socket);
+      this.pendingTotal--;
     }
     const terminal: Terminal = { id, owner: socket, pty, exited: false, backpressure: null };
     if (socket.readyState !== socket.OPEN) {
@@ -178,4 +185,3 @@ export class TerminalManager {
     return [...this.terminals.values()].map((t) => t.pty.pid);
   }
 }
-

@@ -17,11 +17,11 @@ function ProviderRow({ p }: { p: ProviderInfo }) {
     <div className="prow">
       <ProviderMark provider={p.id} size={22} />
       <div className="prow__main">
-        <div className="prow__title"><strong>{p.name}</strong>{p.available ? <Badge tone="ok"><CheckCircle2 size={11} /> Executable found</Badge> : <Badge tone="err"><CircleSlash size={11} /> Not available</Badge>}</div>
+        <div className="prow__title"><strong>{p.name}</strong>{p.available ? <Badge tone="ok"><CheckCircle2 size={11} /> Configured</Badge> : <Badge tone="warn"><CircleSlash size={11} /> {p.executable ? 'Setup needed' : 'Not available'}</Badge>}</div>
         <p className="muted small">
           {p.available ? `${p.version ?? 'version unknown'} · ${p.executable ?? 'path unknown'}` : p.reason ?? 'The executable could not be started.'}
         </p>
-        {p.available ? <p className="muted small">{p.models.length} model{p.models.length === 1 ? '' : 's'} listed. Sign-in or API credentials are not verified until a run starts.</p> : null}
+        {p.available ? <p className="muted small">{p.reason ?? `${p.models.length} models listed. Credentials are validated when a run starts.`}</p> : null}
       </div>
     </div>
   );
@@ -72,7 +72,7 @@ export function SettingsSheet() {
           {boot.providers.length === 0 ? <p className="muted small">The server has not reported any providers yet. Use Re-check to probe the Codex and Claude executables.</p> : null}
           {boot.providers.map((p) => <ProviderRow key={p.id} p={p} />)}
           <div className="note"><KeyRound size={14} />
-            <p>Relay never stores credentials. Claude runs use <code>ANTHROPIC_API_KEY</code> from the server’s environment; Codex uses its own CLI login. Availability above only means the executable was found.</p>
+            <p>Claude runs use <code>ANTHROPIC_API_KEY</code> from the server’s environment; Codex uses its own CLI login. Relay stores no credentials. A configured provider can still return authentication or quota errors when a run starts.</p>
           </div>
           <form className="form" onSubmit={(e) => { e.preventDefault(); void update({ claudeExecutable: claude.trim(), codexExecutable: codex.trim() }, 'paths').then(refreshProviders); }}>
             <Field label="Claude executable" htmlFor="st-claude" hint="Leave empty to let the server choose.">

@@ -25,8 +25,9 @@ export interface GitStatus { branch: string; files: GitFile[]; diff: string; isR
 export interface FileEntry { path: string; name: string; type: 'file' | 'directory' }
 export type ServerEvent =
   | { type: 'state.changed'; event?: WorkspaceEvent }
-  | { type: 'session.delta'; sessionId: string; messageId: string; delta: string }
+  | { type: 'session.delta'; sessionId: string; messageId: string; delta: string; offset?: number }
   | { type: 'terminal.ready'; terminalId: string }
+  | { type: 'terminal.error'; message: string }
   | { type: 'terminal.output'; terminalId: string; data: string }
   | { type: 'terminal.exit'; terminalId: string; exitCode: number };
 export type ClientEvent =
@@ -57,3 +58,9 @@ export type AdapterEvent =
   | { type: 'usage'; inputTokens: number; outputTokens: number; costUsd: number | null }
   | { type: 'info'; content: string };
 export interface AgentAdapter { run(options: RunOptions): Promise<void> }
+
+/**
+ * Merge a text chunk at its absolute offset. A bootstrap snapshot may already contain some or all of it.
+ * null means the client has a gap and must fetch a current snapshot rather than invent missing text.
+ */
+export { mergeTextDelta } from './stream';

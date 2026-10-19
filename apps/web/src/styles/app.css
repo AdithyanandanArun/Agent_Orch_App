@@ -319,7 +319,7 @@ a.ibtn.is-disabled { opacity: 0.4; pointer-events: none; }
 .col__count { margin-left: auto; color: var(--fg-3); font-size: var(--text-xs); font-family: var(--font-mono); }
 .col__body { flex: 1; overflow: auto; padding: 4px 8px 10px; display: grid; gap: 8px; align-content: start; }
 .col__empty { padding: 14px 8px; text-align: center; font-size: var(--text-xs); color: var(--fg-3); }
-.tcard { display: grid; gap: 7px; width: 100%; text-align: left; padding: 11px 12px; border-radius: var(--radius-md); border: 1px solid var(--line); background: var(--bg-surface); box-shadow: var(--shadow-card); cursor: grab; transition: border-color var(--dur-fast), transform var(--dur-fast), background var(--dur-fast); }
+.tcard { display: grid; gap: 7px; width: 100%; min-width: 0; overflow: hidden; text-align: left; padding: 11px 12px; border-radius: var(--radius-md); border: 1px solid var(--line); background: var(--bg-surface); box-shadow: var(--shadow-card); cursor: grab; transition: border-color var(--dur-fast), transform var(--dur-fast), background var(--dur-fast); }
 .tcard:hover { border-color: var(--line-strong); background: var(--bg-raised); }
 .tcard:active { cursor: grabbing; }
 .tcard.is-selected { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft); }
@@ -454,3 +454,8 @@ a.ibtn.is-disabled { opacity: 0.4; pointer-events: none; }
 .stack, .card, .form, .drawer__body, .settings, .sec, .prow__main { grid-template-columns: minmax(0, 1fr); }
 .stack > *, .card > *, .form > *, .settings > *, .sec > * { min-width: 0; }
 .kv dd.mono { word-break: break-all; }
+
+.chat__starters { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
+.tcard__title { overflow-wrap: anywhere; }
+.tcard__meta { min-width: 0; }
+.tcard__deps { flex-shrink: 0; }

@@ -40,7 +40,7 @@ function ExampleBanner() {
     <div className="banner banner--example" role="note">
       <FlaskConical size={14} aria-hidden="true" />
       <div>
-        <strong>Example workspace.</strong> This sample project and its two sessions were created by Relay so you can look around. Nothing is running, and no history here is from a real run.
+        <strong>Example workspace.</strong> Explore the starter sessions and sample tasks. Sending a message starts a real run with your configured provider.
       </div>
       <Button size="sm" onClick={() => useRelay.getState().openDialog({ kind: 'project' })}>Open your own project</Button>
     </div>

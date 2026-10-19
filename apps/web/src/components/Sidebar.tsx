@@ -125,7 +125,7 @@ export function Sidebar() {
         </button>
         <span className="providers-mini" aria-label="Provider executables">
           {(boot?.providers ?? []).map((p) => (
-            <span key={p.id} className={cx('pm', p.available ? 'is-ok' : 'is-off')} title={p.available ? `${p.name} executable found${p.version ? ` (${p.version})` : ''}. Authentication is not verified.` : `${p.name} executable unavailable${p.reason ? `: ${p.reason}` : ''}`}>
+            <span key={p.id} className={cx('pm', p.available ? 'is-ok' : 'is-off')} title={p.available ? `${p.name} configured${p.version ? ` (${p.version})` : ''}. Credentials are validated on each run.` : `${p.name} needs setup${p.reason ? `: ${p.reason}` : ''}`}>
               <i aria-hidden="true" /> {p.name}
             </span>
           ))}

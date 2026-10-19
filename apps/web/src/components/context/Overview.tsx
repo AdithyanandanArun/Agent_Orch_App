@@ -47,7 +47,7 @@ export function Overview() {
             <Button size="sm" variant="ghost" onClick={() => openDialog({ kind: 'archive', sessionId: session.id })}><Archive size={13} /> Archive</Button>
           </div>
           {provider && !provider.available ? (
-            <p className="card__note card__note--warn"><Info size={13} /> {provider.name} executable unavailable{provider.reason ? `: ${provider.reason}` : ''}. Runs will fail until fixed in Settings.</p>
+            <p className="card__note card__note--warn"><Info size={13} /> <span>{provider.name} needs setup. <button type="button" className="link-btn" onClick={() => openDialog({ kind: 'settings' })}>Open provider settings</button></span></p>
           ) : provider ? (
             <p className="card__note"><KeyRound size={13} /> {provider.name} executable found{provider.version ? ` (${provider.version})` : ''}. Authentication is checked only when a run starts.</p>
           ) : null}

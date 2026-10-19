@@ -6,8 +6,10 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
+app.setName('Relay');
 let backend;
 let quitting = false;
+let shutdownPending = false;
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -45,7 +47,11 @@ async function openWorkspace() {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let startupErrors = '';
-  backend.stderr.on('data', chunk => { startupErrors = (startupErrors + chunk.toString()).slice(-4000); });
+  backend.stdout.on('data', chunk => process.stdout.write(chunk));
+  backend.stderr.on('data', chunk => {
+    startupErrors = (startupErrors + chunk.toString()).slice(-4000);
+    process.stderr.write(chunk);
+  });
   backend.on('error', error => {
     if (!quitting) {
       dialog.showErrorBox('Relay runtime failed', error.message);
@@ -89,12 +95,20 @@ else {
     app.quit();
   });
   app.on('window-all-closed', () => app.quit());
-  app.on('before-quit', () => {
+  app.on('before-quit', event => {
     quitting = true;
     if (backend && backend.exitCode === null) {
-      backend.kill('SIGTERM');
-      const forceKill = setTimeout(() => { if (backend?.exitCode === null) backend.kill('SIGKILL'); }, 3000);
-      forceKill.unref();
+      event.preventDefault();
+      if (shutdownPending) return;
+      shutdownPending = true;
+      const child = backend;
+      const forceKill = setTimeout(() => { if (child.exitCode === null) child.kill('SIGKILL'); }, 38_000);
+      child.once('exit', () => {
+        clearTimeout(forceKill);
+        backend = undefined;
+        app.quit();
+      });
+      child.kill('SIGTERM');
     }
   });
 }

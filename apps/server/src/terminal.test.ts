@@ -69,7 +69,7 @@ describe('PTY terminals', () => {
     const t = await boot();
     const c = await connect(t);
     c.send({ type: 'terminal.start', projectId: 'nope', cols: 80, rows: 24 });
-    expect((await c.next((f) => f.type === 'terminal.exit')).exitCode).toBe(-1);
+    expect((await c.next((f) => f.type === 'terminal.error')).message).toMatch(/Unknown project/);
     c.frames.length = 0;
     c.send({ type: 'terminal.start', projectId: EXAMPLE_PROJECT_ID, cols: 100000, rows: 24 });
     c.send({ type: 'terminal.start', projectId: EXAMPLE_PROJECT_ID, cols: 1, rows: 0 });
@@ -80,7 +80,7 @@ describe('PTY terminals', () => {
     expect(c.frames.filter((f) => f.type === 'terminal.ready')).toHaveLength(0);
     expect(t.app.terminals.count).toBe(0);
     c.send({ type: 'terminal.start', projectId: EXAMPLE_PROJECT_ID, sessionId: 'ses_missing', cols: 80, rows: 24 });
-    expect((await c.next((f) => f.type === 'terminal.output')).data).toMatch(/Unknown session/);
+    expect((await c.next((f) => f.type === 'terminal.error')).message).toMatch(/Unknown session/);
     c.ws.close();
   });
 

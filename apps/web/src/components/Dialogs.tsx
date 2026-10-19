@@ -143,7 +143,8 @@ export function SessionDialog() {
 export function TaskDialog() {
   const close = useRelay.getState().closeDialog;
   const project = useProject();
-  const sessions = useRelay((s) => s.boot?.sessions.filter((x) => x.projectId === s.activeProjectId) ?? []);
+  const allSessions = useRelay((s) => s.boot?.sessions);
+  const sessions = useMemo(() => (allSessions ?? []).filter(session => session.projectId === project?.id), [allSessions, project?.id]);
   const allTasks = useRelay((s) => s.boot?.tasks);
   const tasks = useMemo(() => (allTasks ?? []).filter((t) => t.projectId === project?.id), [allTasks, project?.id]);
   const activeSession = useActiveSession();

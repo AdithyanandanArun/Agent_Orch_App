@@ -12,6 +12,7 @@ export function ConnectionBanner() {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     if (connection !== 'offline') return;
+    setNow(Date.now());
     const id = window.setInterval(() => setNow(Date.now()), 500);
     return () => window.clearInterval(id);
   }, [connection]);

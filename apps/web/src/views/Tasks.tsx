@@ -89,7 +89,7 @@ function TaskDrawer({ task, tasks, sessions }: { task: Task; tasks: Task[]; sess
             : open.length > 0 ? `Waiting on ${open.length} unfinished ${open.length === 1 ? 'dependency' : 'dependencies'}`
               : task.status === 'done' ? 'Task is already done'
                 : task.status === 'running' ? 'Task is already running'
-                  : provider && !provider.available ? `${PROVIDER_NAME[provider.id]} executable is unavailable`
+                  : provider && !provider.available ? `${PROVIDER_NAME[provider.id]} needs setup in Settings`
                     : undefined;
 
   const save = async () => {

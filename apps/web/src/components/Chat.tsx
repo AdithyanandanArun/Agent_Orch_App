@@ -168,18 +168,20 @@ export function SessionPane() {
         }}
       >
         <div className="chat__inner">
-          {messages.length === 0 ? (
+          {!messages.some(message => message.role === 'user' || message.role === 'assistant') ? (
             <div className="chat__empty">
               <ProviderMark provider={session.provider} size={28} />
-              <h3>{session.name}</h3>
+              <h3>What are we building?</h3>
               <p>
-                {PROVIDER_NAME[session.provider]} · {session.model} · {session.effort} effort. {session.status === 'idle' ? 'Nothing is running in this session.' : ''}
-                {' '}Send a message to start a run{project.isExample ? ' — this will call the real provider if its executable and credentials are configured' : ''}.
+                Give {session.name} a task. Its conversation and worktree stay independent, and you can hand off committed work to another session.
               </p>
+              <div className="chat__starters">
+                <Button size="sm" onClick={() => useRelay.getState().setDraft(session.id, 'Read the project README and explain how this workspace is organized. Do not change any files.')}><Info size={13} /> Explore this workspace</Button>
+                <Button size="sm" onClick={() => useRelay.getState().setView('tasks')}><ChevronRight size={13} /> View project tasks</Button>
+              </div>
             </div>
-          ) : (
-            messages.map((m) => <MessageRow key={m.id} m={m} session={session} />)
-          )}
+          ) : null}
+          {messages.map((m) => <MessageRow key={m.id} m={m} session={session} />)}
           {session.status === 'running' ? (
             <div className="working" role="status"><span className="dots" aria-hidden="true"><i /><i /><i /></span> {PROVIDER_NAME[session.provider]} is working…</div>
           ) : null}

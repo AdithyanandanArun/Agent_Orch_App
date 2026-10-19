@@ -14,6 +14,7 @@ function normalise(input: string): { url: string } | { error: string } {
   try { u = new URL(withScheme); } catch { return { error: 'That does not look like a valid URL.' }; }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return { error: 'Only http and https addresses can be previewed.' };
   const host = u.hostname.replace(/^\[|\]$/g, '');
+  if (host === '::1') return { error: 'Use localhost or 127.0.0.1 for previews. Browser frame policies do not support this IPv6 address.' };
   const local = host === 'localhost' || host.endsWith('.localhost') || host === '127.0.0.1' || host === '::1' || /^127\.\d+\.\d+\.\d+$/.test(host);
   if (!local) return { error: 'Preview is limited to local servers (localhost, 127.0.0.1, ::1). External sites are not embedded.' };
   return { url: u.toString() };

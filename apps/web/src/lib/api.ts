@@ -25,7 +25,7 @@ async function readError(res: Response): Promise<string> {
     }
     if (text.length < 300 && !text.trimStart().startsWith('<')) return text.trim();
   }
-  if (res.status === 502 || res.status === 503 || res.status === 504) return 'Relay server is not reachable (is it running on 127.0.0.1:4310?)';
+  if (res.status === 502 || res.status === 503 || res.status === 504) return 'The local runtime is not reachable. Restart Relay or its development server.';
   return `Request failed with status ${res.status}`;
 }
 
@@ -35,7 +35,7 @@ async function request(path: string, init?: RequestInit): Promise<Response> {
     res = await fetch(path, init);
   } catch (cause) {
     if (cause instanceof DOMException && cause.name === 'AbortError') throw cause;
-    throw new ApiError('Cannot reach the Relay server. Check that it is running on 127.0.0.1:4310.', 0);
+    throw new ApiError('Cannot reach the local runtime. Check that Relay is still running.', 0);
   }
   if (!res.ok) throw new ApiError(await readError(res), res.status);
   return res;

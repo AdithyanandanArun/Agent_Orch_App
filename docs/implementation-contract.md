@@ -19,7 +19,7 @@ All HTTP routes use /api. Errors: {error: string}. JSON success bodies, except f
 - POST /api/approvals/:id {decision:'approved'|'denied'} -> Approval. Approvals belong only to active local run; expire/deny on restart and interruption.
 - PATCH /api/settings UpdateSettings -> AppSettings. No credential UI or secret storage; Claude uses ANTHROPIC_API_KEY in server environment. Executable paths may be configured. GET /api/providers -> ProviderInfo[]. POST /api/providers/refresh -> ProviderInfo[]. Accurate diagnostics; codex --version and Claude executable selection probes with timeout. Installed != authenticated; do not claim authentication based on executable alone.
 - GET /api/events?after=integer&projectId=optional -> WorkspaceEvent[] for replay.
-- WS /ws -> ServerEvent. Connected client receives state.changed on mutation. Client re-fetches bootstrap (debounced), session.delta may update live message. Terminal messages use shared ClientEvent with {type:'terminal.ready',terminalId} server handshake (add to shared contract if needed). PTY owner socket only, project/session cwd validation, kill on disconnect. No shell interpolation.
+- WS /ws -> ServerEvent. Connected client receives state.changed on mutation. Client re-fetches bootstrap (debounced), session.delta updates live text at its absolute offset to handle snapshot overlap. Terminal messages use shared ClientEvent with {type:'terminal.ready',terminalId} server handshake and {type:'terminal.error',message} for failed starts. PTY owner socket only, project/session cwd validation, kill on disconnect. No shell interpolation.
 
 ## Provider module contract
 

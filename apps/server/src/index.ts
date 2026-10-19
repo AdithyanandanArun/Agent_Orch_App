@@ -22,7 +22,7 @@ async function main(): Promise<void> {
     if (stopping) return;
     stopping = true;
     console.log(`[relay] ${signal} received, shutting down`);
-    const force = setTimeout(() => process.exit(1), 10_000);
+    const force = setTimeout(() => process.exit(1), 35_000);
     force.unref();
     app.close().then(() => process.exit(0), (error) => { console.error('[relay] shutdown failed', error); process.exit(1); });
   };

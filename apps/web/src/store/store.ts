@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { mergeTextDelta } from '@relay/contracts/stream';
 import type { Approval, Bootstrap, Message, Project, ServerEvent, ClientEvent, Session, Task, WorkspaceEvent } from '@relay/contracts';
 import { api, errorMessage } from '../lib/api';
 import { terminalBus } from './terminalBus';
@@ -154,7 +155,7 @@ function resolveSelection(s: Pick<RelayState, 'activeProjectId' | 'sessionByProj
     const cur = map[p.id];
     if (cur && sessions.some((x) => x.id === cur)) continue;
     if (!cur && p.id !== projectId) continue;
-    const pick = sessions.slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+    const pick = sessions.find(session => boot.providers.some(provider => provider.id === session.provider && provider.available)) ?? sessions[0];
     if (pick) map[p.id] = pick.id;
     else delete map[p.id];
     changed = true;
@@ -261,8 +262,27 @@ export const useRelay = create<RelayState>((set, get) => {
       case 'session.delta': {
         const { streams, boot } = get();
         const existing = streams[ev.messageId];
-        const base = existing ? existing.base : boot?.messages.find((m) => m.id === ev.messageId)?.content ?? '';
-        set({ streams: { ...streams, [ev.messageId]: { sessionId: ev.sessionId, base, text: (existing?.text ?? '') + ev.delta } } });
+        const snapshot = boot?.messages.find((m) => m.id === ev.messageId)?.content ?? '';
+        if (ev.offset !== undefined) {
+          const buffered = existing ? existing.base + existing.text : '';
+          const current = snapshot.length > buffered.length ? snapshot : buffered;
+          const text = mergeTextDelta(current, ev.offset, ev.delta);
+          if (text === null) { scheduleRefresh(); break; }
+          set({ streams: { ...streams, [ev.messageId]: { sessionId: ev.sessionId, base: '', text } } });
+        } else {
+          const base = existing ? existing.base : snapshot;
+          set({ streams: { ...streams, [ev.messageId]: { sessionId: ev.sessionId, base, text: (existing?.text ?? '') + ev.delta } } });
+        }
+        break;
+      }
+      case 'terminal.error': {
+        if (abandonedStarts > 0) { abandonedStarts--; break; }
+        const terminal = get().terminal;
+        if (terminal.status === 'starting') {
+          set({ terminal: { ...terminal, status: 'lost', terminalId: null, exitCode: -1, note: ev.message } });
+          pendingInput = '';
+        }
+        get().toast('error', ev.message);
         break;
       }
       case 'terminal.ready': {
@@ -372,10 +392,8 @@ export const useRelay = create<RelayState>((set, get) => {
       started = true;
       connect();
       void get().refreshNow();
-      window.addEventListener('online', () => get().reconnect());
-      document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible' && get().connection !== 'online') get().reconnect();
-      });
+      window.addEventListener('online', handleOnline);
+      document.addEventListener('visibilitychange', handleVisibility);
     },
 
     async refreshNow() {
@@ -498,6 +516,23 @@ export const useRelay = create<RelayState>((set, get) => {
     },
   };
 });
+
+function handleOnline(): void { useRelay.getState().reconnect(); }
+function handleVisibility(): void {
+  if (document.visibilityState === 'visible' && useRelay.getState().connection !== 'online') useRelay.getState().reconnect();
+}
+
+// React refresh can preserve App's effect while replacing this store module. Boot its replacement explicitly.
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    window.clearTimeout(retryTimer);
+    window.clearTimeout(refreshTimer);
+    window.removeEventListener('online', handleOnline);
+    document.removeEventListener('visibilitychange', handleVisibility);
+    if (socket) { socket.onclose = null; socket.close(); socket = null; }
+  });
+  useRelay.getState().init();
+}
 
 /* Selectors */
 export const useProject = (): Project | undefined =>

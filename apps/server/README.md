@@ -45,13 +45,14 @@ Options of interest: `providers` (required), `log`, `exampleWorkspace` (default 
 
 - **Example workspace**: created once per data dir (`meta.example_workspace_v1`). Project `prj_example` (`isExample: true`)
   is a Git repo with README, contract doc and a committed versioned artifact `api/users.v1.openapi.json`; two **idle**
-  sessions (`ses_example_contract` Claude, `ses_example_client` Codex) each in their own worktree; a four-task DAG.
+  sessions (`ses_example_contract` Codex, `ses_example_client` Claude) each in their own worktree; a four-task DAG.
   Its only commit uses a local sample identity (`Relay Example`). No provider is invoked.
 - **Runs**: `POST /api/sessions/:id/messages` validates and registers the run synchronously (409 if the session is
   active), then runs the adapter in an isolated promise. Assistant text is persisted while streaming (message kind
   `streaming`, finalised to no kind; cancelled or recovered runs end as `partial`). Other message kinds: `tool`, `info`,
   `error`, `handoff`, `task`. `usage` events are treated as run-cumulative snapshots added to the totals from before the run.
-  An adapter that ignores `AbortSignal` is declared interrupted after `abortGraceMs` (5 s).
+  An adapter that ignores `AbortSignal` is declared interrupted after `abortGraceMs` (30 s by default), but its session
+  remains locked until the underlying adapter actually finishes cleanup. A second run cannot share its worktree.
 - **Approvals** exist only for a live run. Interrupt, failure, completion and restart deny them; deciding on a
   non-pending or stale approval returns 409. Session status is `waiting` while one is pending.
 - **Restart recovery**: runs in `running`/`waiting` become `interrupted`, pending approvals become `denied`
@@ -63,8 +64,8 @@ Options of interest: `providers` (required), `log`, `exampleWorkspace` (default 
 - **Handoffs** (`POST /api/handoffs`): the artifact path must be a committed regular file at `revision` (resolved to a
   full commit id) that is reachable from the source session's `HEAD`. Result: a `handoff.created` event and a system
   message (`kind: 'handoff'`) in the target session with a compact reference and the artifact content (≤ 16 KiB, text).
-  Unconsumed handoff messages are prepended to the next provider prompt once (consumed when the provider produces its first
-  event or the run completes). No merge, no run.
+  Unconsumed handoff messages are prepended to the next provider prompt and consumed on successful completion.
+  Failed or interrupted turns retain the handoff for retry. No merge, no run.
 - **Git status** (`GET /api/projects/:id/git`): `status` is the porcelain code (`M`, `A`, `D`, `R`, `??`, or two
   letters when staged and unstaged differ); `diff` is `git diff HEAD` (staged + unstaged) plus up to 20 small untracked files,
   with secret files excluded, capped at 1 MB. Always scoped to the project or `sessionId` worktree directory.
@@ -73,8 +74,8 @@ Options of interest: `providers` (required), `log`, `exampleWorkspace` (default 
   and >2 MiB files are not opened. Writes use `O_NOFOLLOW`.
 - **Terminals** (`/ws`): `terminal.start` spawns a `node-pty` shell in the project or session directory. A terminal belongs to
   the socket that started it; other sockets cannot write, resize or stop it; closing the socket (or shutdown) kills it.
-  Limits: 8 per socket, 32 total, 64 KiB per input frame, 2–500 columns, 1–300 rows. Start failures are reported as a
-  terminal that prints the reason and exits with code `-1`, because `ServerEvent` has no error frame.
+  Limits: 8 per socket, 32 total (including starts still awaiting the native spawner), 64 KiB per input frame,
+  2–500 columns, 1–300 rows. Start failures use an explicit `terminal.error` frame with a readable reason.
 
 ## Local transport security
 

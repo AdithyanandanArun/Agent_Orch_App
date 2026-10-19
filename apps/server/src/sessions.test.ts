@@ -102,13 +102,19 @@ describe('provider runs', () => {
     expect((await t.api('POST', `/api/sessions/${EXAMPLE_CONTRACT_SESSION_ID}/messages`, { content: 'retry' })).status).toBe(202);
   });
 
-  it('declares an adapter that ignores abort interrupted after the grace period', async () => {
+  it('keeps an unresponsive adapter locked after declaring its visible run interrupted', async () => {
     const t = await boot();
-    t.fake.script = async () => { await new Promise(() => undefined); };
+    const cleanup = deferred();
+    t.fake.script = async () => { await cleanup.promise; };
     await t.api('POST', `/api/sessions/${EXAMPLE_CONTRACT_SESSION_ID}/messages`, { content: 'go' });
     await t.api('POST', `/api/sessions/${EXAMPLE_CONTRACT_SESSION_ID}/interrupt`);
     await waitFor(async () => (await session(t)).status === 'interrupted', 3000);
-    expect(t.app.runtime.activeCount()).toBe(0);
+    expect(t.app.runtime.activeCount()).toBe(1);
+    expect((await t.api('POST', `/api/sessions/${EXAMPLE_CONTRACT_SESSION_ID}/messages`, { content: 'too soon' })).status).toBe(409);
+    cleanup.resolve();
+    await waitFor(() => t.app.runtime.activeCount() === 0);
+    t.fake.script = async () => undefined;
+    expect((await t.api('POST', `/api/sessions/${EXAMPLE_CONTRACT_SESSION_ID}/messages`, { content: 'after cleanup' })).status).toBe(202);
   });
 
   it('records adapter failures (sync and async) with redacted errors and lets the session run again', async () => {

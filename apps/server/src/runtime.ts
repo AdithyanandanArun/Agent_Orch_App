@@ -17,6 +17,7 @@ interface ActiveRun {
   sessionId: string;
   controller: AbortController;
   closed: boolean;
+  cleanupPending: boolean;
   approvals: Map<string, (allowed: boolean) => void>;
   stream: { messageId: string; text: string; dirty: boolean } | null;
   flushTimer: NodeJS.Timeout | null;
@@ -43,7 +44,8 @@ export class SessionRuntime {
     private readonly store: Store, private readonly hub: Hub, private readonly providers: ProviderRuntime, private readonly tasks: TaskService,
     private readonly log: Logger, options: RuntimeOptions = {},
   ) {
-    this.abortGraceMs = options.abortGraceMs ?? 5000;
+    // Covers the supported adapters' interrupt grace and escalating process shutdown.
+    this.abortGraceMs = options.abortGraceMs ?? 30_000;
     this.flushIntervalMs = options.flushIntervalMs ?? 300;
   }
 
@@ -61,13 +63,13 @@ export class SessionRuntime {
   start(sessionId: string, content: string, options: StartOptions = {}): void {
     const session = this.store.getSession(sessionId);
     if (!session) throw notFound('Session not found');
-    if (this.active.has(sessionId) || session.status === 'running' || session.status === 'waiting') throw conflict('Session already has an active run');
+    if (this.active.has(sessionId) || session.status === 'running' || session.status === 'waiting') throw conflict('Session already has an active run or provider cleanup is still in progress');
     if (!existsSync(session.worktreePath) || !statSync(session.worktreePath).isDirectory()) throw conflict('The session worktree no longer exists on disk');
 
     const handoffs = this.store.unconsumedHandoffs(sessionId);
     const prompt = this.composePrompt(handoffs, content);
     const run: ActiveRun = {
-      sessionId, controller: new AbortController(), closed: false, approvals: new Map(), stream: null, flushTimer: null, consumedHandoffs: handoffs.map((h) => h.id), firstEvent: false,
+      sessionId, controller: new AbortController(), closed: false, cleanupPending: false, approvals: new Map(), stream: null, flushTimer: null, consumedHandoffs: handoffs.map((h) => h.id), firstEvent: false,
       baseInput: session.inputTokens, baseOutput: session.outputTokens, baseCost: session.costUsd, taskId: options.taskId ?? null, promise: Promise.resolve(),
     };
     this.store.tx(() => {
@@ -105,7 +107,12 @@ export class SessionRuntime {
       });
       adapterRun.catch(() => undefined); // an orphaned adapter promise must never become an unhandled rejection
       const result = await Promise.race([adapterRun.then(() => 'done' as const), grace]);
-      if (result === 'grace') this.log('warn', `Adapter for session ${run.sessionId} ignored abort; marking run interrupted`);
+      if (result === 'grace') {
+        this.log('warn', `Adapter for session ${run.sessionId} ignored abort; keeping its session locked until cleanup finishes`);
+        run.cleanupPending = true;
+        // Finishing the visible turn must never grant a second writer access to the same worktree.
+        void adapterRun.then(() => this.releaseAfterCleanup(run), () => this.releaseAfterCleanup(run));
+      }
       outcome = run.controller.signal.aborted ? 'interrupted' : 'completed';
     } catch (error) {
       if (run.controller.signal.aborted) outcome = 'interrupted';
@@ -117,6 +124,11 @@ export class SessionRuntime {
     this.finish(run, outcome, failure);
   }
 
+  private releaseAfterCleanup(run: ActiveRun): void {
+    run.cleanupPending = false;
+    if (run.closed && this.active.get(run.sessionId) === run) this.active.delete(run.sessionId);
+  }
+
   private consumeHandoffsOnce(run: ActiveRun): void {
     if (run.firstEvent) return;
     run.firstEvent = true;
@@ -126,7 +138,6 @@ export class SessionRuntime {
   private handleEvent(run: ActiveRun, event: AdapterEvent): void {
     if (run.closed) return;
     try {
-      this.consumeHandoffsOnce(run);
       switch (event.type) {
         case 'session':
           if (event.providerSessionId) this.store.updateSession(run.sessionId, { providerSessionId: event.providerSessionId });
@@ -162,6 +173,7 @@ export class SessionRuntime {
   }
 
   private appendText(run: ActiveRun, text: string): void {
+    const offset = run.stream?.text.length ?? 0;
     if (!run.stream) {
       const message = this.store.insertMessage({ sessionId: run.sessionId, role: 'assistant', content: text, kind: 'streaming' });
       run.stream = { messageId: message.id, text, dirty: false };
@@ -171,7 +183,7 @@ export class SessionRuntime {
       run.stream.dirty = true;
       if (!run.flushTimer) run.flushTimer = setTimeout(() => this.flush(run), this.flushIntervalMs);
     }
-    this.hub.broadcast({ type: 'session.delta', sessionId: run.sessionId, messageId: run.stream.messageId, delta: text });
+    this.hub.broadcast({ type: 'session.delta', sessionId: run.sessionId, messageId: run.stream.messageId, delta: text, offset });
   }
 
   private flush(run: ActiveRun): void {
@@ -193,7 +205,6 @@ export class SessionRuntime {
 
   private requestApproval(run: ActiveRun, request: { tool: string; description: string; input: Record<string, unknown> }): Promise<boolean> {
     if (run.closed || run.controller.signal.aborted) return Promise.resolve(false);
-    this.consumeHandoffsOnce(run);
     const approval = this.store.tx(() => {
       const created = this.store.insertApproval({ sessionId: run.sessionId, tool: truncate(String(request.tool), 200), description: truncate(redactSecrets(String(request.description ?? '')), 4000), input: sanitizeInput(request.input) });
       this.store.updateSession(run.sessionId, { status: 'waiting' });
@@ -269,6 +280,7 @@ export class SessionRuntime {
           this.store.insertMessage({ sessionId: run.sessionId, role: 'system', kind: 'info', content: 'Run interrupted.' });
           this.store.updateSession(run.sessionId, { status: 'interrupted', error: null });
         } else {
+          this.consumeHandoffsOnce(run);
           this.store.updateSession(run.sessionId, { status: 'idle', error: null });
         }
         if (outcome === 'completed' && !run.firstEvent) this.store.markConsumed(run.consumedHandoffs);
@@ -282,7 +294,7 @@ export class SessionRuntime {
     } catch (error) {
       this.log('error', `Failed to finalise run for ${run.sessionId}`, error);
     } finally {
-      this.active.delete(run.sessionId);
+      if (!run.cleanupPending) this.active.delete(run.sessionId);
     }
   }
 

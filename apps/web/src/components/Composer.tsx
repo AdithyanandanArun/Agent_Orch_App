@@ -26,7 +26,7 @@ export function Composer({ session }: { session: Session }) {
   const blocker =
     connection !== 'online' ? 'Disconnected from the Relay server — reconnect to send.'
       : running ? (session.status === 'waiting' ? 'Waiting for your approval above before the run can continue.' : 'This session is running. Wait for it to finish or interrupt it.')
-        : provider && !provider.available ? `${PROVIDER_NAME[session.provider]} executable is unavailable${provider.reason ? ` (${provider.reason})` : ''}. Fix it in Settings.`
+        : provider && !provider.available ? `${PROVIDER_NAME[session.provider]} needs setup before you can send a message.`
           : null;
   const empty = draft.trim().length === 0;
 
@@ -86,7 +86,7 @@ export function Composer({ session }: { session: Session }) {
         </div>
       </div>
       {blocker || error ? (
-        <p className={cx('composer__note', error && 'is-error')} role={error ? 'alert' : 'status'}>{error ?? blocker}</p>
+        <p className={cx('composer__note', error && 'is-error')} role={error ? 'alert' : 'status'}>{error ?? blocker}{!error && provider && !provider.available ? <> <button type="button" className="link-btn" onClick={() => useRelay.getState().openDialog({ kind: 'settings' })}>Open Settings</button></> : null}</p>
       ) : null}
     </div>
   );
