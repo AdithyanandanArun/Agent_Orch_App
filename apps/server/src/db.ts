@@ -56,6 +56,9 @@ const MIGRATIONS: string[] = [
    CREATE INDEX tools_run ON tool_calls(run_id);
   `,
   `ALTER TABLE sessions ADD COLUMN service_tier TEXT NOT NULL DEFAULT 'standard';`,
+  `ALTER TABLE session_runs ADD COLUMN changes_summary TEXT;
+   ALTER TABLE session_runs ADD COLUMN changes_diff TEXT;
+   ALTER TABLE session_runs ADD COLUMN changes_diff_truncated INTEGER NOT NULL DEFAULT 0;`,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

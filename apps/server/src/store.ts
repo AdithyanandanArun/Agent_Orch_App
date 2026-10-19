@@ -1,5 +1,5 @@
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
-import type { AppSettings, Approval, Message, Policy, Project, Provider, Session, SessionStatus, SessionRun, ToolCall, ToolCategory, RunStatus, Task, TaskStatus, WorkspaceEvent } from '@relay/contracts';
+import type { AppSettings, Approval, Message, Policy, Project, Provider, RunChanges, RunChangesSummary, Session, SessionStatus, SessionRun, ToolCall, ToolCategory, RunStatus, Task, TaskStatus, WorkspaceEvent } from '@relay/contracts';
 import { SCHEMA_VERSION } from './db.ts';
 import { newId, nowIso } from './util.ts';
 
@@ -170,7 +170,8 @@ export class Store {
     return { id: row.id as string, sessionId: row.session_id as string, userMessageId: row.user_message_id as string,
       provider: row.provider as Provider, model: row.model as string, status: row.status as RunStatus,
       startedAt: row.started_at as string, finishedAt: row.finished_at as string | null, durationMs: row.duration_ms as number | null,
-      toolCount: counts.reduce((sum, item) => sum + Number(item.n), 0), toolCounts };
+      toolCount: counts.reduce((sum, item) => sum + Number(item.n), 0), toolCounts,
+      changes: row.changes_summary ? JSON.parse(row.changes_summary as string) as RunChangesSummary : null };
   }
   insertRun(input: { id: string; sessionId: string; userMessageId: string; provider: Provider; model: string; startedAt: string }): SessionRun {
     this.run('INSERT INTO session_runs(id, session_id, user_message_id, provider, model, status, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)', input.id, input.sessionId, input.userMessageId, input.provider, input.model, 'running', input.startedAt);
@@ -182,6 +183,15 @@ export class Store {
   }
   finishRun(id: string, status: Exclude<RunStatus, 'running'>, durationMs: number | null, finishedAt = nowIso()): void {
     this.run('UPDATE session_runs SET status = ?, finished_at = ?, duration_ms = ? WHERE id = ? AND status = ?', status, finishedAt, durationMs, id, 'running');
+  }
+  setRunChanges(id: string, changes: RunChanges): void {
+    this.run('UPDATE session_runs SET changes_summary = ?, changes_diff = ?, changes_diff_truncated = ? WHERE id = ?',
+      JSON.stringify(changes.summary), changes.diff, Number(changes.diffTruncated), id);
+  }
+  getRunChanges(id: string): RunChanges | undefined {
+    const row = this.get('SELECT changes_summary, changes_diff, changes_diff_truncated FROM session_runs WHERE id = ?', id);
+    if (!row?.changes_summary) return undefined;
+    return { summary: JSON.parse(row.changes_summary as string) as RunChangesSummary, diff: (row.changes_diff as string | null) ?? '', diffTruncated: row.changes_diff_truncated === 1 };
   }
   bootstrapRuns(limit = 200): SessionRun[] {
     return this.all(`SELECT r.* FROM session_runs r JOIN sessions s ON s.id = r.session_id WHERE s.archived_at IS NULL

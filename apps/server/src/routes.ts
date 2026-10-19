@@ -111,6 +111,14 @@ export function buildRouter(s: Services) {
     if (!run || !s.store.getSession(run.sessionId)) throw notFound('Run not found');
     return s.store.listRunTools(run.id);
   });
+  add('GET', '/api/runs/:id/changes', (ctx) => {
+    const run = s.store.getRun(param(ctx, 'id'));
+    if (!run || !s.store.getSession(run.sessionId)) throw notFound('Run not found');
+    if (run.status === 'running') throw conflict('Changes are saved after the run finishes');
+    const changes = s.store.getRunChanges(run.id);
+    if (!changes) throw notFound('This run has no saved change snapshot');
+    return changes;
+  });
   add('GET', '/api/tool-calls/:id', (ctx) => {
     const call = s.store.getToolCall(param(ctx, 'id'));
     if (!call || !s.store.getSession(call.sessionId)) throw notFound('Tool call not found');
