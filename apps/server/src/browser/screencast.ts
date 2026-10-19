@@ -1,0 +1,117 @@
+import { withTimeout } from './errors.ts';
+import { STREAM_ACK_TIMEOUT_MS, STREAM_JPEG_QUALITY, STREAM_MIN_FRAME_INTERVAL_MS } from './limits.ts';
+import type { CDPSession } from './playwright.ts';
+import type { TabEntry } from './tab.ts';
+
+export interface FrameHeader { sequence: number; width: number; height: number }
+
+/** Where frames go. `send` may throw when the consumer is gone; the viewer then stops itself. */
+export interface FrameSink { send(header: FrameHeader, jpeg: Buffer): void }
+
+interface Pending { data: string; chromeSession: number | null; width: number; height: number }
+
+const FALLBACK_FRAME_DELAY_MS = 700;
+
+/**
+ * One screencast per viewer, on its own CDP session. Chromium only produces the next frame after the previous one
+ * is acknowledged, so the viewer's acks pace the stream: at most one frame is in flight, only the newest frame waits
+ * behind it, and frames are sent at most every STREAM_MIN_FRAME_INTERVAL_MS. Chromium is always acknowledged
+ * eventually (on viewer ack, on drop, or on timeout) so it never stalls.
+ */
+export class ScreencastViewer {
+  private cdp: CDPSession | null = null;
+  private pending: Pending | null = null;
+  private inflight: { sequence: number; chromeSession: number | null; timer: NodeJS.Timeout } | null = null;
+  private sequence = 0;
+  private lastSentAt = 0;
+  private flushTimer: NodeJS.Timeout | null = null;
+  private fallbackTimer: NodeJS.Timeout | null = null;
+  private stopped = false;
+
+  constructor(private readonly entry: TabEntry, private readonly sink: FrameSink, private readonly onViewport: () => void) {}
+
+  async start(): Promise<void> {
+    const cdp = await this.entry.page.context().newCDPSession(this.entry.page);
+    if (this.stopped) return void (await cdp.detach().catch(() => undefined));
+    this.cdp = cdp;
+    cdp.on('Page.screencastFrame', (frame) => this.onFrame({ data: frame.data, chromeSession: frame.sessionId, width: frame.metadata.deviceWidth, height: frame.metadata.deviceHeight }));
+    try {
+      await cdp.send('Page.startScreencast', { format: 'jpeg', quality: STREAM_JPEG_QUALITY, everyNthFrame: 1 });
+    } catch (error) {
+      await this.stop();
+      throw error;
+    }
+    if (this.stopped) return;
+    // An idle page may never produce a frame; push one still so the viewer is not blank.
+    this.fallbackTimer = setTimeout(() => void this.stillFrame(), FALLBACK_FRAME_DELAY_MS);
+    this.fallbackTimer.unref();
+  }
+
+  /** Viewer acknowledged a frame it has decoded and painted. */
+  ack(sequence: number): void {
+    if (this.inflight?.sequence === sequence) this.settle();
+  }
+
+  async stop(): Promise<void> {
+    if (this.stopped) return;
+    this.stopped = true;
+    for (const timer of [this.flushTimer, this.fallbackTimer, this.inflight?.timer]) if (timer) clearTimeout(timer);
+    this.inflight = null;
+    this.pending = null;
+    const cdp = this.cdp;
+    this.cdp = null;
+    if (!cdp) return;
+    await withTimeout(cdp.send('Page.stopScreencast'), 2000, 'stop timed out').catch(() => undefined);
+    await withTimeout(cdp.detach(), 2000, 'detach timed out').catch(() => undefined);
+  }
+
+  private ackChrome(chromeSession: number | null): void {
+    if (chromeSession === null || !this.cdp) return;
+    void this.cdp.send('Page.screencastFrameAck', { sessionId: chromeSession }).catch(() => undefined);
+  }
+
+  private onFrame(frame: Pending): void {
+    if (this.stopped) return void this.ackChrome(frame.chromeSession);
+    if (frame.width > 0 && frame.height > 0 && this.entry.setViewport(Math.round(frame.width), Math.round(frame.height))) this.onViewport();
+    if (this.pending) this.ackChrome(this.pending.chromeSession);
+    this.pending = frame;
+    this.flush();
+  }
+
+  private settle(): void {
+    const inflight = this.inflight;
+    if (!inflight) return;
+    clearTimeout(inflight.timer);
+    this.inflight = null;
+    this.ackChrome(inflight.chromeSession);
+    this.flush();
+  }
+
+  private flush(): void {
+    if (this.stopped || this.inflight || !this.pending) return;
+    const wait = this.lastSentAt + STREAM_MIN_FRAME_INTERVAL_MS - Date.now();
+    if (wait > 0) {
+      this.flushTimer ??= setTimeout(() => { this.flushTimer = null; this.flush(); }, wait);
+      return;
+    }
+    const frame = this.pending;
+    this.pending = null;
+    const sequence = ++this.sequence;
+    this.lastSentAt = Date.now();
+    // If the viewer never acknowledges (hidden tab, stalled consumer) release Chromium and carry on.
+    const timer = setTimeout(() => { if (this.inflight?.sequence === sequence) this.settle(); }, STREAM_ACK_TIMEOUT_MS);
+    this.inflight = { sequence, chromeSession: frame.chromeSession, timer };
+    try {
+      this.sink.send({ sequence, width: frame.width, height: frame.height }, Buffer.from(frame.data, 'base64'));
+    } catch {
+      void this.stop();
+    }
+  }
+
+  private async stillFrame(): Promise<void> {
+    if (this.stopped || this.sequence > 0 || this.pending || !this.cdp) return;
+    const shot = await withTimeout(this.cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: STREAM_JPEG_QUALITY }), 5000, 'screenshot timed out').catch(() => null);
+    if (!shot || this.stopped || this.sequence > 0) return;
+    this.onFrame({ data: shot.data, chromeSession: null, width: this.entry.viewport.width, height: this.entry.viewport.height });
+  }
+}
