@@ -93,6 +93,21 @@ export interface ProviderUsage {
 export interface SessionUsage extends ProviderUsage {
   session: { id: string; inputTokens: number; outputTokens: number; costUsd: number | null };
 }
+/** Local provider history metadata. Native IDs are resolved again before import. */
+export interface ExternalConversation {
+  provider: Provider; id: string; title: string; directory: string | null;
+  updatedAt: string | null; createdAt: string | null; model: string | null;
+  importedSessionId?: string; unavailableReason?: string;
+}
+export interface ExternalConversationList { conversations: ExternalConversation[]; nextCursor: string | null; notices: string[] }
+export interface ExternalConversationMessage { role: Message['role']; content: string; createdAt: string | null }
+export interface ExternalConversationDetails {
+  conversation: ExternalConversation; messages: ExternalConversationMessage[]; truncated: boolean; notices: string[];
+}
+export interface ImportConversationResult { session: Session; project: Project; alreadyImported: boolean; notices: string[] }
+export interface ConversationListOptions { directory?: string; cursor?: string }
+export const ConversationIdSchema = z.string().min(1).max(200).regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]*$/);
+export const ImportConversationSchema = z.object({ provider: ProviderSchema, conversationId: ConversationIdSchema }).strict();
 export interface AppSettings {
   defaultProvider: Provider; defaultCodexModel: string; defaultClaudeModel: string; defaultEffort: Effort; defaultIsolated: boolean;
   defaultPolicy: Policy; defaultServiceTier?: string; theme: 'dark' | 'light'; claudeExecutable: string; codexExecutable: string;
