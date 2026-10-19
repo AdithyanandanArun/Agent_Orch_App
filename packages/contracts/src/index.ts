@@ -133,6 +133,7 @@ export const CloneProjectSchema = z.object({
 }).strict();
 export type ServerEvent =
   | { type: 'state.changed'; event?: WorkspaceEvent }
+  | { type: 'browser.opened'; sessionId: string; tabId: string }
   | { type: 'session.delta'; sessionId: string; messageId: string; delta: string; offset?: number }
   | { type: 'terminal.ready'; terminalId: string }
   | { type: 'terminal.error'; message: string }

@@ -9,6 +9,7 @@ const RUN_FIELDS = 'id, session_id, user_message_id, provider, model, status, st
 export const DEFAULT_SETTINGS: AppSettings = {
   defaultProvider: 'codex', defaultCodexModel: 'gpt-6.1-sol', defaultClaudeModel: 'claude-sonnet-5-5', defaultEffort: 'high', defaultIsolated: true,
   defaultPolicy: 'supervised', defaultServiceTier: 'standard', theme: 'dark', claudeExecutable: '', codexExecutable: '',
+  autoCompactPercent: null, browserAgentEnabled: true, browserExecutable: '', browserDefaultMode: 'managed', browserExistingSourceId: '', browserCdpEndpoint: '',
 };
 
 export interface NewSession {
