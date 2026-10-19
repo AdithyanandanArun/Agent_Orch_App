@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { open } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { AppSettings } from '@relay/contracts';
@@ -14,7 +14,7 @@ export const AUTO_COMPACT_MAX_PERCENT = 95;
  * silently becomes a different threshold.
  */
 export function autoCompactPercent(settings: AppSettings): number | null {
-  const value = (settings as AppSettings & { autoCompactPercent?: number | null }).autoCompactPercent;
+  const value = settings.autoCompactPercent;
   return typeof value === 'number' && Number.isInteger(value) && value >= AUTO_COMPACT_MIN_PERCENT && value <= AUTO_COMPACT_MAX_PERCENT ? value : null;
 }
 
@@ -59,7 +59,6 @@ export const CODEX_COMPACT_KEY = 'model_auto_compact_token_limit';
 /** Learned-window cache is bounded: model ids are user/provider supplied. */
 const MAX_REMEMBERED = 64;
 const reportedWindows = new Map<string, number>();
-const unknownNotified = new Set<string>();
 
 /** Effective window reported by Codex itself (`thread/tokenUsage/updated`), remembered for later runs of this process. */
 export function rememberReportedWindow(model: string, window: number): void {
@@ -117,7 +116,23 @@ const MAX_CATALOG_BYTES = 8 * 1024 * 1024;
  * App-server `model/list` carries no context window, so the capacity comes from the models cache the Codex CLI itself
  * maintains next to its config. Only models_cache.json is opened; credentials in the same directory are never touched.
  */
-export async function readCatalogCapacity(env: NodeJS.ProcessEnv, model: string, read: (path: string) => Promise<string> = (path) => readFile(path, 'utf8')): Promise<CatalogCapacity | null> {
+async function boundedCatalog(path: string): Promise<string> {
+  const file = await open(path, 'r');
+  try {
+    const stat = await file.stat();
+    if (!stat.isFile() || stat.size > MAX_CATALOG_BYTES) return '';
+    const buffer = Buffer.alloc(MAX_CATALOG_BYTES + 1);
+    let size = 0;
+    while (size < buffer.length) {
+      const { bytesRead } = await file.read(buffer, size, buffer.length - size, size);
+      if (!bytesRead) break;
+      size += bytesRead;
+    }
+    return size > MAX_CATALOG_BYTES ? '' : buffer.subarray(0, size).toString('utf8');
+  } finally { await file.close(); }
+}
+
+export async function readCatalogCapacity(env: NodeJS.ProcessEnv, model: string, read: (path: string) => Promise<string> = boundedCatalog): Promise<CatalogCapacity | null> {
   const home = env.CODEX_HOME?.trim() || join(env.HOME?.trim() || homedir(), '.codex');
   try {
     const text = await read(join(home, 'models_cache.json'));
@@ -144,6 +159,7 @@ export interface CodexCompactionPlan {
   source: CompactionWindowSource | null;
   /** Visible explanation when the threshold could not be applied. */
   notice: string | null;
+  cacheKey?: string;
 }
 
 export interface CodexCompactionInput {
@@ -153,6 +169,7 @@ export interface CodexCompactionInput {
   /** Resolves the app-server `config/read` response; rejection means unavailable. */
   readConfig: () => Promise<unknown>;
   readCatalog?: typeof readCatalogCapacity;
+  namespace?: string;
 }
 
 /**
@@ -166,11 +183,13 @@ export async function planCodexCompaction(input: CodexCompactionInput): Promise<
   const none = (notice: string | null): CodexCompactionPlan => ({ config: {}, window: null, limit: null, percent: input.percent, source: null, notice });
   const { percent, model } = input;
   if (percent === null) return none(null);
-  let window = reportedWindows.get(model) ?? null;
+  const configured = await input.readConfig().then(configuredContextWindow, () => null);
+  const catalog = await (input.readCatalog ?? readCatalogCapacity)(input.env, model);
+  // A changed profile, project configuration or catalog invalidates an earlier reported capacity.
+  const cacheKey = JSON.stringify([input.namespace ?? '', model, configured, catalog?.contextWindow, catalog?.effectivePercent]);
+  let window = reportedWindows.get(cacheKey) ?? null;
   let source: CompactionWindowSource | null = window ? 'reported' : null;
   if (!window) {
-    const configured = await input.readConfig().then(configuredContextWindow, () => null);
-    const catalog = await (input.readCatalog ?? readCatalogCapacity)(input.env, model);
     const raw = configured ?? catalog?.contextWindow ?? null;
     if (raw && catalog) {
       window = Math.floor((raw * catalog.effectivePercent) / 100);
@@ -178,18 +197,10 @@ export async function planCodexCompaction(input: CodexCompactionInput): Promise<
     }
   }
   if (!window || !source) {
-    const key = model;
-    const first = !unknownNotified.has(key);
-    if (first) {
-      unknownNotified.add(key);
-      if (unknownNotified.size > MAX_REMEMBERED) unknownNotified.delete(unknownNotified.values().next().value as string);
-    }
-    return none(first
-      ? `Codex has not reported the context window of ${model}, so Relay could not apply the ${percent}% auto-compaction threshold. Native Codex auto-compaction remains in effect.`
-      : null);
+    return { ...none(`Codex has not reported the context window of ${model}, so Relay could not apply the ${percent}% auto-compaction threshold. Native Codex auto-compaction remains in effect.`), cacheKey };
   }
   const limit = codexCompactLimit(percent, window);
-  return { config: { [CODEX_COMPACT_KEY]: limit }, window, limit, percent, source, notice: null };
+  return { config: { [CODEX_COMPACT_KEY]: limit }, window, limit, percent, source, notice: null, cacheKey };
 }
 
 /** Compares the assumed window with the first window Codex reports; returns a notice when they disagree. */

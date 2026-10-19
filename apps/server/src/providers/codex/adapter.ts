@@ -233,6 +233,7 @@ class CodexRun {
     if (percent !== null) {
       this.compaction = await planCodexCompaction({
         percent, model: session.model, env: this.ctx.env,
+        namespace: JSON.stringify([session.worktreePath, this.options.settings.codexExecutable, this.ctx.env.CODEX_HOME ?? '']),
         readConfig: () => this.conn.request('config/read', { includeLayers: false, cwd: session.worktreePath }, this.ctx.timeouts.configReadMs),
       });
       if (this.compaction.notice) this.info(this.compaction.notice);
@@ -379,7 +380,7 @@ class CodexRun {
   private checkReportedWindow(tokenUsage: unknown): void {
     const reported = reportedContextWindow(tokenUsage);
     if (reported === null) return;
-    rememberReportedWindow(this.options.session.model, reported);
+    if (this.compaction?.cacheKey) rememberReportedWindow(this.compaction.cacheKey, reported);
     if (this.windowChecked || !this.compaction) return;
     this.windowChecked = true;
     const notice = verifyCodexWindow(this.compaction, reported);
