@@ -37,7 +37,17 @@ export function Sidebar() {
   useEffect(() => { if (menu && !target) setMenu(null); }, [menu, target]);
   const organize = async (session: Session, changes: Partial<Pick<Session, 'pinned' | 'unread'>>) => {
     setOrganizing((current) => new Set(current).add(session.id));
-    try { await useRelay.getState().organizeSession(session.id, changes); }
+    const focused = document.activeElement;
+    const preserveFocus = focused instanceof HTMLElement && focused.closest('.sitem-row')?.getAttribute('data-session-id') === session.id;
+    try {
+      await useRelay.getState().organizeSession(session.id, changes);
+      if (preserveFocus && (!document.activeElement || document.activeElement === document.body || document.activeElement === focused)) {
+        requestAnimationFrame(() => {
+          const row = Array.from(document.querySelectorAll<HTMLElement>('.sitem-row')).find((element) => element.dataset.sessionId === session.id);
+          row?.querySelector<HTMLElement>(focused?.classList.contains('sitem__actions') ? '.sitem__actions' : '.sitem')?.focus({ preventScroll: true });
+        });
+      }
+    }
     catch { /* The store reports the failure. */ }
     finally { setOrganizing((current) => { const next = new Set(current); next.delete(session.id); return next; }); }
   };
@@ -86,7 +96,7 @@ export function Sidebar() {
           if (!items.length) return null;
           return <div key={group.id} className="sgroup" role="group" aria-label={group.label}>
             {group.id !== 'idle' || sessions.some((session) => session.pinned) ? <div className="sgroup__label">{group.label}</div> : null}
-            {items.map((session) => <div role="listitem" key={session.id} className="sitem-row" onContextMenu={(event) => {
+            {items.map((session) => <div role="listitem" key={session.id} className="sitem-row" data-session-id={session.id} onContextMenu={(event) => {
               event.preventDefault();
               const row = event.currentTarget.querySelector<HTMLButtonElement>('.sitem')!;
               setMenu({ sessionId: session.id, x: event.clientX, y: event.clientY, returnFocus: row });
@@ -98,7 +108,7 @@ export function Sidebar() {
               setMenu({ sessionId: session.id, x: bounds.left + 24, y: bounds.bottom, returnFocus: event.target as HTMLElement });
             }}>
               <button type="button" className={cx('sitem', session.id === activeSessionId && view === 'workspace' && 'is-active', session.unread && 'is-unread')} onClick={() => selectSession(session.id)} aria-current={session.id === activeSessionId && view === 'workspace' ? 'true' : undefined} aria-label={`${session.name}${session.pinned ? ', pinned' : ''}${session.unread ? ', unread' : ''}`} title={`${session.name} · ${session.model}`}>
-                <span className="sitem__text"><span className="sitem__meta"><span>{project?.name}</span><span>{relativeTime(session.updatedAt, now)}</span></span><strong>{session.unread ? <i className="sitem__unread" aria-hidden="true" /> : null}{session.name}</strong></span>
+                <span className="sitem__text"><span className="sitem__meta"><span>{project?.name}</span><span>{relativeTime(session.updatedAt, now)}</span></span><strong>{session.unread ? <i className="sitem__unread" aria-hidden="true" /> : null}<span>{session.name}</span></strong></span>
                 <span className="sitem__state">{session.pinned ? <Pin size={11} aria-hidden="true" /> : null}{session.status !== 'idle' ? <StatusDot status={session.status} label={false} /> : null}</span>
               </button>
               <button type="button" className="sitem__actions" aria-label={`Actions for ${session.name}`} aria-haspopup="menu" aria-expanded={menu?.sessionId === session.id} onClick={(event) => {

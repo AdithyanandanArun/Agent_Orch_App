@@ -462,6 +462,7 @@ export const useRelay = create<RelayState>((set, get) => {
       patch({ view: 'settings', settingsReturnView: view === 'settings' ? get().settingsReturnView : view,
         settingsSection: options?.section ?? 'general', settingsProjectId: options?.projectId ?? get().activeProjectId,
         dialog: null, sidebarOpen: false });
+      window.requestAnimationFrame(() => document.getElementById('settings-title')?.focus());
     },
     setSettingsSection: (settingsSection) => set({ settingsSection }),
     closeSettings() { patch({ view: get().settingsReturnView, dialog: null }); },
@@ -481,9 +482,10 @@ export const useRelay = create<RelayState>((set, get) => {
       const remembered = sessionByProject[id];
       const pick = sessions.find((s) => s.id === remembered) ?? sessions[0];
       patch({
-        activeProjectId: id, centerTab: 'session', sidebarOpen: false,
+        activeProjectId: id, settingsProjectId: id, centerTab: 'session', sidebarOpen: false,
         sessionByProject: pick ? { ...sessionByProject, [id]: pick.id } : sessionByProject,
       });
+      if (pick?.unread && get().view === 'workspace') void get().organizeSession(pick.id, { unread: false }).catch(() => {});
     },
     selectSession(id) {
       const s = get().boot?.sessions.find((x) => x.id === id);

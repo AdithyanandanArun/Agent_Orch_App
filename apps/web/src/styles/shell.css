@@ -45,6 +45,7 @@
 .sitem__actions:hover, .sitem__actions:focus-visible { color: var(--fg-0); background: var(--bg-active); }
 .sitem__state { display: flex; align-items: center; gap: 5px; color: var(--fg-3); flex: none; }
 .sitem__text strong { display: flex; align-items: center; gap: 6px; }
+.sitem__text strong > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sitem__unread { width: 5px; height: 5px; border-radius: 50%; background: var(--fg-0); flex: none; }
 .sitem.is-unread .sitem__text strong { color: var(--fg-0); font-weight: 550; }
 @media (hover: none) { .sitem__actions { opacity: 1; } }

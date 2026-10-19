@@ -31,7 +31,7 @@ export function SettingsPage() {
   const boot = useRelay((s) => s.boot);
   const settings = boot?.settings;
   const category = useRelay((s) => s.settingsSection);
-  const projectId = useRelay((s) => s.settingsProjectId);
+  const projectId = useRelay((s) => s.settingsProjectId ?? s.activeProjectId);
   const project = boot?.projects.find((item) => item.id === projectId);
   const setCategory = useRelay.getState().setSettingsSection;
   const [claude, setClaude] = useState(settings?.claudeExecutable ?? '');
@@ -67,7 +67,7 @@ export function SettingsPage() {
 
   return <div className="settings-page" aria-labelledby="settings-title">
     <div className="settings-page__inner">
-      <header className="settings-page__head"><div><h1 id="settings-title" tabIndex={-1}>Settings</h1><p>Models, permissions and appearance.</p></div><span className="settings-page__save" role="status">{status}</span></header>
+      <header className="settings-page__head"><div><h1 id="settings-title" tabIndex={-1}>Settings</h1><p>Projects, models and appearance.</p></div><span className="settings-page__save" role="status">{status}</span></header>
       <nav className="settings-page__tabs" aria-label="Settings sections">
         {CATEGORIES.filter((item) => item.id !== 'project' || project).map((item) => <button type="button" key={item.id} aria-current={category === item.id ? 'page' : undefined} onClick={() => setCategory(item.id)}>{item.name}</button>)}
       </nav>

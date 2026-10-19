@@ -71,8 +71,12 @@ export function ContextMenu({ x, y, items, onClose, returnFocus }: {
     const left = Math.max(8, Math.min(x, window.innerWidth - rect.width - 8));
     const top = Math.max(8, Math.min(y, window.innerHeight - rect.height - 8));
     setRootPoint({ left, top });
-    if (activeIndex >= 0) mainButtons.current[activeIndex]?.focus();
   }, []);
+
+  // Hidden controls cannot receive focus until their measured position has rendered.
+  useLayoutEffect(() => {
+    if (rootPoint && activeIndex >= 0) mainButtons.current[activeIndex]?.focus();
+  }, [rootPoint]);
 
   useLayoutEffect(() => {
     if (submenuIndex === null || !submenu.current) return;
