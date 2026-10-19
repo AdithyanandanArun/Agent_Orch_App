@@ -1,11 +1,10 @@
-import { Activity, Check, ChevronsUpDown, FolderOpen, FolderPlus, Kanban, LayoutPanelLeft, Network, Plus, Settings, Wifi, WifiOff } from 'lucide-react';
+import { Activity, Check, ChevronsUpDown, FolderOpen, FolderPlus, Kanban, LayoutPanelLeft, MoreHorizontal, Network, Plus, Settings, Wifi, WifiOff } from 'lucide-react';
 import type { Session } from '@relay/contracts';
 import { useRelay, useProject, type View } from '../store/store';
 import { cx, relativeTime, useNow } from '../lib/format';
-import { Badge, Button, IconButton, Menu, MenuItem, MenuLabel, MenuSeparator, ProviderMark, RelayGlyph, StatusDot, PROVIDER_NAME } from './ui';
+import { Button, IconButton, Menu, MenuItem, MenuLabel, MenuSeparator, ProviderMark, RelayGlyph, StatusDot, PROVIDER_NAME } from './ui';
 
-const NAV: { view: View; label: string; icon: typeof Kanban }[] = [
-  { view: 'workspace', label: 'Workspace', icon: LayoutPanelLeft },
+const SECONDARY: { view: View; label: string; icon: typeof Kanban }[] = [
   { view: 'tasks', label: 'Tasks', icon: Kanban },
   { view: 'activity', label: 'Activity', icon: Activity },
   { view: 'map', label: 'Agent map', icon: Network },
@@ -24,7 +23,8 @@ export function Sidebar() {
   const sidebarOpen = useRelay((s) => s.sidebarOpen);
   const activeSessionId = useRelay((s) => (s.activeProjectId ? s.sessionByProject[s.activeProjectId] : undefined));
   const connection = useRelay((s) => s.connection);
-  const { setView, selectSession, selectProject, openDialog } = useRelay.getState();
+  const creatingSession = useRelay((s) => s.creatingSession);
+  const { setView, selectSession, selectProject, openDialog, createSession } = useRelay.getState();
   const now = useNow();
 
   const sessions = (boot?.sessions ?? []).filter((s) => s.projectId === project?.id);
@@ -39,7 +39,6 @@ export function Sidebar() {
       <div className="sidebar__brand">
         <span className="brand-glyph"><RelayGlyph size={18} /></span>
         <span className="brand-name">Relay</span>
-        <Badge tone="neutral" title="Version reported by the local server">{boot ? `v${boot.version}` : 'local'}</Badge>
       </div>
 
       <div className="sidebar__project">
@@ -68,26 +67,26 @@ export function Sidebar() {
       </div>
 
       <nav className="nav" aria-label="Views">
-        {NAV.map(({ view: v, label, icon: Icon }) => (
-          <button key={v} type="button" className={cx('nav__item', view === v && 'is-active')} aria-current={view === v ? 'page' : undefined} onClick={() => setView(v)}>
-            <Icon size={15} aria-hidden="true" />
-            <span>{label}</span>
-            {v === 'tasks' && readyCount > 0 ? <span className="nav__count" title={`${readyCount} ready tasks`}>{readyCount}</span> : null}
-            {v === 'workspace' && pending.length > 0 ? <span className="nav__count nav__count--warn" title={`${pending.length} pending approvals`}>{pending.length}</span> : null}
-          </button>
-        ))}
+        <button type="button" className={cx('nav__item', view === 'workspace' && 'is-active')} aria-current={view === 'workspace' ? 'page' : undefined} onClick={() => setView('workspace')}>
+          <LayoutPanelLeft size={15} aria-hidden="true" /><span>Workspace</span>
+          {pending.length > 0 ? <span className="nav__count nav__count--warn" title={`${pending.length} pending approvals`}>{pending.length}</span> : null}
+        </button>
+        <Menu width={190} trigger={(p) => <button type="button" className={cx('nav__item', view !== 'workspace' && 'is-active')} aria-label="More workspace views" {...p}><MoreHorizontal size={15} aria-hidden="true" /><span>More</span></button>}>
+          <MenuLabel>Project views</MenuLabel>
+          {SECONDARY.map(({ view: v, label, icon: Icon }) => <MenuItem key={v} selected={view === v} icon={<Icon size={14} />} onSelect={() => setView(v)}>{label}{v === 'tasks' && readyCount > 0 ? ` · ${readyCount} ready` : ''}</MenuItem>)}
+        </Menu>
       </nav>
 
       <div className="sidebar__sessions">
         <div className="sidebar__section">
           <span>Sessions</span>
-          <IconButton label="New session" onClick={() => openDialog({ kind: 'session' })} disabled={!project} why="Open a project first"><Plus size={14} /></IconButton>
+          <IconButton label="New session" onClick={() => void createSession()} disabled={!project || creatingSession} why={!project ? 'Open a project first' : undefined}><Plus size={14} /></IconButton>
         </div>
         <div className="session-scroll" role="list" aria-label="Sessions">
           {sessions.length === 0 ? (
             <div className="sidebar__empty">
               <p>No sessions in this project.</p>
-              <Button size="sm" onClick={() => openDialog({ kind: 'session' })} disabled={!project}>
+              <Button size="sm" busy={creatingSession} onClick={() => void createSession()} disabled={!project || creatingSession}>
                 <Plus size={13} /> New session
               </Button>
             </div>

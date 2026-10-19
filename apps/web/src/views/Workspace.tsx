@@ -1,9 +1,9 @@
 import { Suspense, lazy, useCallback, useEffect, useRef } from 'react';
-import { FileCode2, FlaskConical, X } from 'lucide-react';
+import { FileCode2 } from 'lucide-react';
 import { useRelay, useProject } from '../store/store';
 import { isDirty, useEditor } from '../store/editor';
 import { cx } from '../lib/format';
-import { Boundary, Badge, Button, Spinner } from '../components/ui';
+import { Boundary, Badge, Spinner } from '../components/ui';
 import { SessionPane } from '../components/Chat';
 import { ContextPane } from '../components/ContextPane';
 
@@ -38,11 +38,7 @@ function ExampleBanner() {
   if (!project?.isExample) return null;
   return (
     <div className="banner banner--example" role="note">
-      <FlaskConical size={14} aria-hidden="true" />
-      <div>
-        <strong>Example workspace.</strong> Explore the starter sessions and sample tasks. Sending a message starts a real run with your configured provider.
-      </div>
-      <Button size="sm" onClick={() => useRelay.getState().openDialog({ kind: 'project' })}>Open your own project</Button>
+      <span><strong>Example workspace</strong><span aria-hidden="true"> · </span>Messages start real runs with your configured provider.</span>
     </div>
   );
 }

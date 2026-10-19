@@ -1,5 +1,5 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDown, ChevronRight, ShieldAlert, Sparkles, Terminal, Info, FolderPlus, Plus } from 'lucide-react';
+import { ArrowDown, ChevronRight, ShieldAlert, Terminal, Info, FolderPlus } from 'lucide-react';
 import type { Approval, Session } from '@relay/contracts';
 import { useRelay, useProject, useActiveSession } from '../store/store';
 import { api, errorMessage } from '../lib/api';
@@ -128,6 +128,7 @@ export function SessionPane() {
   const approvals = useRelay((s) => s.boot?.approvals);
   const pending = useMemo(() => (approvals ?? []).filter((a) => a.sessionId === session?.id && a.status === 'pending'), [approvals, session?.id]);
   const { openDialog } = useRelay.getState();
+  const creatingSession = useRelay((s) => s.creatingSession);
 
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -150,8 +151,8 @@ export function SessionPane() {
   }
   if (!session) {
     return (
-      <EmptyState icon={<Sparkles size={20} />} title={hasSessions ? 'Select a session' : 'No sessions yet'} action={<Button variant="primary" onClick={() => openDialog({ kind: 'session' })}><Plus size={14} /> New session</Button>}>
-        {hasSessions ? 'Choose a session from the sidebar to see its conversation.' : 'A session is an independent Codex or Claude agent with its own context and, for Git projects, its own worktree.'}
+      <EmptyState title={hasSessions ? 'Select a session' : 'No sessions yet'} action={<Button variant="primary" busy={creatingSession} disabled={creatingSession} onClick={() => void useRelay.getState().createSession()}>New session</Button>}>
+        {hasSessions ? 'Choose a session from the sidebar.' : 'Start a session to work in this project.'}
       </EmptyState>
     );
   }
@@ -170,15 +171,8 @@ export function SessionPane() {
         <div className="chat__inner">
           {!messages.some(message => message.role === 'user' || message.role === 'assistant') ? (
             <div className="chat__empty">
-              <ProviderMark provider={session.provider} size={28} />
-              <h3>What are we building?</h3>
-              <p>
-                Give {session.name} a task. Its conversation and worktree stay independent, and you can hand off committed work to another session.
-              </p>
-              <div className="chat__starters">
-                <Button size="sm" onClick={() => useRelay.getState().setDraft(session.id, 'Read the project README and explain how this workspace is organized. Do not change any files.')}><Info size={13} /> Explore this workspace</Button>
-                <Button size="sm" onClick={() => useRelay.getState().setView('tasks')}><ChevronRight size={13} /> View project tasks</Button>
-              </div>
+              <h3>Start a conversation</h3>
+              <p>Send a message to {PROVIDER_NAME[session.provider]} in this session.</p>
             </div>
           ) : null}
           {messages.map((m) => <MessageRow key={m.id} m={m} session={session} />)}
