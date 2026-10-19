@@ -1,6 +1,6 @@
 # Provider feature coverage
 
-Implemented 2026-10-19 using native harness protocols and original Relay UI. This records the current scope of the provider integration.
+Updated 2026-10-20 using native harness protocols and original Relay UI. This records the current scope of the provider integration.
 
 | Feature | Codex | Claude |
 | --- | --- | --- |
@@ -13,10 +13,13 @@ Implemented 2026-10-19 using native harness protocols and original Relay UI. Thi
 | `$` picker | Native installed skill catalog; explicit skill input items | SDK skill catalog; one selected skill dispatched by name |
 | Skill scope | Scopes returned by Codex `skills/list` | Bundled/project/available plugin skills reported under the project settings source |
 | Catalog refresh | On session/model changes, reconnect or explicit retry; fresh selection validation before a run | Same; metadata RPCs have a bounded deadline and close the CLI afterward |
+| `/usage` | Native quota windows, credit balance, available reset count and grant expiry details when reported | Native five-hour, seven-day and applicable scoped windows; no spendable credit balance or reset-grant count exposed by the SDK |
 
 ## Relay commands
 
-`/new`, `/stop`, `/settings`, `/model`, `/effort`, `/permissions`, `/tier`, `/skills`, `/status`, `/diff` and `/help` are local Relay actions. They do not start inference. Relay commands take precedence over provider commands with the same names. Other Claude commands dispatch through the SDK's documented slash syntax. Codex terminal UI slash commands require individual client integrations; they are not sent as pretend prompt aliases.
+`/new`, `/stop`, `/settings`, `/model`, `/effort`, `/permissions`, `/tier`, `/skills`, `/usage`, `/status`, `/diff` and `/help` are local Relay actions. They do not start inference. Relay commands take precedence over provider commands with the same names. Other Claude commands dispatch through the SDK's documented slash syntax. Codex terminal UI slash commands require individual client integrations; they are not sent as pretend prompt aliases.
+
+The usage dialog separates Relay conversation token/cost totals from account-wide quota windows shared with other apps. It shows percentages remaining and native reset timestamps in the local timezone, with a live countdown. Unknown values and replenishment schedules stay explicitly unreported. Manual refresh is rate limited and concurrent reads are coalesced; no reset redemption is exposed. See [Codex usage mapping](codex-usage-research.md) and [Claude usage mapping](claude-usage-research.md).
 
 The picker supports caret-aware completion, arrow navigation, Enter/Tab selection and Escape dismissal. Deleting a skill marker removes its binding. Manually typed or restored markers resolve against enabled skills; duplicate names require an explicit picker selection. Unsupported model settings fail clearly. Saved inherited settings can adapt when selecting a different model.
 
