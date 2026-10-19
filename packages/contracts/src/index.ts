@@ -141,7 +141,7 @@ export type ClientEvent =
   | { type: 'terminal.resize'; terminalId: string; cols: number; rows: number }
   | { type: 'terminal.stop'; terminalId: string };
 
-export const CreateProjectSchema = z.object({ name: z.string().trim().min(1).max(100), path: z.string().trim().min(1).max(4096) });
+export const CreateProjectSchema = z.object({ name: z.string().trim().min(1).max(100), path: z.string().min(1).max(4096) });
 export const UpdateProjectSchema = z.object({ name: z.string().trim().min(1).max(100) }).strict();
 export const CreateSessionSchema = z.object({
   projectId: z.string().min(1), name: z.string().trim().min(1).max(100).optional(), provider: ProviderSchema.optional(),

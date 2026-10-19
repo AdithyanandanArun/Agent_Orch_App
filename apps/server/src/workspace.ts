@@ -20,8 +20,10 @@ export class WorkspaceService {
 
   async createProject(input: CreateProject): Promise<{ project: Project; created: boolean }> {
     let requested = input.path;
-    if (requested === '~' || requested.startsWith('~/')) requested = path.join(os.homedir(), requested.slice(1));
+    if (/[\x00-\x1f\x7f]/.test(requested)) throw badRequest('Project path contains control characters');
+    if (requested === '~' || requested.startsWith('~/') || process.platform === 'win32' && requested.startsWith('~\\')) requested = path.join(os.homedir(), requested.slice(1));
     if (!path.isAbsolute(requested)) throw badRequest('Project path must be absolute');
+    if (process.platform === 'win32' && !/^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/?]+[\\/][^\\/?]+(?:[\\/]|$))/.test(requested)) throw badRequest('Project path must include a drive or network share');
     let real: string;
     try {
       real = await fsp.realpath(requested);
