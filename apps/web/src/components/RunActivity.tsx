@@ -11,7 +11,7 @@ function mergeToolCalls(current: ToolCall[], incoming: ToolCall[], preferIncomin
   for (const call of incoming) {
     const existing = calls.get(call.id);
     if (!existing) calls.set(call.id, call);
-    else if (preferIncoming) calls.set(call.id, { ...existing, ...call });
+    else if (preferIncoming) calls.set(call.id, call);
   }
   return [...calls.values()].sort((a, b) => a.startedAt.localeCompare(b.startedAt));
 }
@@ -195,7 +195,7 @@ function ToolDetail({ node, activeRun }: { node: ToolNode; activeRun: boolean })
           {row.exitCode !== null ? <Field label="Exit code" value={String(row.exitCode)} /> : null}
           {row.processId ? <Field label="Process" value={row.processId} /> : null}
           {row.cwd ? <Field label="Working directory" value={row.cwd} code /> : null}
-          {row.command && row.summary && normalizeCommand(row.command) !== normalizeCommand(title) ? <Field label="Command" value={row.command} code /> : null}
+          {row.command ? <Field label="Command" value={row.command} code /> : null}
         </div>
         {row.input ? <Field label="Input" value={row.input} code /> : null}
         {row.output ? <Field label={row.outputTruncated ? outputSource === 'snapshot' ? 'Output tail' : 'Captured output truncated' : 'Captured output'} value={row.output} code /> : null}
