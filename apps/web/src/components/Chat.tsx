@@ -5,7 +5,7 @@ import { useRelay, useProject, useActiveSession } from '../store/store';
 import { api, errorMessage } from '../lib/api';
 import { clockTime, cx } from '../lib/format';
 import { Markdown } from './Markdown';
-import { Badge, Button, EmptyState, PROVIDER_NAME } from './ui';
+import { Button, EmptyState, PROVIDER_NAME } from './ui';
 import { Composer } from './Composer';
 
 interface DisplayMessage { id: string; role: 'user' | 'assistant' | 'system' | 'tool'; content: string; createdAt: string; kind?: string; live: boolean }
@@ -34,29 +34,34 @@ function useSessionMessages(session: Session | undefined): DisplayMessage[] {
 }
 
 const ToolCard = memo(function ToolCard({ m }: { m: DisplayMessage }) {
-  const [open, setOpen] = useState(false);
   const first = m.content.split('\n').find((l) => l.trim()) ?? '';
   return (
-    <div className={cx('tool', open && 'is-open')}>
-      <button type="button" className="tool__head" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
-        <ChevronRight size={13} className="tool__chev" aria-hidden="true" />
+    <details className="conversation-detail conversation-detail--tool">
+      <summary className="conversation-detail__summary">
+        <ChevronRight size={12} className="conversation-detail__chevron" aria-hidden="true" />
         <Terminal size={13} aria-hidden="true" />
-        <span className="tool__name">{m.kind ?? 'tool'}</span>
-        {!open ? <span className="tool__summary">{first.slice(0, 140)}</span> : null}
-      </button>
-      {open ? <pre className="tool__body">{m.content}</pre> : null}
-    </div>
+        <span className="conversation-detail__label">{m.kind ?? 'Tool output'}</span>
+        <span className="conversation-detail__preview">{first.slice(0, 180)}</span>
+      </summary>
+      <pre className="conversation-detail__body conversation-detail__body--code">{m.content}</pre>
+    </details>
   );
 });
 
 const MessageRow = memo(function MessageRow({ m, session }: { m: DisplayMessage; session: Session }) {
   if (m.role === 'tool') return <ToolCard m={m} />;
   if (m.role === 'system') {
+    const preview = m.content.split('\n').find((line) => line.trim()) ?? '';
     return (
-      <div className="sysmsg">
-        <Info size={12} aria-hidden="true" />
-        <div>{m.kind ? <Badge>{m.kind}</Badge> : null} <span className="sysmsg__text"><Markdown text={m.content} /></span></div>
-      </div>
+      <details className="conversation-detail conversation-detail--system">
+        <summary className="conversation-detail__summary">
+          <ChevronRight size={12} className="conversation-detail__chevron" aria-hidden="true" />
+          <Info size={13} aria-hidden="true" />
+          <span className="conversation-detail__label">{m.kind ?? 'Session update'}</span>
+          <span className="conversation-detail__preview">{preview.slice(0, 180)}</span>
+        </summary>
+        <div className="conversation-detail__body"><Markdown text={m.content} /></div>
+      </details>
     );
   }
   if (m.role === 'user') {
