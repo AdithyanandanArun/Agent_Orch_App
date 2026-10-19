@@ -8,6 +8,7 @@ import {
   describePermissionsApproval, describeTurnError, itemToolActivity, legacyDecision, permissionsResponse, summarizeChanges,
   type ApprovalPrompt, type FileChangeSummary,
 } from './mapping.js';
+import { parseCodexModels, validateCodexEffort } from './capabilities.js';
 import { JsonRpcConnection, RPC_METHOD_NOT_FOUND, RpcError, type CloseInfo } from './rpc.js';
 
 export interface CodexTimeouts {
@@ -207,7 +208,15 @@ class CodexRun {
   private async openThread(): Promise<void> {
     const { session } = this.options;
     const policy = codexPolicy(session.policy, session.worktreePath);
-    const common = { model: session.model, cwd: session.worktreePath, approvalPolicy: policy.approvalPolicy, sandbox: policy.sandbox };
+    const serviceTier = session.serviceTier && session.serviceTier !== 'standard' ? session.serviceTier : null;
+    const common = { model: session.model, cwd: session.worktreePath, approvalPolicy: policy.approvalPolicy, sandbox: policy.sandbox, serviceTier };
+    const catalog = parseCodexModels(await this.conn.request('model/list', { limit: 200, includeHidden: false }, this.ctx.timeouts.threadMs));
+    const model = catalog.find((candidate) => candidate.id === session.model);
+    const effortError = validateCodexEffort(model, session.effort);
+    if (effortError) throw new ProviderError(effortError, { code: 'unsupported_effort' });
+    if (serviceTier && !model?.serviceTiers?.some((tier) => tier.id === serviceTier)) {
+      throw new ProviderError(`Service tier "${truncate(serviceTier, 80)}" is not supported by Codex model ${session.model}.`, { code: 'unsupported_service_tier' });
+    }
     let result: unknown;
     if (session.providerSessionId) {
       // A failed resume is an error: silently starting a fresh thread would drop the conversation.
@@ -235,11 +244,14 @@ class CodexRun {
   private async startTurn(): Promise<void> {
     const { session, prompt } = this.options;
     const policy = codexPolicy(session.policy, session.worktreePath);
+    const serviceTier = session.serviceTier && session.serviceTier !== 'standard' ? session.serviceTier : null;
+    const skillInputs = (this.options.skills ?? []).filter((skill) => skill.enabled && skill.path && skill.path.startsWith('/') && skill.path.length <= 4096 && skill.name.trim().length > 0).slice(0, 20)
+      .map((skill) => ({ type: 'skill', name: truncate(skill.name, 150), path: skill.path as string }));
     this.phase = 'turn';
     if (this.abortRequested) throw abortError();
     const request = this.conn.request('turn/start', {
-      threadId: this.threadId, input: [{ type: 'text', text: prompt, text_elements: [] }], cwd: session.worktreePath,
-      model: session.model, effort: session.effort, approvalPolicy: policy.approvalPolicy, sandboxPolicy: policy.sandboxPolicy,
+      threadId: this.threadId, input: [{ type: 'text', text: prompt, text_elements: [] }, ...skillInputs], cwd: session.worktreePath,
+      model: session.model, effort: session.effort, serviceTier, approvalPolicy: policy.approvalPolicy, sandboxPolicy: policy.sandboxPolicy,
     }, this.ctx.timeouts.turnStartMs);
     request.then((result) => {
       const turn = isRecord(result) && isRecord(result.turn) ? result.turn : null;

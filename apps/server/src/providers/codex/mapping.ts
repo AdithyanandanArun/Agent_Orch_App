@@ -7,13 +7,19 @@ import { describeValue, isRecord, truncate, truncateTail } from '../common.js';
  * (codex-cli 0.160.1): AskForApproval is kebab-case, SandboxMode is kebab-case, SandboxPolicy.type is camelCase.
  */
 export interface CodexPolicy {
-  approvalPolicy: 'on-request';
-  sandbox: 'read-only' | 'workspace-write';
-  sandboxPolicy: { type: 'readOnly' } | { type: 'workspaceWrite'; writableRoots: string[]; networkAccess: boolean };
+  approvalPolicy: 'on-request' | 'never';
+  sandbox: 'read-only' | 'workspace-write' | 'danger-full-access';
+  sandboxPolicy: { type: 'readOnly' } | { type: 'workspaceWrite'; writableRoots: string[]; networkAccess: boolean } | { type: 'dangerFullAccess' };
 }
 
-/** Both policies keep approvals on; they differ in what the sandbox allows without asking. */
+/** Map Relay policies directly to app-server policy values; no policy is silently downgraded. */
 export function codexPolicy(policy: Policy, worktreePath: string): CodexPolicy {
+  if (policy === 'full-access') {
+    return { approvalPolicy: 'never', sandbox: 'danger-full-access', sandboxPolicy: { type: 'dangerFullAccess' } };
+  }
+  if (policy === 'auto') {
+    return { approvalPolicy: 'never', sandbox: 'workspace-write', sandboxPolicy: { type: 'workspaceWrite', writableRoots: [resolve(worktreePath)], networkAccess: false } };
+  }
   if (policy === 'balanced') {
     return {
       approvalPolicy: 'on-request',
