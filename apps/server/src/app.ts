@@ -58,6 +58,7 @@ const defaultLogger: Logger = (level, message, detail) => {
 /** Recovery for state left behind by a process that died or was stopped mid-run. */
 export function recoverInterruptedState(store: Store, log: Logger): { sessions: number; approvals: number; tasks: number; messages: number } {
   return store.tx(() => {
+    store.recoverRuns();
     const approvals = store.pendingApprovals();
     for (const approval of approvals) {
       const session = store.getSession(approval.sessionId, true);

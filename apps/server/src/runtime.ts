@@ -1,10 +1,10 @@
 import { existsSync, statSync } from 'node:fs';
-import type { AdapterEvent, Approval, Message, Session } from '@relay/contracts';
+import type { AdapterEvent, Approval, Message, Session, ToolActivity, ToolCall } from '@relay/contracts';
 import type { Hub } from './hub.ts';
 import type { Store } from './store.ts';
 import type { TaskService } from './tasks.ts';
 import type { Logger, ProviderRuntime } from './types.ts';
-import { conflict, errorMessage, notFound, redactSecrets, truncate } from './util.ts';
+import { conflict, errorMessage, notFound, redactSecrets, truncate, newId, nowIso } from './util.ts';
 
 export interface RuntimeOptions {
   /** Milliseconds to wait after an abort before declaring an unresponsive adapter interrupted. */
@@ -13,7 +13,13 @@ export interface RuntimeOptions {
   flushIntervalMs?: number;
 }
 
+interface ToolBuffer { call: ToolCall; output: string; dirty: boolean; tick: number | null }
 interface ActiveRun {
+  id: string;
+  startedAt: string;
+  tick: number;
+  tools: Map<string, ToolBuffer>;
+  activityTimer: NodeJS.Timeout | null;
   sessionId: string;
   controller: AbortController;
   closed: boolean;
@@ -69,17 +75,19 @@ export class SessionRuntime {
     const handoffs = this.store.unconsumedHandoffs(sessionId);
     const prompt = this.composePrompt(handoffs, content);
     const run: ActiveRun = {
+      id: newId('run'), startedAt: nowIso(), tick: performance.now(), tools: new Map(), activityTimer: null,
       sessionId, controller: new AbortController(), closed: false, cleanupPending: false, approvals: new Map(), stream: null, flushTimer: null, consumedHandoffs: handoffs.map((h) => h.id), firstEvent: false,
       baseInput: session.inputTokens, baseOutput: session.outputTokens, baseCost: session.costUsd, taskId: options.taskId ?? null, promise: Promise.resolve(),
     };
     this.store.tx(() => {
-      this.store.insertMessage({ sessionId, role: 'user', content: options.userMessage?.content ?? content, kind: options.userMessage?.kind ?? null });
+      const userMessage = this.store.insertMessage({ sessionId, role: 'user', content: options.userMessage?.content ?? content, kind: options.userMessage?.kind ?? null, runId: run.id });
+      this.store.insertRun({ id: run.id, sessionId, userMessageId: userMessage.id, provider: session.provider, model: session.model, startedAt: run.startedAt });
       this.store.updateSession(sessionId, { status: 'running', error: null });
       if (options.taskId) {
         const task = this.store.getTask(options.taskId);
         if (task) this.tasks.markRunning(task);
       }
-      this.store.recordEvent({ projectId: session.projectId, sessionId, type: 'session.run.started', summary: `Run started: ${session.name}`, payload: { provider: session.provider, model: session.model, taskId: options.taskId ?? null, handoffsIncluded: handoffs.length } });
+      this.store.recordEvent({ projectId: session.projectId, sessionId, type: 'session.run.started', summary: `Run started: ${session.name}`, payload: { runId: run.id, provider: session.provider, model: session.model, taskId: options.taskId ?? null, handoffsIncluded: handoffs.length } });
     });
     this.active.set(sessionId, run);
     run.promise = this.execute(run, session, prompt);
@@ -146,9 +154,15 @@ export class SessionRuntime {
           if (!event.text) return;
           this.appendText(run, event.text);
           break;
+        case 'tool.activity':
+          this.recordTool(run, event.activity);
+          break;
+        case 'tool.output':
+          this.appendToolOutput(run, event.id, event.delta);
+          break;
         case 'tool': {
           this.closeStream(run, null);
-          this.store.insertMessage({ sessionId: run.sessionId, role: 'tool', kind: 'tool', content: truncate(redactSecrets(`${event.name}${event.content ? `\n${event.content}` : ''}`), MAX_TOOL_CHARS) });
+          this.store.insertMessage({ sessionId: run.sessionId, runId: run.id, role: 'tool', kind: 'tool', content: truncate(redactSecrets(`${event.name}${event.content ? `\n${event.content}` : ''}`), MAX_TOOL_CHARS) });
           this.store.touch();
           break;
         }
@@ -163,7 +177,7 @@ export class SessionRuntime {
         }
         case 'info':
           this.closeStream(run, null);
-          this.store.insertMessage({ sessionId: run.sessionId, role: 'system', kind: 'info', content: truncate(redactSecrets(event.content), MAX_TOOL_CHARS) });
+          this.store.insertMessage({ sessionId: run.sessionId, runId: run.id, role: 'system', kind: 'info', content: truncate(redactSecrets(event.content), MAX_TOOL_CHARS) });
           this.store.touch();
           break;
       }
@@ -172,10 +186,84 @@ export class SessionRuntime {
     }
   }
 
+  private recordTool(run: ActiveRun, activity: ToolActivity): void {
+    const providerId = activity.id.slice(0, 200);
+    if (!providerId) return;
+    let buffer = run.tools.get(providerId);
+    const at = nowIso();
+    if (!buffer) {
+      this.closeStream(run, null);
+      buffer = { output: '', dirty: false, tick: activity.status === 'running' ? performance.now() : null,
+        call: { id: newId('tool'), runId: run.id, sessionId: run.sessionId, providerId, parentProviderId: null,
+          name: activity.name, category: activity.category, status: activity.status, summary: '', command: null, input: '', output: '',
+          cwd: null, exitCode: null, processId: null, startedAt: at, finishedAt: null, durationMs: null } };
+      run.tools.set(providerId, buffer);
+    }
+    const call = buffer.call;
+    const terminal = call.finishedAt !== null;
+    call.name = truncate(redactSecrets(activity.name), 200);
+    call.category = activity.category;
+    if (!terminal || activity.status !== 'running') call.status = activity.status;
+    if (activity.parentId !== undefined) call.parentProviderId = activity.parentId?.slice(0, 200) ?? null;
+    if (activity.summary !== undefined) call.summary = truncate(redactSecrets(activity.summary), 1000);
+    if (activity.command !== undefined) call.command = activity.command === null ? null : truncate(redactSecrets(activity.command), 4000);
+    if (activity.input !== undefined) call.input = truncate(redactSecrets(activity.input), MAX_TOOL_CHARS);
+    if (activity.cwd !== undefined) call.cwd = activity.cwd === null ? null : truncate(redactSecrets(activity.cwd), 4096);
+    if (activity.processId !== undefined) call.processId = activity.processId === null ? null : truncate(String(activity.processId), 200);
+    if (activity.exitCode !== undefined) call.exitCode = typeof activity.exitCode === 'number' && Number.isFinite(activity.exitCode) ? activity.exitCode : null;
+    if (activity.output !== undefined) buffer.output = activity.output.slice(-MAX_TOOL_CHARS);
+    if (call.status !== 'running' && !terminal) {
+      call.finishedAt = at;
+      call.durationMs = buffer.tick === null ? null : Math.max(0, Math.round(performance.now() - buffer.tick));
+    }
+    if (typeof activity.durationMs === 'number' && Number.isFinite(activity.durationMs) && activity.durationMs >= 0) call.durationMs = Math.round(activity.durationMs);
+    this.persistTool(buffer);
+    this.store.touch();
+  }
+
+  private persistTool(buffer: ToolBuffer): void {
+    buffer.call.output = redactSecrets(buffer.output);
+    this.store.putToolCall(buffer.call);
+    buffer.dirty = false;
+  }
+
+  private appendToolOutput(run: ActiveRun, providerId: string, delta: string): void {
+    if (!delta) return;
+    const id = providerId.slice(0, 200);
+    let buffer = run.tools.get(id);
+    if (!buffer) {
+      this.recordTool(run, { id, name: 'Tool', category: 'other', status: 'running', summary: 'Tool output' });
+      buffer = run.tools.get(id);
+    }
+    if (!buffer || buffer.call.finishedAt) return;
+    buffer.output = (buffer.output + delta).slice(-MAX_TOOL_CHARS);
+    buffer.dirty = true;
+    if (!run.activityTimer) run.activityTimer = setTimeout(() => {
+      run.activityTimer = null;
+      for (const tool of run.tools.values()) if (tool.dirty) this.persistTool(tool);
+      this.store.touch();
+    }, this.flushIntervalMs);
+  }
+
+  private finishTools(run: ActiveRun): void {
+    if (run.activityTimer) clearTimeout(run.activityTimer);
+    run.activityTimer = null;
+    const at = nowIso();
+    for (const buffer of run.tools.values()) {
+      if (buffer.call.status === 'running') {
+        buffer.call.status = 'interrupted';
+        buffer.call.finishedAt = at;
+        buffer.call.durationMs = buffer.tick === null ? null : Math.max(0, Math.round(performance.now() - buffer.tick));
+        buffer.output = (buffer.output + '\n[Relay: run ended before this tool reported completion.]').slice(-MAX_TOOL_CHARS);
+      }
+      this.persistTool(buffer);
+    }
+  }
+
   private appendText(run: ActiveRun, text: string): void {
     const offset = run.stream?.text.length ?? 0;
     if (!run.stream) {
-      const message = this.store.insertMessage({ sessionId: run.sessionId, role: 'assistant', content: text, kind: 'streaming' });
+      const message = this.store.insertMessage({ sessionId: run.sessionId, runId: run.id, role: 'assistant', content: text, kind: 'streaming' });
       run.stream = { messageId: message.id, text, dirty: false };
       this.store.touch();
     } else {
@@ -271,13 +359,15 @@ export class SessionRuntime {
     try {
       this.store.tx(() => {
         this.closeStream(run, outcome === 'completed' ? null : 'partial');
+        this.finishTools(run);
+        this.store.finishRun(run.id, outcome, Math.max(0, Math.round(performance.now() - run.tick)));
         const session = this.store.getSession(run.sessionId, true);
         if (!session) return;
         if (outcome === 'failed') {
-          this.store.insertMessage({ sessionId: run.sessionId, role: 'system', kind: 'error', content: `Run failed: ${failure}` });
+          this.store.insertMessage({ sessionId: run.sessionId, runId: run.id, role: 'system', kind: 'error', content: `Run failed: ${failure}` });
           this.store.updateSession(run.sessionId, { status: 'error', error: failure });
         } else if (outcome === 'interrupted') {
-          this.store.insertMessage({ sessionId: run.sessionId, role: 'system', kind: 'info', content: 'Run interrupted.' });
+          this.store.insertMessage({ sessionId: run.sessionId, runId: run.id, role: 'system', kind: 'info', content: 'Run interrupted.' });
           this.store.updateSession(run.sessionId, { status: 'interrupted', error: null });
         } else {
           this.consumeHandoffsOnce(run);
@@ -288,7 +378,7 @@ export class SessionRuntime {
         this.store.recordEvent({
           projectId: session.projectId, sessionId: run.sessionId, type: `session.run.${outcome}`,
           summary: outcome === 'completed' ? `Run completed: ${session.name}` : outcome === 'failed' ? `Run failed: ${session.name}` : `Run interrupted: ${session.name}`,
-          payload: { taskId: run.taskId, ...(failure ? { error: failure } : {}) },
+          payload: { runId: run.id, durationMs: Math.max(0, Math.round(performance.now() - run.tick)), taskId: run.taskId, ...(failure ? { error: failure } : {}) },
         });
       });
     } catch (error) {

@@ -1,5 +1,5 @@
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
-import type { AppSettings, Approval, Message, Policy, Project, Provider, Session, SessionStatus, Task, TaskStatus, WorkspaceEvent } from '@relay/contracts';
+import type { AppSettings, Approval, Message, Policy, Project, Provider, Session, SessionStatus, SessionRun, ToolCall, ToolCategory, RunStatus, Task, TaskStatus, WorkspaceEvent } from '@relay/contracts';
 import { SCHEMA_VERSION } from './db.ts';
 import { newId, nowIso } from './util.ts';
 
@@ -31,6 +31,7 @@ const mapSession = (r: Row): Session => ({
 const mapMessage = (r: Row): Message => {
   const message: Message = { id: r.id as string, sessionId: r.session_id as string, role: r.role as Message['role'], content: r.content as string, createdAt: r.created_at as string };
   if (r.kind) message.kind = r.kind as string;
+  if (r.run_id) message.runId = r.run_id as string;
   return message;
 };
 const mapEvent = (r: Row): WorkspaceEvent => ({
@@ -161,11 +162,66 @@ export class Store {
     return this.all(`SELECT * FROM sessions WHERE archived_at IS NULL AND status IN (${statuses.map(() => '?').join(',')})`, ...statuses).map(mapSession);
   }
 
+  // durable runs and tool invocations
+  private mapRun(row: Row): SessionRun {
+    const counts = this.all('SELECT category, COUNT(*) AS n FROM tool_calls WHERE run_id = ? GROUP BY category', row.id as string);
+    const toolCounts: Partial<Record<ToolCategory, number>> = {};
+    for (const item of counts) toolCounts[item.category as ToolCategory] = Number(item.n);
+    return { id: row.id as string, sessionId: row.session_id as string, userMessageId: row.user_message_id as string,
+      provider: row.provider as Provider, model: row.model as string, status: row.status as RunStatus,
+      startedAt: row.started_at as string, finishedAt: row.finished_at as string | null, durationMs: row.duration_ms as number | null,
+      toolCount: counts.reduce((sum, item) => sum + Number(item.n), 0), toolCounts };
+  }
+  insertRun(input: { id: string; sessionId: string; userMessageId: string; provider: Provider; model: string; startedAt: string }): SessionRun {
+    this.run('INSERT INTO session_runs(id, session_id, user_message_id, provider, model, status, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)', input.id, input.sessionId, input.userMessageId, input.provider, input.model, 'running', input.startedAt);
+    return this.getRun(input.id)!;
+  }
+  getRun(id: string): SessionRun | undefined {
+    const row = this.get('SELECT * FROM session_runs WHERE id = ?', id);
+    return row ? this.mapRun(row) : undefined;
+  }
+  finishRun(id: string, status: Exclude<RunStatus, 'running'>, durationMs: number | null, finishedAt = nowIso()): void {
+    this.run('UPDATE session_runs SET status = ?, finished_at = ?, duration_ms = ? WHERE id = ? AND status = ?', status, finishedAt, durationMs, id, 'running');
+  }
+  bootstrapRuns(limit = 200): SessionRun[] {
+    return this.all(`SELECT r.* FROM session_runs r JOIN sessions s ON s.id = r.session_id WHERE s.archived_at IS NULL
+      ORDER BY (r.status = 'running') DESC, r.rowid DESC LIMIT ?`, limit).map((row) => this.mapRun(row));
+  }
+  putToolCall(call: ToolCall): void {
+    this.run(`INSERT INTO tool_calls(id, run_id, session_id, provider_id, category, status, data) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(run_id, provider_id) DO UPDATE SET category = excluded.category, status = excluded.status, data = excluded.data`,
+      call.id, call.runId, call.sessionId, call.providerId, call.category, call.status, JSON.stringify(call));
+  }
+  getToolCall(id: string): ToolCall | undefined {
+    const row = this.get('SELECT data FROM tool_calls WHERE id = ?', id);
+    return row ? JSON.parse(row.data as string) as ToolCall : undefined;
+  }
+  listRunTools(runId: string, limit = 1000): ToolCall[] {
+    return this.all('SELECT data FROM tool_calls WHERE run_id = ? ORDER BY rowid ASC LIMIT ?', runId, limit).map((row) => JSON.parse(row.data as string) as ToolCall);
+  }
+  bootstrapToolCalls(runIds: string[], limit = 1000): ToolCall[] {
+    if (!runIds.length) return [];
+    const rows = this.all(`SELECT t.data FROM tool_calls t JOIN session_runs r ON r.id = t.run_id
+      WHERE t.run_id IN (${runIds.map(() => '?').join(',')}) ORDER BY (r.status = 'running') DESC, t.rowid DESC LIMIT ?`, ...runIds, limit);
+    // Full bounded output is loaded on demand when a tool disclosure opens.
+    return rows.reverse().map((row) => { const call = JSON.parse(row.data as string) as ToolCall; return { ...call, input: call.input.slice(0, 4000), output: call.output.slice(-2000) }; });
+  }
+  recoverRuns(): void {
+    const at = nowIso();
+    for (const row of this.all("SELECT id FROM session_runs WHERE status = 'running'")) {
+      const id = row.id as string;
+      this.finishRun(id, 'interrupted', null, at);
+      for (const tool of this.listRunTools(id, 100_000)) {
+        if (tool.status === 'running') this.putToolCall({ ...tool, status: 'interrupted', finishedAt: at, durationMs: null });
+      }
+    }
+  }
+
   // messages
-  insertMessage(input: { id?: string; sessionId: string; role: Message['role']; content: string; kind?: string | null }): Message {
+  insertMessage(input: { id?: string; sessionId: string; role: Message['role']; content: string; kind?: string | null; runId?: string }): Message {
     const id = input.id ?? newId('msg');
     const createdAt = nowIso();
-    this.run('INSERT INTO messages(id, session_id, role, content, kind, created_at) VALUES (?, ?, ?, ?, ?, ?)', id, input.sessionId, input.role, input.content, input.kind ?? null, createdAt);
+    this.run('INSERT INTO messages(id, session_id, role, content, kind, created_at, run_id) VALUES (?, ?, ?, ?, ?, ?, ?)', id, input.sessionId, input.role, input.content, input.kind ?? null, createdAt, input.runId ?? null);
     return this.getMessage(id)!;
   }
   getMessage(id: string): Message | undefined {

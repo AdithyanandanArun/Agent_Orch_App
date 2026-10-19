@@ -42,6 +42,19 @@ const MIGRATIONS: string[] = [
   `,
   `ALTER TABLE sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
    ALTER TABLE sessions ADD COLUMN unread INTEGER NOT NULL DEFAULT 0;`,
+  `ALTER TABLE messages ADD COLUMN run_id TEXT;
+   CREATE TABLE session_runs (
+     id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), user_message_id TEXT NOT NULL REFERENCES messages(id),
+     provider TEXT NOT NULL, model TEXT NOT NULL, status TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT, duration_ms INTEGER
+   );
+   CREATE INDEX runs_session ON session_runs(session_id, started_at);
+   CREATE TABLE tool_calls (
+     id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES session_runs(id), session_id TEXT NOT NULL REFERENCES sessions(id),
+     provider_id TEXT NOT NULL, category TEXT NOT NULL, status TEXT NOT NULL, data TEXT NOT NULL,
+     UNIQUE(run_id, provider_id)
+   );
+   CREATE INDEX tools_run ON tool_calls(run_id);
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

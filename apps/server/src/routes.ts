@@ -96,11 +96,24 @@ export function buildRouter(s: Services) {
 
   add('GET', '/api/bootstrap', async () => {
     const providers = await s.providers.snapshot();
+    const runs = s.store.bootstrapRuns();
     const body: Bootstrap = {
+      runs, toolCalls: s.store.bootstrapToolCalls(runs.map((run) => run.id)),
       projects: s.store.listProjects(), sessions: s.store.listSessions(), messages: s.store.bootstrapMessages(300), tasks: s.store.listTasks(),
       events: s.store.recentEvents(500), approvals: s.store.bootstrapApprovals(50), providers, settings: s.store.getSettings(), version: s.config.version,
     };
     return body;
+  });
+
+  add('GET', '/api/runs/:id/tools', (ctx) => {
+    const run = s.store.getRun(param(ctx, 'id'));
+    if (!run || !s.store.getSession(run.sessionId)) throw notFound('Run not found');
+    return s.store.listRunTools(run.id);
+  });
+  add('GET', '/api/tool-calls/:id', (ctx) => {
+    const call = s.store.getToolCall(param(ctx, 'id'));
+    if (!call || !s.store.getSession(call.sessionId)) throw notFound('Tool call not found');
+    return call;
   });
 
   add('GET', '/api/projects', () => s.store.listProjects());

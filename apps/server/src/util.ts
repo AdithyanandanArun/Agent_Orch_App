@@ -12,7 +12,7 @@ export const notFound = (message: string) => new HttpError(404, message);
 export const conflict = (message: string) => new HttpError(409, message);
 export const unprocessable = (message: string) => new HttpError(422, message);
 
-export type IdPrefix = 'prj' | 'ses' | 'msg' | 'tsk' | 'apr' | 'trm';
+export type IdPrefix = 'prj' | 'ses' | 'msg' | 'tsk' | 'apr' | 'trm' | 'run' | 'tool';
 
 export function newId(prefix: IdPrefix): string {
   return `${prefix}_${randomUUID().replaceAll('-', '').slice(0, 16)}`;
