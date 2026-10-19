@@ -156,7 +156,7 @@
 .tdot--ready { background: var(--info); }
 .tdot--running { background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
 .tdot--blocked { background: var(--warn); }
-.tdot--review { background: #c78bf0; }
+.tdot--review { background: var(--fg-1); }
 .tdot--done { background: var(--ok); }
 .tdot--backlog { background: transparent; box-shadow: inset 0 0 0 1.5px var(--fg-3); }
 

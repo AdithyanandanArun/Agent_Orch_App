@@ -11,6 +11,7 @@
   --bg-hover: rgba(255, 255, 255, 0.045);
   --bg-active: rgba(255, 255, 255, 0.075);
   --bg-inset: #0a0a0a;
+  --bg-message: #151515;
   --bg-overlay: rgba(0, 0, 0, 0.62);
 
   --line-soft: rgba(255, 255, 255, 0.055);
@@ -68,6 +69,7 @@
   --bg-hover: rgba(0, 0, 0, 0.04);
   --bg-active: rgba(0, 0, 0, 0.07);
   --bg-inset: #ededee;
+  --bg-message: #eeeeee;
   --bg-overlay: rgba(0, 0, 0, 0.3);
 
   --line-soft: rgba(0, 0, 0, 0.06);
