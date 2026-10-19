@@ -1,14 +1,14 @@
 import { useState, type ReactNode } from 'react';
 import { RefreshCw } from 'lucide-react';
-import type { AppSettings, ProviderInfo } from '@relay/contracts';
-import { useRelay } from '../store/store';
+import type { AppSettings, Project, ProviderInfo } from '@relay/contracts';
+import { useRelay, type SettingsSection } from '../store/store';
 import { api, errorMessage } from '../lib/api';
 import { Button, InlineError } from './ui';
+import { copyText } from '../lib/clipboard';
 import { SelectMenu } from './SelectMenu';
 
-type Category = 'general' | 'providers' | 'appearance';
-const CATEGORIES: { id: Category; name: string }[] = [
-  { id: 'general', name: 'General' }, { id: 'providers', name: 'Providers' }, { id: 'appearance', name: 'Appearance' },
+const CATEGORIES: { id: SettingsSection; name: string }[] = [
+  { id: 'general', name: 'General' }, { id: 'project', name: 'Project' }, { id: 'providers', name: 'Providers' }, { id: 'appearance', name: 'Appearance' },
 ];
 
 function SettingRow({ title, description, htmlFor, children }: { title: string; description?: string; htmlFor: string; children: ReactNode }) {
@@ -30,7 +30,10 @@ function ProviderStatus({ provider }: { provider: ProviderInfo }) {
 export function SettingsPage() {
   const boot = useRelay((s) => s.boot);
   const settings = boot?.settings;
-  const [category, setCategory] = useState<Category>('general');
+  const category = useRelay((s) => s.settingsSection);
+  const projectId = useRelay((s) => s.settingsProjectId);
+  const project = boot?.projects.find((item) => item.id === projectId);
+  const setCategory = useRelay.getState().setSettingsSection;
   const [claude, setClaude] = useState(settings?.claudeExecutable ?? '');
   const [codex, setCodex] = useState(settings?.codexExecutable ?? '');
   const [busy, setBusy] = useState<string | null>(null);
@@ -60,13 +63,13 @@ export function SettingsPage() {
   const reportedModels = boot.providers.find((p) => p.id === settings.defaultProvider)?.models ?? [];
   const models = reportedModels.some((m) => m.id === defaultModel) ? reportedModels : [{ id: defaultModel, name: defaultModel }, ...reportedModels];
   const pathsDirty = claude.trim() !== settings.claudeExecutable || codex.trim() !== settings.codexExecutable;
-  const status = busy === 'providers' ? 'Checking providers…' : busy ? 'Saving…' : error ? 'Could not complete change' : saved ? 'All changes saved' : 'Changes save automatically';
+  const status = busy === 'providers' ? 'Checking providers…' : busy ? 'Saving…' : error ? 'Could not complete change' : saved ? 'All changes saved' : category === 'project' ? 'Project details' : 'Changes save automatically';
 
   return <div className="settings-page" aria-labelledby="settings-title">
     <div className="settings-page__inner">
       <header className="settings-page__head"><div><h1 id="settings-title" tabIndex={-1}>Settings</h1><p>Models, permissions and appearance.</p></div><span className="settings-page__save" role="status">{status}</span></header>
       <nav className="settings-page__tabs" aria-label="Settings sections">
-        {CATEGORIES.map((item) => <button type="button" key={item.id} aria-current={category === item.id ? 'page' : undefined} onClick={() => setCategory(item.id)}>{item.name}</button>)}
+        {CATEGORIES.filter((item) => item.id !== 'project' || project).map((item) => <button type="button" key={item.id} aria-current={category === item.id ? 'page' : undefined} onClick={() => setCategory(item.id)}>{item.name}</button>)}
       </nav>
       {error ? <InlineError>{error}</InlineError> : null}
       {category === 'general' ? <div className="settings-page__section">
@@ -88,6 +91,7 @@ export function SettingsPage() {
           <SelectMenu id="st-policy" label="Default approval policy" value={settings.defaultPolicy} disabled={disabled} options={[{ value: 'supervised', label: 'Supervised' }, { value: 'balanced', label: 'Balanced' }]} onChange={(value) => void update({ defaultPolicy: value as AppSettings['defaultPolicy'] }, 'policy')} />
         </SettingRow>
       </div> : null}
+      {category === 'project' && project ? <ProjectSettings key={`${project.id}:${project.name}`} project={project} /> : null}
       {category === 'providers' ? <div className="settings-page__section">
         <div className="settings-page__section-head settings-page__section-head--actions"><div><h2>Connected agents</h2><p>Local installations and login status.</p></div><Button size="sm" disabled={disabled} busy={busy === 'providers'} onClick={() => void refreshProviders()}><RefreshCw size={12} /> Re-check</Button></div>
         {boot.providers.map((provider) => <ProviderStatus key={provider.id} provider={provider} />)}
@@ -110,4 +114,34 @@ export function SettingsPage() {
       <footer className="settings-page__foot">Relay {boot.version}<span>Local workspace</span></footer>
     </div>
   </div>;
+}
+
+function ProjectSettings({ project }: { project: Project }) {
+  const [name, setName] = useState(project.name);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const save = async () => {
+    setBusy(true); setError(null);
+    try {
+      await api.renameProject(project.id, name.trim());
+      await useRelay.getState().refreshNow();
+      useRelay.getState().toast('success', 'Project name saved.');
+    } catch (cause) { setError(errorMessage(cause)); }
+    finally { setBusy(false); }
+  };
+  const copyPath = async () => {
+    try { await copyText(project.path); useRelay.getState().toast('success', 'Project path copied.'); }
+    catch (cause) { setError(errorMessage(cause)); }
+  };
+  return <section className="settings-page__section" aria-labelledby="project-settings-title">
+    <div className="settings-page__section-head"><h2 id="project-settings-title">{project.name}</h2><p>{project.isExample ? 'Example workspace' : 'Project details and location.'}</p></div>
+    {error ? <InlineError>{error}</InlineError> : null}
+    <form onSubmit={(event) => { event.preventDefault(); void save(); }}>
+      <SettingRow title="Project name" description="Shown in the sidebar and session list." htmlFor="st-project-name">
+        <input id="st-project-name" className="input" value={name} maxLength={100} required disabled={busy} onChange={(event) => setName(event.target.value)} />
+      </SettingRow>
+      <div className="settings-project__save"><Button type="submit" size="sm" busy={busy} disabled={busy || !name.trim() || name.trim() === project.name}>Save name</Button></div>
+    </form>
+    <div className="settings-project__location"><h3>Project folder</h3><div><code>{project.path}</code><Button size="sm" onClick={() => void copyPath()}>Copy path</Button></div></div>
+  </section>;
 }

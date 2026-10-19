@@ -5,6 +5,7 @@ import { api, errorMessage } from '../lib/api';
 import { terminalBus } from './terminalBus';
 
 export type View = 'workspace' | 'tasks' | 'activity' | 'map' | 'settings';
+export type SettingsSection = 'general' | 'project' | 'providers' | 'appearance';
 export type ContextTab = 'overview' | 'files' | 'changes' | 'preview';
 export type Scope = 'session' | 'project';
 export type Connection = 'connecting' | 'online' | 'offline';
@@ -64,6 +65,8 @@ interface RelayState {
   sessionByProject: Record<string, string>;
   view: View;
   settingsReturnView: Exclude<View, 'settings'>;
+  settingsSection: SettingsSection;
+  settingsProjectId: string | null;
   contextTab: ContextTab;
   contextOpen: boolean;
   terminalOpen: boolean;
@@ -85,7 +88,8 @@ interface RelayState {
   refreshNow(): Promise<void>;
   reconnect(): void;
   setView(view: View): void;
-  openSettings(): void;
+  openSettings(options?: { section?: SettingsSection; projectId?: string }): void;
+  setSettingsSection(section: SettingsSection): void;
   closeSettings(): void;
   setContextTab(tab: ContextTab): void;
   toggleContext(open?: boolean): void;
@@ -98,6 +102,7 @@ interface RelayState {
   selectProject(id: string): void;
   selectSession(id: string): void;
   createSession(): Promise<void>;
+  organizeSession(id: string, changes: Partial<Pick<Session, 'pinned' | 'unread'>>): Promise<void>;
   selectTask(id: string | null): void;
   setCenterTab(key: string): void;
   setMapSelection(id: string | null): void;
@@ -379,6 +384,8 @@ export const useRelay = create<RelayState>((set, get) => {
     sessionByProject: persisted.sessionByProject ?? {},
     view: persisted.view ?? 'workspace',
     settingsReturnView: 'workspace',
+    settingsSection: 'general',
+    settingsProjectId: persisted.activeProjectId ?? null,
     contextTab: persisted.contextTab ?? 'files',
     contextOpen: persisted.contextOpen ?? false,
     terminalOpen: persisted.terminalOpen ?? false,
@@ -450,10 +457,13 @@ export const useRelay = create<RelayState>((set, get) => {
       if (view === 'settings') { get().openSettings(); return; }
       patch({ view, sidebarOpen: false, dialog: null });
     },
-    openSettings() {
+    openSettings(options) {
       const view = get().view;
-      patch({ view: 'settings', settingsReturnView: view === 'settings' ? get().settingsReturnView : view, dialog: null, sidebarOpen: false });
+      patch({ view: 'settings', settingsReturnView: view === 'settings' ? get().settingsReturnView : view,
+        settingsSection: options?.section ?? 'general', settingsProjectId: options?.projectId ?? get().activeProjectId,
+        dialog: null, sidebarOpen: false });
     },
+    setSettingsSection: (settingsSection) => set({ settingsSection }),
     closeSettings() { patch({ view: get().settingsReturnView, dialog: null }); },
     setContextTab: (contextTab) => patch({ contextTab, contextOpen: true }),
     toggleContext: (open) => patch({ contextOpen: open ?? !get().contextOpen }),
@@ -482,6 +492,18 @@ export const useRelay = create<RelayState>((set, get) => {
         activeProjectId: s.projectId, sessionByProject: { ...get().sessionByProject, [s.projectId]: id },
         view: 'workspace', centerTab: 'session', sidebarOpen: false,
       });
+      if (s.unread) void get().organizeSession(id, { unread: false }).catch(() => {});
+    },
+    async organizeSession(id, changes) {
+      try {
+        const updated = await api.updateSession(id, changes);
+        // Merge only organization flags: a provider run may have advanced while this request was in flight.
+        set((s) => ({ boot: s.boot ? { ...s.boot, sessions: s.boot.sessions.map((session) => session.id === id ? { ...session, pinned: updated.pinned, unread: updated.unread } : session) } : null }));
+        await get().refreshNow();
+      } catch (error) {
+        get().toast('error', errorMessage(error));
+        throw error;
+      }
     },
     async createSession() {
       const { activeProjectId, creatingSession, connection } = get();

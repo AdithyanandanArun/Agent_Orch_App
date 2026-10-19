@@ -63,7 +63,7 @@ export interface NewSessionInput {
   projectId: string; name?: string; provider?: Session['provider']; model?: string;
   effort?: Session['effort']; policy?: Session['policy']; isolated?: boolean;
 }
-export type SessionPatch = Partial<Pick<Session, 'name' | 'provider' | 'model' | 'effort' | 'policy'>>;
+export type SessionPatch = Partial<Pick<Session, 'name' | 'provider' | 'model' | 'effort' | 'policy' | 'pinned' | 'unread'>>;
 export interface NewTaskInput {
   projectId: string; title: string; description: string; acceptanceCriteria: string; sessionId: string | null; dependsOn: string[];
 }
@@ -97,6 +97,7 @@ async function readFile(projectId: string, path: string, sessionId: string | nul
 export const api = {
   bootstrap: (signal?: AbortSignal) => json<Bootstrap>('/api/bootstrap', 'GET', undefined, signal),
   createProject: (input: { name: string; path: string }) => json<Project>('/api/projects', 'POST', input),
+  renameProject: (id: string, name: string) => json<Project>(`/api/projects/${encodeURIComponent(id)}`, 'PATCH', { name }),
   listFiles: (projectId: string, path: string, sessionId: string | null) =>
     json<FileEntry[]>(`/api/projects/${encodeURIComponent(projectId)}/files${q({ path, sessionId })}`),
   readFile,

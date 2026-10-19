@@ -50,3 +50,10 @@
   .settings-row { align-items: flex-start; flex-direction: column; gap: 14px; }
   .settings-row__control { width: 100%; }
 }
+
+.settings-project__save { display: flex; justify-content: flex-end; padding: 14px 0 24px; }
+.settings-project__location { border-top: 1px solid var(--line); padding-top: 24px; }
+.settings-project__location h3 { margin: 0 0 12px; font-size: 13px; font-weight: 500; }
+.settings-project__location > div { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.settings-project__location code { min-width: 0; overflow-wrap: anywhere; font-size: 12px; color: var(--fg-2); }
+.settings-project__location button { flex: none; }
