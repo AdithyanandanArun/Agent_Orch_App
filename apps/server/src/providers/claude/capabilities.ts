@@ -45,7 +45,7 @@ export async function withClaudeMetadataQuery<T>(
   const deadline = new Promise<never>((_resolve, reject) => {
     timeout = setTimeout(() => {
       timedOut = true;
-      activeQuery?.close();
+      try { activeQuery?.close(); } catch { /* deadline still rejects when teardown fails */ }
       reject(new Error(`Claude metadata discovery exceeded ${timeoutMs} ms.`));
     }, timeoutMs);
   });
