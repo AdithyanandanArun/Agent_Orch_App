@@ -477,6 +477,8 @@ export class BrowserSessionRuntime {
     };
     on('close', () => this.removeTab(entry, generation));
     on('framenavigated', (frame: ReturnType<Page['mainFrame']>) => {
+      entry.navigationVersion++;
+      entry.liveSnapshot = null;
       if (frame !== page.mainFrame()) return;
       // Natively navigating into file:, chrome:, devtools: and the like ends sharing: no snapshot, evaluate or stream from here on.
       if (!isEligibleTabUrl(page.url())) return this.unshare(entry, generation);

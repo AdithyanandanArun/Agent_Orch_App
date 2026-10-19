@@ -4,9 +4,9 @@ import type { CDPSession } from './playwright.ts';
 import type { TabEntry } from './tab.ts';
 
 /**
- * Page-side serializer, sent as source text to Runtime.callFunctionOn (so no bundler transform touches it and page
- * CSP does not apply). It walks the value with hard limits on depth, node count and string length, so a huge or cyclic
- * object cannot stall the tab or flood Relay. `this` is the evaluated value.
+ * Page-side serializer, sent as source text to Runtime.callFunctionOn so no bundler transform touches it.
+ * It walks the wrapped value with bounds on depth, visited values and string length before sending it to Node.
+ * Slow getters remain subject to the evaluation deadline and termination handling.
  */
 const SERIALIZER = `function (maxChars) {
   'use strict';
@@ -17,6 +17,7 @@ const SERIALIZER = `function (maxChars) {
     return value;
   }
   function walk(value, depth) {
+    if (++nodes > MAX_NODES) { cut = true; return '…'; }
     var kind = typeof value;
     if (value === null || kind === 'boolean') return value;
     if (kind === 'undefined') return '[undefined]';
@@ -25,7 +26,6 @@ const SERIALIZER = `function (maxChars) {
     if (kind === 'bigint') return String(value) + 'n';
     if (kind === 'symbol') return String(value);
     if (kind === 'function') return '[Function ' + (value.name || 'anonymous') + ']';
-    if (++nodes > MAX_NODES) { cut = true; return '…'; }
     if (seen.indexOf(value) >= 0) return '[Circular]';
     try {
       if (typeof value.nodeType === 'number' && typeof value.nodeName === 'string') {
@@ -46,18 +46,24 @@ const SERIALIZER = `function (maxChars) {
         }
       } else if (typeof Map !== 'undefined' && value instanceof Map) {
         out = {};
-        value.forEach(function (item, key) { if (nodes <= MAX_NODES) out[text(String(key))] = walk(item, depth + 1); else cut = true; });
+        for (var pair of value) {
+          if (nodes >= MAX_NODES) { cut = true; break; }
+          out[text(String(pair[0]))] = walk(pair[1], depth + 1);
+        }
       } else if (typeof Set !== 'undefined' && value instanceof Set) {
         out = [];
-        value.forEach(function (item) { if (nodes <= MAX_NODES) out.push(walk(item, depth + 1)); else cut = true; });
+        for (var member of value) {
+          if (nodes >= MAX_NODES) { cut = true; break; }
+          out.push(walk(member, depth + 1));
+        }
       } else {
         out = {};
-        var keys = Object.keys(value);
-        for (var k = 0; k < keys.length; k++) {
-          if (nodes > MAX_NODES) { cut = true; out['…'] = '…'; break; }
+        for (var key in value) {
+          if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+          if (nodes >= MAX_NODES) { cut = true; out['…'] = '…'; break; }
           var item;
-          try { item = value[keys[k]]; } catch (error) { item = '[Unreadable]'; }
-          out[text(keys[k])] = walk(item, depth + 1);
+          try { item = value[key]; } catch (error) { item = '[Unreadable]'; }
+          out[text(key)] = walk(item, depth + 1);
         }
       }
       seen.pop();
@@ -66,7 +72,8 @@ const SERIALIZER = `function (maxChars) {
       return '[Unserializable]';
     }
   }
-  var json = JSON.stringify(walk(this, 0));
+  if (this.failed) return { error: this.error };
+  var json = JSON.stringify(walk(this.value, 0));
   if (json === undefined) json = String(this);
   if (json.length > maxChars) return { text: json.slice(0, maxChars), truncated: true };
   return { text: json, truncated: cut };
@@ -77,10 +84,6 @@ const delay = (ms: number) => new Promise<void>((resolve) => { setTimeout(resolv
 
 interface EvalOutput { result: string; truncated: boolean }
 
-function clipText(text: string): EvalOutput {
-  return text.length > MAX_EVAL_CHARS ? { result: text.slice(0, MAX_EVAL_CHARS), truncated: true } : { result: text, truncated: false };
-}
-
 function describeException(details: { text: string; exception?: { description?: string; value?: unknown } | undefined }): string {
   const raw = details.exception?.description ?? (typeof details.exception?.value === 'string' ? details.exception.value : details.text);
   const first = raw.split('\n').slice(0, 4).join('\n');
@@ -89,30 +92,30 @@ function describeException(details: { text: string; exception?: { description?: 
 
 async function runEvaluation(session: CDPSession, expression: string): Promise<EvalOutput> {
   try {
-    let evaluated = await session.send('Runtime.evaluate', {
-      expression, awaitPromise: true, returnByValue: false, replMode: true, timeout: EVAL_EXEC_TIMEOUT_MS, objectGroup: 'relay-eval',
+    // Always return an object handle. CDP returns primitive strings by value even with returnByValue:false;
+    // wrapping prevents a large string result from crossing the transport before it can be bounded in the page.
+    const source = expression.trim().replace(/;+$/u, '');
+    const wrapped = `(async () => { try {
+      let value = (${source});
+      if (typeof value === 'function') value = value();
+      return { value: await value };
+    } catch (error) {
+      let message; try { message = String(error && error.message !== undefined ? error.message : error).slice(0, 600); } catch { message = 'Unreadable error'; }
+      return { failed: true, error: message };
+    } })()`;
+    const evaluated = await session.send('Runtime.evaluate', {
+      expression: wrapped, awaitPromise: true, returnByValue: false, timeout: EVAL_EXEC_TIMEOUT_MS, objectGroup: 'relay-eval',
     });
     if (evaluated.exceptionDetails) throw new BrowserError(422, `The expression threw: ${describeException(evaluated.exceptionDetails)}`);
-    // An expression that evaluates to a function (for example "() => document.title") is called, like a Playwright evaluate.
-    if (evaluated.result.type === 'function' && evaluated.result.objectId) {
-      evaluated = await session.send('Runtime.callFunctionOn', {
-        objectId: evaluated.result.objectId, functionDeclaration: 'function () { return this(); }',
-        awaitPromise: true, returnByValue: false, objectGroup: 'relay-eval',
-      });
-      if (evaluated.exceptionDetails) throw new BrowserError(422, `The function threw: ${describeException(evaluated.exceptionDetails)}`);
-    }
     const { result } = evaluated;
-    if (!result.objectId) {
-      if (result.unserializableValue !== undefined) return clipText(result.unserializableValue);
-      if (result.type === 'undefined') return { result: 'undefined', truncated: false };
-      return clipText(JSON.stringify(result.value ?? null));
-    }
+    if (!result.objectId) throw new BrowserError(422, 'The page did not return an evaluation handle.');
     const serialized = await session.send('Runtime.callFunctionOn', {
       objectId: result.objectId, functionDeclaration: SERIALIZER, arguments: [{ value: MAX_EVAL_CHARS }],
       returnByValue: true,
     });
     if (serialized.exceptionDetails) throw new BrowserError(422, `The result could not be read: ${describeException(serialized.exceptionDetails)}`);
-    const value = serialized.result.value as { text?: unknown; truncated?: unknown } | undefined;
+    const value = serialized.result.value as { text?: unknown; truncated?: unknown; error?: unknown } | undefined;
+    if (typeof value?.error === 'string') throw new BrowserError(422, `The expression threw: ${value.error}`);
     if (typeof value?.text !== 'string') throw new BrowserError(422, 'The result could not be read from the page.');
     return { result: value.text, truncated: value.truncated === true };
   } catch (error) {
@@ -141,9 +144,9 @@ async function abandon(session: CDPSession, run: Promise<unknown>): Promise<neve
 }
 
 /**
- * Runs `expression` in the page's main world through CDP Runtime.evaluate, with V8's execution timeout for its
- * synchronous part, awaitPromise for promises and a bounded page-side serializer. Runtime.callFunctionOn has no
- * execution timeout, so the later steps (calling a returned function, serializing) are covered by the overall deadline
+ * Runs a JavaScript expression (or function expression) in the page's main world through CDP Runtime.evaluate,
+ * with V8's timeout for synchronous work, awaitPromise for promises and a bounded page-side serializer.
+ * Runtime.callFunctionOn has no execution timeout, so serialization is covered by the overall deadline
  * and the probe/terminate fallback in `abandon`. Page JavaScript only; there is no access to Node.
  * Limits: a promise or timer the expression started cannot be cancelled once it has begun.
  */

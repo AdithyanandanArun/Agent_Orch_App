@@ -1,5 +1,6 @@
 import { withTimeout } from './errors.ts';
-import { STREAM_ACK_TIMEOUT_MS, STREAM_JPEG_QUALITY, STREAM_MIN_FRAME_INTERVAL_MS } from './limits.ts';
+import { refreshViewport } from './actions.ts';
+import { MAX_SCREENSHOT_WIDTH, STREAM_ACK_TIMEOUT_MS, STREAM_JPEG_QUALITY, STREAM_MIN_FRAME_INTERVAL_MS } from './limits.ts';
 import type { CDPSession } from './playwright.ts';
 import type { TabEntry } from './tab.ts';
 
@@ -45,7 +46,7 @@ export class ScreencastViewer {
     this.cdp = cdp;
     cdp.on('Page.screencastFrame', (frame) => this.onFrame({ data: frame.data, chromeSession: frame.sessionId, width: frame.metadata.deviceWidth, height: frame.metadata.deviceHeight }));
     try {
-      await cdp.send('Page.startScreencast', { format: 'jpeg', quality: STREAM_JPEG_QUALITY, everyNthFrame: 1 });
+      await cdp.send('Page.startScreencast', { format: 'jpeg', quality: STREAM_JPEG_QUALITY, everyNthFrame: 1, maxWidth: MAX_SCREENSHOT_WIDTH, maxHeight: 1600 });
     } catch (error) {
       // stop() may have detached the session while this was in flight; that failure is expected, not an error to report.
       const wasStopped = this.stopped;
@@ -126,7 +127,11 @@ export class ScreencastViewer {
 
   private async stillFrame(): Promise<void> {
     if (this.stopped || this.sequence > 0 || this.pending || !this.cdp) return;
-    const shot = await withTimeout(this.cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: STREAM_JPEG_QUALITY }), 5000, 'screenshot timed out').catch(() => null);
+    await refreshViewport(this.entry);
+    if (this.stopped || !this.cdp) return;
+    const { width, height } = this.entry.viewport;
+    const scale = Math.min(1, MAX_SCREENSHOT_WIDTH / width, 1600 / height);
+    const shot = await withTimeout(this.cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: STREAM_JPEG_QUALITY, clip: { x: 0, y: 0, width, height, scale }, captureBeyondViewport: false }), 5000, 'screenshot timed out').catch(() => null);
     if (!shot || this.stopped || this.sequence > 0) return;
     this.onFrame({ data: shot.data, chromeSession: null, width: this.entry.viewport.width, height: this.entry.viewport.height });
   }

@@ -1,6 +1,7 @@
 import type { BrowserSnapshot } from '@relay/contracts';
 import { refreshViewport } from './actions.ts';
-import { withTimeout } from './errors.ts';
+import { BrowserError, withTimeout } from './errors.ts';
+import { isEligibleTabUrl } from './url-policy.ts';
 import { ACTION_TIMEOUT_MS, MAX_SCREENSHOT_WIDTH, MAX_TEXT_CHARS } from './limits.ts';
 import { scopeRefs } from './refs.ts';
 import type { TabEntry } from './tab.ts';
@@ -87,6 +88,7 @@ async function screenshot(entry: TabEntry): Promise<NonNullable<BrowserSnapshot[
 export function captureSnapshot(entry: TabEntry, includeImage: boolean): Promise<SnapshotBody> {
   return entry.serializeSnapshot(async () => {
     const snapshot = ++entry.snapshotCounter;
+    const navigation = entry.navigationVersion;
     // Native refs are replaced by the new snapshot, so the previous ones are unusable from this moment on.
     entry.liveSnapshot = null;
     if (entry.dialog) {
@@ -99,9 +101,12 @@ export function captureSnapshot(entry: TabEntry, includeImage: boolean): Promise
     ]);
     const accessibility = clip(scopeRefs(redactFieldValues(aria), entry.id, snapshot), MAX_TEXT_CHARS);
     const visible = clip(text, MAX_TEXT_CHARS);
-    entry.liveSnapshot = snapshot;
     const body: SnapshotBody = { accessibility: accessibility.text, text: visible.text, truncated: accessibility.truncated || visible.truncated };
     if (includeImage) body.screenshot = await screenshot(entry);
+    if (entry.page.isClosed() || navigation !== entry.navigationVersion || !isEligibleTabUrl(entry.page.url())) {
+      throw new BrowserError(409, 'The page navigated while its snapshot was being captured. Take a fresh snapshot.');
+    }
+    entry.liveSnapshot = snapshot;
     return body;
   });
 }

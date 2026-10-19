@@ -29,6 +29,7 @@ export class TabEntry {
   snapshotCounter = 0;
   /** Number of the latest completed snapshot whose refs may be used; null while one is running or after one failed. */
   liveSnapshot: number | null = null;
+  navigationVersion = 0;
   /** An action that had already begun when a JavaScript dialog interrupted it; it finishes once the dialog is answered. */
   begun: Promise<void> | null = null;
   /** Removes the page listeners installed for this entry (set by the session runtime). */
