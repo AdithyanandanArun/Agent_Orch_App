@@ -19,6 +19,7 @@ export type Dialog =
   | { kind: 'palette' }
   | { kind: 'rename'; sessionId: string }
   | { kind: 'archive'; sessionId: string }
+  | { kind: 'import' }
   | { kind: 'shortcuts' };
 
 export interface Toast { id: number; tone: 'info' | 'success' | 'error'; text: string }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Activity, ArrowRightLeft, CornerDownLeft, FolderOpen, FolderPlus, Kanban, LayoutPanelLeft, ListPlus, Moon, Network, PanelRight, Pencil, Plus, RefreshCw, Search, Settings, Square, SquareTerminal, Keyboard } from 'lucide-react';
+import { Activity, ArrowDownToLine, ArrowRightLeft, CornerDownLeft, FolderOpen, FolderPlus, Kanban, LayoutPanelLeft, ListPlus, Moon, Network, PanelRight, Pencil, Plus, RefreshCw, Search, Settings, Square, SquareTerminal, Keyboard } from 'lucide-react';
 import { useRelay } from '../store/store';
 import { api, errorMessage } from '../lib/api';
 import { cx, fuzzy } from '../lib/format';
@@ -23,6 +23,7 @@ export function Palette() {
       { id: 'new-session', group: 'Create', label: 'New session', icon: <Plus size={15} />, run: go(() => { void st.createSession(); }), disabled: !project ? 'Open a project first' : s.creatingSession ? 'Creating session…' : undefined },
       { id: 'new-task', group: 'Create', label: 'New task', icon: <ListPlus size={15} />, run: go(() => st.openDialog({ kind: 'task' })), disabled: project ? undefined : 'Open a project first' },
       { id: 'new-project', group: 'Create', label: 'Open project…', icon: <FolderPlus size={15} />, run: go(() => st.openDialog({ kind: 'project' })) },
+      { id: 'import-conversation', group: 'Create', label: 'Import conversation…', keywords: 'claude codex history transcript', icon: <ArrowDownToLine size={15} />, run: go(() => st.openDialog({ kind: 'import' })) },
       { id: 'v-workspace', group: 'Go to', label: 'Workspace', icon: <LayoutPanelLeft size={15} />, run: go(() => st.setView('workspace')) },
       { id: 'v-tasks', group: 'Go to', label: 'Tasks', icon: <Kanban size={15} />, run: go(() => st.setView('tasks')) },
       { id: 'v-activity', group: 'Go to', label: 'Activity', icon: <Activity size={15} />, run: go(() => st.setView('activity')) },

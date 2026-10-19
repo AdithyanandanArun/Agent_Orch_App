@@ -198,9 +198,12 @@ export function Modal({ title, description, onClose, children, footer, variant =
     const root = ref.current;
     if (root) {
       const auto = root.querySelector<HTMLElement>('[data-autofocus]');
-      (auto ?? root.querySelector<HTMLElement>(FOCUSABLE) ?? root).focus();
+      (auto ?? root.querySelector<HTMLElement>(FOCUSABLE) ?? root).focus({ preventScroll: true });
     }
-    return () => previous?.focus?.();
+    return () => {
+      if (previous?.isConnected) previous.focus({ preventScroll: true });
+      else document.getElementById('main')?.focus({ preventScroll: true });
+    };
   }, []);
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {

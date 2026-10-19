@@ -7,6 +7,7 @@ import { TasksView } from './views/Tasks';
 import { ActivityView } from './views/Activity';
 import { ConnectionBanner, StartupScreen, Toasts } from './components/Shell';
 import { ArchiveDialog, HandoffDialog, ProjectDialog, RenameDialog, TaskDialog } from './components/Dialogs';
+import { ImportDialog } from './components/ImportDialog';
 import { SettingsPage } from './components/Settings';
 import { Palette, ShortcutsDialog } from './components/Palette';
 import { Boundary, Spinner } from './components/ui';
@@ -25,6 +26,7 @@ function Dialogs() {
     case 'palette': return <Palette />;
     case 'rename': return <RenameDialog sessionId={dialog.sessionId} />;
     case 'archive': return <ArchiveDialog sessionId={dialog.sessionId} />;
+    case 'import': return <ImportDialog />;
     case 'shortcuts': return <ShortcutsDialog />;
   }
 }

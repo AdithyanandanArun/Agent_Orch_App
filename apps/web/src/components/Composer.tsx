@@ -11,7 +11,7 @@ import { UsagePanel } from './UsagePanel';
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const hasSkillMarker = (text: string, name: string) => new RegExp(`(?:^|\\s)\\$${escapeRegExp(name)}(?=\\s|$)`).test(text);
 const removeSkillMarker = (text: string, name: string) => text.replace(new RegExp(`(^|\\s)\\$${escapeRegExp(name)}(?=\\s|$)`, 'g'), '$1').replace(/[ \t]{2,}/g, ' ');
-const localCommandNames = ['new', 'stop', 'settings', 'model', 'effort', 'permissions', 'tier', 'skills', 'usage', 'status', 'diff', 'help'];
+const localCommandNames = ['new', 'stop', 'settings', 'model', 'effort', 'permissions', 'tier', 'skills', 'usage', 'import', 'status', 'diff', 'help'];
 const reservedCommands = new Set(localCommandNames);
 
 export function Composer({ session }: { session: Session }) {
@@ -76,10 +76,10 @@ export function Composer({ session }: { session: Session }) {
         : provider && !provider.available ? `${PROVIDER_NAME[session.provider]} needs setup before you can send a message.`
           : null;
   const empty = draft.trim().length === 0;
-  const localDraftCommand = /^\/(new|stop|settings|model|effort|permissions|tier|skills|usage|status|diff|help)(?:\s.*)?$/i.exec(draft.trim());
+  const localDraftCommand = /^\/(new|stop|settings|model|effort|permissions|tier|skills|usage|import|status|diff|help)(?:\s.*)?$/i.exec(draft.trim());
 
   const submit = async () => {
-    const local = /^\/(new|stop|settings|model|effort|permissions|tier|skills|usage|status|diff|help)(?:\s.*)?$/i.exec(draft.trim());
+    const local = /^\/(new|stop|settings|model|effort|permissions|tier|skills|usage|import|status|diff|help)(?:\s.*)?$/i.exec(draft.trim());
     if ((blocker && !local) || empty || sending || updating) return;
     setSending(true);
     setError(null);
@@ -98,6 +98,7 @@ export function Composer({ session }: { session: Session }) {
           useRelay.getState().setDraft(session.id, '$');
         }
         if (action === 'usage') { focusComposerAfter = false; setUsageOpen(true); }
+        if (action === 'import') { focusComposerAfter = false; useRelay.getState().openDialog({ kind: 'import' }); }
         if (action === 'diff') useRelay.getState().setContextTab('changes');
         if (action === 'status') {
           const currentTier = session.serviceTier ?? 'standard';
@@ -108,7 +109,7 @@ export function Composer({ session }: { session: Session }) {
           const providerCommands = Array.from(new Set((catalog?.commands ?? []).filter((item) => !reservedCommands.has(item.name.toLowerCase())).map((item) => `/${item.name}`)));
           const preview = providerCommands.slice(0, 5).join(', ');
           const remainder = providerCommands.length > 5 ? `, … ${providerCommands.length - 5} more` : '';
-          useRelay.getState().toast('info', `Relay commands: /new, /stop, /settings, /model, /effort, /permissions, /tier, /skills, /usage, /status, /diff, /help${preview ? `. Other commands: ${preview}${remainder}. Type / to browse all.` : '.'}`);
+          useRelay.getState().toast('info', `Relay commands: /new, /stop, /settings, /model, /effort, /permissions, /tier, /skills, /usage, /import, /status, /diff, /help${preview ? `. Other commands: ${preview}${remainder}. Type / to browse all.` : '.'}`);
         }
         if (action !== 'skills') useRelay.getState().setDraft(session.id, '');
         setSelectedSkills([]);
@@ -237,6 +238,7 @@ export function Composer({ session }: { session: Session }) {
         { name: 'tier', description: 'Focus service tier', kind: 'local' as const, group: 'Relay' },
         { name: 'skills', description: 'Choose skills for the next message', kind: 'local' as const, group: 'Relay' },
         { name: 'usage', description: 'Show provider limits and session totals', kind: 'local' as const, group: 'Relay' },
+        { name: 'import', description: 'Import a local Claude or Codex conversation', kind: 'local' as const, group: 'Relay' },
         { name: 'status', description: 'Show current provider and settings', kind: 'local' as const, group: 'Relay' },
         { name: 'diff', description: 'Open the Changes pane', kind: 'local' as const, group: 'Relay' },
         { name: 'help', description: 'List Relay commands', kind: 'local' as const, group: 'Relay' },
@@ -346,10 +348,10 @@ export function Composer({ session }: { session: Session }) {
               onChange={(value) => void configure({ policy: value as Session['policy'] })} placement="top" />
           </div>
           <div className="composer__send">
-            {running && localDraftCommand?.[1]?.toLowerCase() !== 'usage' ? (
+            {running && !['usage', 'import'].includes(localDraftCommand?.[1]?.toLowerCase() ?? '') ? (
               <button type="button" className="sendbtn sendbtn--stop" onClick={stop} aria-label="Interrupt run" title="Interrupt run"><Square size={12} fill="currentColor" /></button>
             ) : (
-              <button type="button" className="sendbtn" onClick={() => void submit()} disabled={Boolean(blocker && !localDraftCommand) || empty || sending || updating} aria-label={localDraftCommand?.[1]?.toLowerCase() === 'usage' ? 'Open usage' : 'Send message'} title={localDraftCommand?.[1]?.toLowerCase() === 'usage' ? 'Open usage' : blocker ?? (empty ? 'Write a message first' : `Send (${MOD}+Enter or Enter)`)}>
+              <button type="button" className="sendbtn" onClick={() => void submit()} disabled={Boolean(blocker && !localDraftCommand) || empty || sending || updating} aria-label={['usage', 'import'].includes(localDraftCommand?.[1]?.toLowerCase() ?? '') ? (localDraftCommand?.[1]?.toLowerCase() === 'import' ? 'Import conversation' : 'Open usage') : 'Send message'} title={['usage', 'import'].includes(localDraftCommand?.[1]?.toLowerCase() ?? '') ? (localDraftCommand?.[1]?.toLowerCase() === 'import' ? 'Import conversation' : 'Open usage') : blocker ?? (empty ? 'Write a message first' : `Send (${MOD}+Enter or Enter)`)}>
                 <ArrowUp size={15} />
               </button>
             )}

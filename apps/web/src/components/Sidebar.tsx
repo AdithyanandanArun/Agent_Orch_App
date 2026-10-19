@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Activity, ChevronsUpDown, FolderOpen, FolderPlus, Kanban, LayoutPanelLeft, MoreHorizontal, Network, Search, Settings, SquarePen, Loader2, Pin } from 'lucide-react';
+import { Activity, ArrowDownToLine, ChevronsUpDown, FolderOpen, FolderPlus, Kanban, LayoutPanelLeft, MoreHorizontal, Network, Search, Settings, SquarePen, Loader2, Pin } from 'lucide-react';
 import type { Session } from '@relay/contracts';
 import { useRelay, useProject, type View } from '../store/store';
 import { copyText } from '../lib/clipboard';
@@ -85,7 +85,7 @@ export function Sidebar() {
       </button>}>
         <MenuLabel>Projects</MenuLabel>
         {(boot?.projects ?? []).map((item) => <MenuItem key={item.id} selected={item.id === project?.id} onSelect={() => selectProject(item.id)} icon={<FolderOpen size={14} />} hint={item.isExample ? 'example' : undefined}>{item.name}</MenuItem>)}
-        <MenuSeparator /><MenuItem icon={<FolderPlus size={14} />} onSelect={() => openDialog({ kind: 'project' })}>Open project…</MenuItem>
+        <MenuSeparator /><MenuItem icon={<ArrowDownToLine size={14} />} onSelect={() => openDialog({ kind: 'import' })}>Import conversation…</MenuItem><MenuItem icon={<FolderPlus size={14} />} onSelect={() => openDialog({ kind: 'project' })}>Open project…</MenuItem>
       </Menu>
     </div>
     <div className="sidebar__sessions">
