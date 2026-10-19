@@ -1,10 +1,10 @@
-import { Command, Menu as MenuIcon, PanelRight, Pencil, SquareTerminal, Archive, MoreHorizontal, Square, ListPlus } from 'lucide-react';
+import { ArrowLeft, Command, Menu as MenuIcon, PanelRight, Pencil, SquareTerminal, Archive, MoreHorizontal, Square, ListPlus } from 'lucide-react';
 import { useRelay, useActiveSession, useProject } from '../store/store';
 import { api, errorMessage } from '../lib/api';
 import { Button, IconButton, Menu, MenuItem, MenuSeparator, MOD, Kbd } from './ui';
 import { useState } from 'react';
 
-const TITLES = { workspace: 'Workspace', tasks: 'Tasks', activity: 'Activity', map: 'Agent map' } as const;
+const TITLES = { workspace: 'Workspace', tasks: 'Tasks', activity: 'Activity', map: 'Agent map', settings: 'Settings' } as const;
 
 export function Header() {
   const view = useRelay((s) => s.view);
@@ -29,6 +29,11 @@ export function Header() {
       setStopping(false);
     }
   };
+
+  if (view === 'settings') return <header className="header header--settings">
+    <IconButton label="Open sidebar" className="header__burger" onClick={() => setSidebarOpen(true)}><MenuIcon size={16} /></IconButton>
+    <Button variant="ghost" size="sm" onClick={() => useRelay.getState().closeSettings()}><ArrowLeft size={14} /> Back to workspace</Button>
+  </header>;
 
   return (
     <header className="header">

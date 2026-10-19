@@ -3,7 +3,7 @@ import { CheckCircle2, CircleSlash, RefreshCw } from 'lucide-react';
 import type { AppSettings, ProviderInfo } from '@relay/contracts';
 import { useRelay } from '../store/store';
 import { api, errorMessage } from '../lib/api';
-import { Badge, Button, Field, InlineError, Modal, ProviderMark } from './ui';
+import { Badge, Button, Field, InlineError, ProviderMark } from './ui';
 
 function ProviderRow({ p }: { p: ProviderInfo }) {
   return (
@@ -20,8 +20,7 @@ function ProviderRow({ p }: { p: ProviderInfo }) {
   );
 }
 
-export function SettingsSheet() {
-  const close = useRelay.getState().closeDialog;
+export function SettingsPage() {
   const boot = useRelay((s) => s.boot);
   const settings = boot?.settings;
   const [claude, setClaude] = useState(settings?.claudeExecutable ?? '');
@@ -65,7 +64,9 @@ export function SettingsSheet() {
   const disabled = busy !== null;
 
   return (
-    <Modal variant="sheet" title="Settings" onClose={close}>
+    <div className="settings-page" aria-labelledby="settings-title">
+      <div className="settings-page__inner">
+      <header className="settings-page__head"><h1 id="settings-title">Settings</h1><p>Make this workspace yours.</p></header>
       <div className="settings">
         {error ? <InlineError>{error}</InlineError> : null}
         <section className="sec">
@@ -137,6 +138,7 @@ export function SettingsSheet() {
           </form>
         </details>
       </div>
-    </Modal>
+      </div>
+    </div>
   );
 }

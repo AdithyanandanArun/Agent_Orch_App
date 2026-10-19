@@ -1,0 +1,7 @@
+.settings-page { flex: 1; min-height: 0; overflow-y: auto; }
+.settings-page__inner { width: min(820px, 100%); margin: 0 auto; padding: 48px 36px 80px; }
+.settings-page__head { margin-bottom: 36px; }
+.settings-page__head h1 { color: var(--fg-0); font-size: 26px; font-weight: 550; letter-spacing: -.035em; line-height: 1.3; }
+.settings-page__head p { color: var(--fg-2); font-size: 14px; margin-top: 8px; }
+.header--settings { border-bottom-color: transparent; }
+@media (max-width: 680px) { .settings-page__inner { padding: 28px 20px 60px; } }

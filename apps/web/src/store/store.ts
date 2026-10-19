@@ -4,7 +4,7 @@ import type { Approval, Bootstrap, Message, Project, ServerEvent, ClientEvent, S
 import { api, errorMessage } from '../lib/api';
 import { terminalBus } from './terminalBus';
 
-export type View = 'workspace' | 'tasks' | 'activity' | 'map';
+export type View = 'workspace' | 'tasks' | 'activity' | 'map' | 'settings';
 export type ContextTab = 'overview' | 'files' | 'changes' | 'preview';
 export type Scope = 'session' | 'project';
 export type Connection = 'connecting' | 'online' | 'offline';
@@ -63,6 +63,7 @@ interface RelayState {
   activeProjectId: string | null;
   sessionByProject: Record<string, string>;
   view: View;
+  settingsReturnView: Exclude<View, 'settings'>;
   contextTab: ContextTab;
   contextOpen: boolean;
   terminalOpen: boolean;
@@ -84,6 +85,8 @@ interface RelayState {
   refreshNow(): Promise<void>;
   reconnect(): void;
   setView(view: View): void;
+  openSettings(): void;
+  closeSettings(): void;
   setContextTab(tab: ContextTab): void;
   toggleContext(open?: boolean): void;
   toggleTerminal(open?: boolean): void;
@@ -375,6 +378,7 @@ export const useRelay = create<RelayState>((set, get) => {
     activeProjectId: persisted.activeProjectId ?? null,
     sessionByProject: persisted.sessionByProject ?? {},
     view: persisted.view ?? 'workspace',
+    settingsReturnView: 'workspace',
     contextTab: persisted.contextTab ?? 'files',
     contextOpen: persisted.contextOpen ?? false,
     terminalOpen: persisted.terminalOpen ?? false,
@@ -442,14 +446,22 @@ export const useRelay = create<RelayState>((set, get) => {
       void get().refreshNow();
     },
 
-    setView: (view) => patch({ view, sidebarOpen: false }),
+    setView: (view) => {
+      if (view === 'settings') { get().openSettings(); return; }
+      patch({ view, sidebarOpen: false, dialog: null });
+    },
+    openSettings() {
+      const view = get().view;
+      patch({ view: 'settings', settingsReturnView: view === 'settings' ? get().settingsReturnView : view, dialog: null, sidebarOpen: false });
+    },
+    closeSettings() { patch({ view: get().settingsReturnView, dialog: null }); },
     setContextTab: (contextTab) => patch({ contextTab, contextOpen: true }),
     toggleContext: (open) => patch({ contextOpen: open ?? !get().contextOpen }),
     toggleTerminal: (open) => patch({ terminalOpen: open ?? !get().terminalOpen, view: 'workspace' }),
     setTerminalHeight: (terminalHeight) => patch({ terminalHeight }),
     setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
     setScope: (scope) => patch({ scope }),
-    openDialog: (dialog) => set({ dialog }),
+    openDialog: (dialog) => { if (dialog.kind === 'settings') get().openSettings(); else set({ dialog }); },
     closeDialog: () => set({ dialog: null }),
 
     selectProject(id) {

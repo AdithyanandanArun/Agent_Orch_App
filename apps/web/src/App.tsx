@@ -7,7 +7,7 @@ import { TasksView } from './views/Tasks';
 import { ActivityView } from './views/Activity';
 import { ConnectionBanner, StartupScreen, Toasts } from './components/Shell';
 import { ArchiveDialog, HandoffDialog, ProjectDialog, RenameDialog, TaskDialog } from './components/Dialogs';
-import { SettingsSheet } from './components/Settings';
+import { SettingsPage } from './components/Settings';
 import { Palette, ShortcutsDialog } from './components/Palette';
 import { Boundary, Spinner } from './components/ui';
 import { cx } from './lib/format';
@@ -21,7 +21,7 @@ function Dialogs() {
     case 'project': return <ProjectDialog />;
     case 'task': return <TaskDialog />;
     case 'handoff': return <HandoffDialog taskId={dialog.taskId} fromSessionId={dialog.fromSessionId} />;
-    case 'settings': return <SettingsSheet />;
+    case 'settings': return null; // Legacy actions route to the Settings page through the store.
     case 'palette': return <Palette />;
     case 'rename': return <RenameDialog sessionId={dialog.sessionId} />;
     case 'archive': return <ArchiveDialog sessionId={dialog.sessionId} />;
@@ -76,6 +76,7 @@ export function App() {
             {view === 'tasks' ? <TasksView /> : null}
             {view === 'activity' ? <ActivityView /> : null}
             {view === 'map' ? <Suspense fallback={<div className="editor__state"><Spinner label="Loading map" /></div>}><AgentMap /></Suspense> : null}
+            {view === 'settings' ? <SettingsPage /> : null}
           </Boundary>
         </div>
       </main>

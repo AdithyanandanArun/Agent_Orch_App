@@ -122,7 +122,7 @@ export function Sidebar() {
           <span>{connLabel}</span>
         </button>
         <span className="spacer" />
-        <IconButton label="Settings" onClick={() => openDialog({ kind: 'settings' })}><Settings size={15} /></IconButton>
+        <IconButton label="Settings" active={view === 'settings'} onClick={() => useRelay.getState().openSettings()}><Settings size={15} /></IconButton>
       </div>
     </aside>
   );
