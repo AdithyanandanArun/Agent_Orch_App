@@ -25,7 +25,18 @@ export interface SessionRun {
   id: string; sessionId: string; userMessageId: string; provider: Provider; model: string;
   status: RunStatus; startedAt: string; finishedAt: string | null; durationMs: number | null;
   toolCount: number; toolCounts: Partial<Record<ToolCategory, number>>;
+  changes?: RunChangesSummary | null;
 }
+export interface RunChangedFile {
+  path: string; status: 'A' | 'M' | 'D' | 'T'; additions: number | null; deletions: number | null; binary: boolean;
+}
+/** Saved net workspace edits between this run's start and end; unknown historical runs have no summary. */
+export interface RunChangesSummary {
+  status: 'available' | 'unavailable'; capturedAt: string;
+  fileCount: number; files: RunChangedFile[]; additions: number; deletions: number;
+  truncated: boolean; notices: string[];
+}
+export interface RunChanges { summary: RunChangesSummary; diff: string; diffTruncated: boolean }
 /** One provider tool invocation, updated throughout its lifecycle rather than duplicated for start/result. */
 export interface ToolCall {
   id: string; runId: string; sessionId: string; providerId: string; parentProviderId: string | null;
