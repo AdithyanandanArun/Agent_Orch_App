@@ -53,7 +53,7 @@ export function parseCodexModels(value: unknown): ProviderModel[] {
 export function validateCodexEffort(model: ProviderModel | undefined, effort: string): string | null {
   if (!model) return 'Codex did not return metadata for the selected model.';
   if (!model.reasoningEfforts) return `Codex did not advertise reasoning efforts for model ${model.id}.`;
-  if (model.reasoningEfforts.length === 0) return `Codex model ${model.id} advertises no selectable reasoning efforts.`;
+  if (model.reasoningEfforts.length === 0) return effort === 'none' ? null : `Codex model ${model.id} has no reasoning effort control.`;
   if (!model.reasoningEfforts.some((option) => option.id === effort)) {
     return `Reasoning effort "${truncate(effort, 80)}" is not supported by Codex model ${model.id}.`;
   }

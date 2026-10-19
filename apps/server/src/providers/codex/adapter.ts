@@ -85,6 +85,7 @@ class CodexRun {
   private child!: ChildLike;
   private threadId: string | null = null;
   private turnId: string | null = null;
+  private omitEffort = false;
   private phase: 'setup' | 'turn' | 'done' = 'setup';
   private abortRequested = false;
   private interruptSent = false;
@@ -212,6 +213,7 @@ class CodexRun {
     const common = { model: session.model, cwd: session.worktreePath, approvalPolicy: policy.approvalPolicy, approvalsReviewer: policy.approvalsReviewer, sandbox: policy.sandbox, serviceTier };
     const catalog = parseCodexModels(await this.conn.request('model/list', { limit: 200, includeHidden: false }, this.ctx.timeouts.threadMs));
     const model = catalog.find((candidate) => candidate.id === session.model);
+    this.omitEffort = model?.reasoningEfforts?.length === 0;
     const effortError = validateCodexEffort(model, session.effort);
     if (effortError) throw new ProviderError(effortError, { code: 'unsupported_effort' });
     if (serviceTier && !model?.serviceTiers?.some((tier) => tier.id === serviceTier)) {
@@ -252,7 +254,7 @@ class CodexRun {
     if (this.abortRequested) throw abortError();
     const request = this.conn.request('turn/start', {
       threadId: this.threadId, input: [{ type: 'text', text: prompt, text_elements: [] }, ...skillInputs], cwd: session.worktreePath,
-      model: session.model, effort: session.effort, serviceTier, serviceTierForTurn, approvalPolicy: policy.approvalPolicy, approvalsReviewer: policy.approvalsReviewer, sandboxPolicy: policy.sandboxPolicy,
+      model: session.model, ...(!this.omitEffort ? { effort: session.effort } : {}), serviceTier, serviceTierForTurn, approvalPolicy: policy.approvalPolicy, approvalsReviewer: policy.approvalsReviewer, sandboxPolicy: policy.sandboxPolicy,
     }, this.ctx.timeouts.turnStartMs);
     request.then((result) => {
       const turn = isRecord(result) && isRecord(result.turn) ? result.turn : null;
