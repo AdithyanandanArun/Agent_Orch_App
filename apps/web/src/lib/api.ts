@@ -1,5 +1,5 @@
 import type {
-  Approval, AppSettings, Bootstrap, FileEntry, GitStatus, Project, ProviderCatalog, ProviderInfo, Session, ToolCall, Task, TaskStatus, WorkspaceEvent,
+  Approval, AppSettings, Bootstrap, FileEntry, GitStatus, Project, ProviderCatalog, ProviderInfo, Session, SessionUsage, ToolCall, Task, TaskStatus, WorkspaceEvent,
 } from '@relay/contracts';
 export type { ProviderCatalog } from '@relay/contracts';
 
@@ -113,6 +113,7 @@ export const api = {
   archiveSession: (id: string) => json<unknown>(`/api/sessions/${encodeURIComponent(id)}`, 'DELETE'),
   sendMessage: (id: string, content: string, skills?: string[]) => json<{ accepted: boolean }>(`/api/sessions/${encodeURIComponent(id)}/messages`, 'POST', { content, ...(skills?.length ? { skills } : {}) }),
   sessionCatalog: (id: string, signal?: AbortSignal, refresh = false) => json<ProviderCatalog>(`/api/sessions/${encodeURIComponent(id)}/catalog${refresh ? '?refresh=true' : ''}`, 'GET', undefined, signal),
+  sessionUsage: (id: string, refresh = false, signal?: AbortSignal) => json<SessionUsage>(`/api/sessions/${encodeURIComponent(id)}/usage${refresh ? '?refresh=true' : ''}`, 'GET', undefined, signal),
   interrupt: (id: string) => json<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(id)}/interrupt`, 'POST'),
   createTask: (input: NewTaskInput) => json<Task>('/api/tasks', 'POST', input),
   updateTask: (id: string, patch: TaskPatch) => json<Task>(`/api/tasks/${encodeURIComponent(id)}`, 'PATCH', patch),

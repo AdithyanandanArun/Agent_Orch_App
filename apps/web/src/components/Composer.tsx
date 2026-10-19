@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { ArrowUp, Square } from 'lucide-react';
 import type { ProviderModel, Session } from '@relay/contracts';
 import { useRelay } from '../store/store';
@@ -6,11 +6,12 @@ import { api, errorMessage, type ProviderCatalog, type SessionPatch } from '../l
 import { MOD, PROVIDER_NAME } from './ui';
 import { cx } from '../lib/format';
 import { SelectMenu } from './SelectMenu';
+import { UsagePanel } from './UsagePanel';
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const hasSkillMarker = (text: string, name: string) => new RegExp(`(?:^|\\s)\\$${escapeRegExp(name)}(?=\\s|$)`).test(text);
 const removeSkillMarker = (text: string, name: string) => text.replace(new RegExp(`(^|\\s)\\$${escapeRegExp(name)}(?=\\s|$)`, 'g'), '$1').replace(/[ \t]{2,}/g, ' ');
-const localCommandNames = ['new', 'stop', 'settings', 'model', 'effort', 'permissions', 'tier', 'skills', 'status', 'diff', 'help'];
+const localCommandNames = ['new', 'stop', 'settings', 'model', 'effort', 'permissions', 'tier', 'skills', 'usage', 'status', 'diff', 'help'];
 const reservedCommands = new Set(localCommandNames);
 
 export function Composer({ session }: { session: Session }) {
@@ -28,6 +29,7 @@ export function Composer({ session }: { session: Session }) {
   const [suggestion, setSuggestion] = useState<{ kind: 'command' | 'skill'; start: number; query: string } | null>(null);
   const [activeSuggestion, setActiveSuggestion] = useState(0);
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
+  const [usageOpen, setUsageOpen] = useState(false);
   const [focused, setFocused] = useState(false);
   const [caretPosition, setCaretPosition] = useState(0);
   const dismissedSuggestion = useRef<string | null>(null);
@@ -61,6 +63,8 @@ export function Composer({ session }: { session: Session }) {
     el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
   }, [draft, session.id]);
   useEffect(() => { setError(null); }, [session.id]);
+  useEffect(() => { setUsageOpen(false); }, [session.id, session.provider, session.model]);
+  const closeUsage = useCallback(() => setUsageOpen(false), []);
 
   const running = session.status === 'running' || session.status === 'waiting';
   const blocker =
@@ -69,9 +73,10 @@ export function Composer({ session }: { session: Session }) {
         : provider && !provider.available ? `${PROVIDER_NAME[session.provider]} needs setup before you can send a message.`
           : null;
   const empty = draft.trim().length === 0;
+  const localDraftCommand = /^\/(new|stop|settings|model|effort|permissions|tier|skills|usage|status|diff|help)(?:\s.*)?$/i.exec(draft.trim());
 
   const submit = async () => {
-    const local = /^\/(new|stop|settings|model|effort|permissions|tier|skills|status|diff|help)(?:\s.*)?$/i.exec(draft.trim());
+    const local = /^\/(new|stop|settings|model|effort|permissions|tier|skills|usage|status|diff|help)(?:\s.*)?$/i.exec(draft.trim());
     if ((blocker && !local) || empty || sending || updating) return;
     setSending(true);
     setError(null);
@@ -89,6 +94,7 @@ export function Composer({ session }: { session: Session }) {
           caret.current = 1; setCaretPosition(1);
           useRelay.getState().setDraft(session.id, '$');
         }
+        if (action === 'usage') { focusComposerAfter = false; setUsageOpen(true); }
         if (action === 'diff') useRelay.getState().setContextTab('changes');
         if (action === 'status') {
           const currentTier = session.serviceTier ?? 'standard';
@@ -99,7 +105,7 @@ export function Composer({ session }: { session: Session }) {
           const providerCommands = Array.from(new Set((catalog?.commands ?? []).filter((item) => !reservedCommands.has(item.name.toLowerCase())).map((item) => `/${item.name}`)));
           const preview = providerCommands.slice(0, 5).join(', ');
           const remainder = providerCommands.length > 5 ? `, … ${providerCommands.length - 5} more` : '';
-          useRelay.getState().toast('info', `Relay commands: /new, /stop, /settings, /model, /effort, /permissions, /tier, /skills, /status, /diff, /help${preview ? `. Other commands: ${preview}${remainder}. Type / to browse all.` : '.'}`);
+          useRelay.getState().toast('info', `Relay commands: /new, /stop, /settings, /model, /effort, /permissions, /tier, /skills, /usage, /status, /diff, /help${preview ? `. Other commands: ${preview}${remainder}. Type / to browse all.` : '.'}`);
         }
         if (action !== 'skills') useRelay.getState().setDraft(session.id, '');
         setSelectedSkills([]);
@@ -227,6 +233,7 @@ export function Composer({ session }: { session: Session }) {
         { name: 'permissions', description: 'Focus approval policy', kind: 'local' as const, group: 'Relay' },
         { name: 'tier', description: 'Focus service tier', kind: 'local' as const, group: 'Relay' },
         { name: 'skills', description: 'Choose skills for the next message', kind: 'local' as const, group: 'Relay' },
+        { name: 'usage', description: 'Show provider limits and session totals', kind: 'local' as const, group: 'Relay' },
         { name: 'status', description: 'Show current provider and settings', kind: 'local' as const, group: 'Relay' },
         { name: 'diff', description: 'Open the Changes pane', kind: 'local' as const, group: 'Relay' },
         { name: 'help', description: 'List Relay commands', kind: 'local' as const, group: 'Relay' },
@@ -336,10 +343,10 @@ export function Composer({ session }: { session: Session }) {
               onChange={(value) => void configure({ policy: value as Session['policy'] })} placement="top" />
           </div>
           <div className="composer__send">
-            {running ? (
+            {running && localDraftCommand?.[1]?.toLowerCase() !== 'usage' ? (
               <button type="button" className="sendbtn sendbtn--stop" onClick={stop} aria-label="Interrupt run" title="Interrupt run"><Square size={12} fill="currentColor" /></button>
             ) : (
-              <button type="button" className="sendbtn" onClick={() => void submit()} disabled={Boolean(blocker) || empty || sending || updating} aria-label="Send message" title={blocker ?? (empty ? 'Write a message first' : `Send (${MOD}+Enter or Enter)`)}>
+              <button type="button" className="sendbtn" onClick={() => void submit()} disabled={Boolean(blocker && !localDraftCommand) || empty || sending || updating} aria-label={localDraftCommand?.[1]?.toLowerCase() === 'usage' ? 'Open usage' : 'Send message'} title={localDraftCommand?.[1]?.toLowerCase() === 'usage' ? 'Open usage' : blocker ?? (empty ? 'Write a message first' : `Send (${MOD}+Enter or Enter)`)}>
                 <ArrowUp size={15} />
               </button>
             )}
@@ -351,6 +358,7 @@ export function Composer({ session }: { session: Session }) {
       ) : null}
       {catalogError && (trigger.startsWith('/') || trigger.startsWith('$')) ? <p className="composer__note" role="status">Command and skill suggestions unavailable: {catalogError} <button type="button" className="link-btn" onClick={() => setCatalogRevision((value) => value + 1)}>Retry</button></p> : null}
       {catalog?.warnings.length && (suggestion || trigger.startsWith('/') || trigger.startsWith('$')) ? <details className="composer__catalog-note"><summary>Command and skill details · {catalog.warnings.length} notice{catalog.warnings.length === 1 ? '' : 's'}</summary><ul>{catalog.warnings.map((warning, index) => <li key={`${index}:${warning}`}>{warning}</li>)}</ul><button type="button" className="link-btn" onClick={() => setCatalogRevision((value) => value + 1)}>Refresh</button></details> : null}
+      {usageOpen ? <UsagePanel key={`${session.id}:${session.provider}:${session.model}`} session={session} onClose={closeUsage} /> : null}
     </div>
   );
 }
