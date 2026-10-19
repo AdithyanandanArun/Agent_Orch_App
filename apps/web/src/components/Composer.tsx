@@ -10,6 +10,8 @@ import { SelectMenu } from './SelectMenu';
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const hasSkillMarker = (text: string, name: string) => new RegExp(`(?:^|\\s)\\$${escapeRegExp(name)}(?=\\s|$)`).test(text);
 const removeSkillMarker = (text: string, name: string) => text.replace(new RegExp(`(^|\\s)\\$${escapeRegExp(name)}(?=\\s|$)`, 'g'), '$1').replace(/[ \t]{2,}/g, ' ');
+const localCommandNames = ['new', 'stop', 'settings', 'model', 'effort', 'permissions', 'tier', 'skills', 'status', 'diff', 'help'];
+const reservedCommands = new Set(localCommandNames);
 
 export function Composer({ session }: { session: Session }) {
   const draft = useRelay((s) => s.drafts[session.id] ?? '');
@@ -25,6 +27,8 @@ export function Composer({ session }: { session: Session }) {
   const [suggestion, setSuggestion] = useState<{ kind: 'command' | 'skill'; start: number; query: string } | null>(null);
   const [activeSuggestion, setActiveSuggestion] = useState(0);
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
+  const [focused, setFocused] = useState(false);
+  const [caretPosition, setCaretPosition] = useState(0);
   const dismissedSuggestion = useRef<string | null>(null);
   const caret = useRef(0);
   const pickerId = useId();
@@ -78,7 +82,7 @@ export function Composer({ session }: { session: Session }) {
         if (action === 'effort' || action === 'tier') { focusComposerAfter = false; setReasoningOpenRequest((value) => value + 1); }
         if (action === 'permissions') { focusComposerAfter = false; setPolicyOpenRequest((value) => value + 1); }
         if (action === 'skills') {
-          caret.current = 1;
+          caret.current = 1; setCaretPosition(1);
           useRelay.getState().setDraft(session.id, '$');
         }
         if (action === 'diff') useRelay.getState().setContextTab('changes');
@@ -88,18 +92,30 @@ export function Composer({ session }: { session: Session }) {
           useRelay.getState().toast('info', `${PROVIDER_NAME[session.provider]} · ${session.model} · ${effortLabel(session.effort)} · ${tier}`);
         }
         if (action === 'help') {
-          const providerCommands = catalog?.commands.map((item) => `/${item.name}`).join(', ');
-          useRelay.getState().toast('info', `Commands: /new, /stop, /settings, /model, /effort, /permissions, /tier, /skills, /status, /diff, /help${providerCommands ? `; provider: ${providerCommands}` : ''}.`);
+          const providerCommands = Array.from(new Set((catalog?.commands ?? []).filter((item) => !reservedCommands.has(item.name.toLowerCase())).map((item) => `/${item.name}`)));
+          const preview = providerCommands.slice(0, 5).join(', ');
+          const remainder = providerCommands.length > 5 ? `, … ${providerCommands.length - 5} more` : '';
+          useRelay.getState().toast('info', `Relay commands: /new, /stop, /settings, /model, /effort, /permissions, /tier, /skills, /status, /diff, /help${preview ? `. Other commands: ${preview}${remainder}. Type / to browse all.` : '.'}`);
         }
         if (action !== 'skills') useRelay.getState().setDraft(session.id, '');
         setSelectedSkills([]);
         await useRelay.getState().refreshNow();
         return;
       }
-      const messageSkills = selectedSkills.filter((id) => {
-        const skill = catalog?.skills.find((item) => item.id === id && item.enabled);
-        return Boolean(skill && hasSkillMarker(draft, skill.name));
-      });
+      const mentionedSkills = (catalog?.skills ?? []).filter((item) => item.enabled && hasSkillMarker(draft, item.name));
+      const messageSkills: string[] = [];
+      for (const skill of mentionedSkills) {
+        const sameName = mentionedSkills.filter((item) => item.name === skill.name);
+        const explicitlySelected = sameName.filter((item) => selectedSkills.includes(item.id));
+        const candidates = explicitlySelected.length ? explicitlySelected : sameName;
+        if (!explicitlySelected.length && candidates.length > 1) {
+          throw new Error(`“$${skill.name}” matches multiple skills. Choose the intended skill from the picker.`);
+        }
+        for (const candidate of candidates) if (!messageSkills.includes(candidate.id)) messageSkills.push(candidate.id);
+      }
+      if (session.provider === 'claude' && messageSkills.length > 1) {
+        throw new Error('Claude accepts one selected skill per message. Remove the extra skill reference.');
+      }
       await api.sendMessage(session.id, draft.trim(), messageSkills);
       useRelay.getState().setDraft(session.id, '');
       setSelectedSkills([]);
@@ -172,10 +188,17 @@ export function Composer({ session }: { session: Session }) {
     })),
   ];
   const currentTier = session.serviceTier ?? 'standard';
-  const combinedValue = effortChoices.some((item) => item.id === session.effort)
+  const hasCurrentEffort = effortChoices.some((item) => item.id === session.effort);
+  const combinedValue = hasCurrentEffort
     ? `effort:${session.effort}` : `tier:${currentTier}`;
+  const combinedSelectedValues = [
+    ...(hasCurrentEffort ? [`effort:${session.effort}`] : []),
+    `tier:${currentTier}`,
+  ];
   const selectedTier = tierChoices.find((item) => item.id === currentTier);
-  const combinedDisplay = `${effortLabel(session.effort)} · ${selectedTier ? tierName(selectedTier.id, selectedTier.name) : currentTier}`;
+  const combinedDisplay = hasCurrentEffort
+    ? `${effortLabel(session.effort)}${currentTier === 'standard' ? '' : ` · ${selectedTier ? tierName(selectedTier.id, selectedTier.name) : currentTier}`}`
+    : selectedTier ? tierName(selectedTier.id, selectedTier.name) : currentTier;
   const policyChoices = currentModel?.policies ?? currentProvider?.policies ?? [];
   const policyLabels: Record<string, [string, string]> = {
     supervised: ['Supervised', 'Ask before taking actions that change files or run commands.'],
@@ -183,12 +206,11 @@ export function Composer({ session }: { session: Session }) {
     auto: ['Auto', 'Allow common actions automatically with safety checks.'],
     'full-access': ['Full access', 'Allow all actions without approval prompts.'],
   };
-  const caretIndex = Math.min(caret.current, draft.length);
+  const caretIndex = Math.min(caretPosition, draft.length);
   const beforeCaret = draft.slice(0, caretIndex);
   const match = beforeCaret.match(/(?:^|\s)(\/[^\s]*|\$[^\s]*)$/);
   const trigger = match?.[1] ?? '';
   const triggerStart = match ? caretIndex - trigger.length : 0;
-  const reservedCommands = new Set(['new', 'stop', 'settings', 'model', 'effort', 'permissions', 'tier', 'skills', 'status', 'diff', 'help']);
   const suggestions = trigger.startsWith('/')
     ? [
       ...[
@@ -204,21 +226,21 @@ export function Composer({ session }: { session: Session }) {
         { name: 'diff', description: 'Open the Changes pane', kind: 'local' as const, group: 'Relay' },
         { name: 'help', description: 'List Relay commands', kind: 'local' as const, group: 'Relay' },
       ].filter((item) => item.name.startsWith(trigger.slice(1).toLowerCase())),
-      ...(catalog?.commands ?? []).filter((item) => !reservedCommands.has(item.name.toLowerCase()) && item.name.toLowerCase().startsWith(trigger.slice(1).toLowerCase())).map((item) => ({ id: item.id, name: item.name, description: `${item.kind} · ${item.description}`, group: item.source[0]!.toUpperCase() + item.source.slice(1), kind: 'provider' as const, argumentHint: item.argumentHint })),
+      ...(catalog?.commands ?? []).filter((item) => !reservedCommands.has(item.name.toLowerCase()) && item.name.toLowerCase().startsWith(trigger.slice(1).toLowerCase())).map((item) => ({ id: item.id, name: item.name, description: item.description, group: item.source[0]!.toUpperCase() + item.source.slice(1), kind: 'provider' as const, argumentHint: item.argumentHint })),
     ].map((item) => ({ ...item, key: `${item.kind}:${'id' in item ? item.id : item.name}`, token: `/${item.name}` }))
     : trigger.startsWith('$') && catalog
       ? catalog.skills.filter((item) => item.enabled && item.name.toLowerCase().startsWith(trigger.slice(1).toLowerCase())).map((item) => ({ name: item.name, description: item.description, group: item.source[0]!.toUpperCase() + item.source.slice(1), kind: 'skill' as const, token: `$${item.name}`, id: item.id, key: `skill:${item.id}` }))
       : [];
   useEffect(() => {
     if (trigger !== dismissedSuggestion.current) dismissedSuggestion.current = null;
-    if (suggestions.length && trigger && trigger !== dismissedSuggestion.current) {
+    if (focused && suggestions.length && trigger && trigger !== dismissedSuggestion.current) {
       const kind = trigger.startsWith('/') ? 'command' : 'skill';
       if (suggestion?.start !== triggerStart || suggestion.kind !== kind || suggestion.query !== trigger) {
         setActiveSuggestion(0);
         setSuggestion({ kind, start: triggerStart, query: trigger });
       }
     } else setSuggestion(null);
-  }, [draft, catalog, trigger, triggerStart, suggestions.length, suggestion]);
+  }, [draft, catalog, trigger, triggerStart, suggestions.length, suggestion, focused, caretPosition]);
   const chooseSuggestion = (index: number) => {
     const item = suggestions[index];
     if (!item) return;
@@ -234,6 +256,7 @@ export function Composer({ session }: { session: Session }) {
     const nextCaret = prefix.length + item.token.length + 1;
     useRelay.getState().setDraft(session.id, text);
     caret.current = nextCaret;
+    setCaretPosition(nextCaret);
     setSuggestion(null);
     dismissedSuggestion.current = null;
     if (item.kind === 'skill' && 'id' in item) setSelectedSkills((current) => {
@@ -263,14 +286,16 @@ export function Composer({ session }: { session: Session }) {
           onChange={(e) => {
             const nextDraft = e.target.value;
             caret.current = e.target.selectionStart ?? nextDraft.length;
+            setCaretPosition(caret.current);
             useRelay.getState().setDraft(session.id, nextDraft);
             setSelectedSkills((current) => current.filter((id) => {
               const skill = catalog?.skills.find((item) => item.id === id);
               return Boolean(skill && hasSkillMarker(nextDraft, skill.name));
             }));
           }}
-          onSelect={(e) => { caret.current = e.currentTarget.selectionStart ?? 0; }}
-          onBlur={() => setSuggestion(null)}
+          onFocus={(e) => { setFocused(true); caret.current = e.currentTarget.selectionStart ?? 0; setCaretPosition(caret.current); }}
+          onSelect={(e) => { caret.current = e.currentTarget.selectionStart ?? 0; setCaretPosition(caret.current); }}
+          onBlur={() => { setFocused(false); setSuggestion(null); }}
           onKeyDown={(e) => {
             if (suggestion && suggestions.length && !e.nativeEvent.isComposing) {
               if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); setActiveSuggestion((i) => (i + (e.key === 'ArrowDown' ? 1 : -1) + suggestions.length) % suggestions.length); return; }
@@ -288,7 +313,7 @@ export function Composer({ session }: { session: Session }) {
             </div>
           </div>)}
         </div> : null}
-        {trigger.startsWith('$') && !suggestions.length && !catalogError ? <div className="composer-picker-empty" role="status">{!catalog ? 'Loading skills…' : catalog.skills.some((item) => item.enabled) ? 'No matching skills.' : 'No skills are available for this provider and session.'}</div> : null}
+        {focused && trigger.startsWith('$') && !suggestions.length && !catalogError ? <div className="composer-picker-empty" role="status">{!catalog ? 'Loading skills…' : catalog.skills.some((item) => item.enabled) ? 'No matching skills.' : 'No skills are available for this provider and session.'}</div> : null}
         <div className="composer__bar">
           <div className="composer__controls" aria-busy={updating}>
             <SelectMenu triggerRef={modelControl} openRequest={modelOpenRequest} className="composer__select composer__select--model" label="Model"
@@ -298,7 +323,7 @@ export function Composer({ session }: { session: Session }) {
                 const [provider, model] = JSON.parse(value) as [Session['provider'], string];
                 void configure({ provider, model });
               }} />
-            <SelectMenu triggerRef={reasoningControl} className="composer__select" label="Reasoning effort and service tier" value={combinedValue} displayValue={combinedDisplay} openRequest={reasoningOpenRequest} disabled={disabled}
+            <SelectMenu triggerRef={reasoningControl} className="composer__select" label="Reasoning effort and service tier" value={combinedValue} selectedValues={combinedSelectedValues} displayValue={combinedDisplay} openRequest={reasoningOpenRequest} disabled={disabled}
               options={combinedOptions}
               onChange={(value) => { const [kind, option] = value.split(':'); if (kind === 'effort') void configure({ effort: option }); else if (kind === 'tier') void configure({ serviceTier: option }); }} placement="top" />
             <SelectMenu triggerRef={policyControl} openRequest={policyOpenRequest} className="composer__select composer__select--policy" label="Approval policy" value={session.policy} disabled={disabled || policyChoices.length === 0}

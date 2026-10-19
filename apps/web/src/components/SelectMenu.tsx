@@ -6,15 +6,16 @@ import { cx } from '../lib/format';
 export interface SelectOption { value: string; label: string; group?: string; description?: string; disabled?: boolean }
 
 /** A compact choice control with a shared popover, keyboard navigation and viewport-aware placement. */
-export function SelectMenu({ id, label, value, onChange, options, disabled, className, placement = 'bottom', title, triggerRef, displayValue, openRequest }: {
+export function SelectMenu({ id, label, value, onChange, options, disabled, className, placement = 'bottom', title, triggerRef, displayValue, openRequest, selectedValues }: {
   id?: string; label: string; value: string; onChange: (value: string) => void; options: SelectOption[];
   disabled?: boolean; className?: string; placement?: 'top' | 'bottom'; title?: string; triggerRef?: Ref<HTMLButtonElement>;
-  displayValue?: string; openRequest?: number;
+  displayValue?: string; openRequest?: number; selectedValues?: string[];
 }) {
   const listId = useId();
   const anchor = useRef<HTMLButtonElement>(null);
   const popup = useRef<HTMLDivElement>(null);
   const typeahead = useRef({ text: '', at: 0 });
+  const handledOpenRequest = useRef(0);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const [position, setPosition] = useState<{ left: number; top: number; width: number; maxHeight: number } | null>(null);
@@ -67,7 +68,12 @@ export function SelectMenu({ id, label, value, onChange, options, disabled, clas
   useEffect(() => {
     if (disabled) setOpen(false);
   }, [disabled]);
-  useEffect(() => { if (openRequest) { show(); anchor.current?.focus(); } }, [openRequest]);
+  useEffect(() => {
+    if (!openRequest || openRequest === handledOpenRequest.current || disabled || enabled.length === 0) return;
+    handledOpenRequest.current = openRequest;
+    anchor.current?.focus();
+    show();
+  }, [openRequest, disabled, enabled.length]);
   useLayoutEffect(() => {
     if (effectiveOpen && position) popup.current?.querySelector<HTMLElement>(`[data-option-index="${active}"]`)?.scrollIntoView({ block: 'nearest' });
   }, [active, effectiveOpen, position]);
@@ -111,14 +117,14 @@ export function SelectMenu({ id, label, value, onChange, options, disabled, clas
       <span>{displayValue ?? selected?.label ?? value}</span><ChevronDown size={12} aria-hidden="true" />
     </button>
     {effectiveOpen ? createPortal(
-      <div ref={popup} id={listId} role="listbox" aria-label={label} className="select-menu__popup"
+      <div ref={popup} id={listId} role="listbox" aria-label={label} aria-multiselectable={selectedValues ? true : undefined} className="select-menu__popup"
         style={position ?? { visibility: 'hidden' }} onMouseDown={(event) => event.preventDefault()}>
         {options.map((option, index) => <div key={option.value} role="presentation">
           {option.group && (index === 0 || options[index - 1]?.group !== option.group) ? <div className="select-menu__group" role="presentation">{option.group}</div> : null}
-          <div id={`${listId}-${index}`} role="option" aria-selected={option.value === value} aria-disabled={option.disabled || undefined}
-            data-option-index={index} className={cx('select-menu__option', active === index && 'is-active', option.value === value && 'is-selected')}
+          <div id={`${listId}-${index}`} role="option" aria-selected={selectedValues ? selectedValues.includes(option.value) : option.value === value} aria-disabled={option.disabled || undefined}
+            data-option-index={index} className={cx('select-menu__option', active === index && 'is-active', (selectedValues ? selectedValues.includes(option.value) : option.value === value) && 'is-selected')}
             onMouseMove={() => { if (!option.disabled) setActive(index); }} onClick={() => choose(index)}>
-            <span className="select-menu__option-copy"><span>{option.label}</span>{option.description ? <small>{option.description}</small> : null}</span>{option.value === value ? <Check size={13} aria-hidden="true" /> : null}
+            <span className="select-menu__option-copy"><span>{option.label}</span>{option.description ? <small>{option.description}</small> : null}</span>{(selectedValues ? selectedValues.includes(option.value) : option.value === value) ? <Check size={13} aria-hidden="true" /> : null}
           </div>
         </div>)}
       </div>, document.body,
