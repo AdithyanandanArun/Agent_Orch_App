@@ -30,4 +30,6 @@ Paths are resolved and checked again on the server. Git commands use argv arrays
 
 The implementation uses Node's native filesystem/path APIs for Linux, Windows and macOS. Interactive verification in this workspace is on Linux; native Windows and macOS verification remains outstanding. Desktop release packaging currently targets Linux x86-64 separately from this picker implementation.
 
+Checked on 2026-10-20: workspace typechecking and the production build pass. Linux inspection covered the real home-directory listing, partial-path completion with Add disabled, click navigation, Backspace to parent, Escape navigation, blank new/clone form guards, and a 900×700 viewport. Creation/cloning and file-manager launching were reviewed in code without creating repositories or launching external windows during this check. No automated tests or provider inference were run.
+
 References: [Node filesystem directory entries](https://nodejs.org/api/fs.html#class-fsdirent), [native path semantics](https://nodejs.org/api/path.html), [home directories](https://nodejs.org/api/os.html#oshomedir), [Git clone](https://git-scm.com/docs/git-clone).
