@@ -1,0 +1,17 @@
+{
+  "name": "relay-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.26.0",
+  "engines": { "node": ">=24.13.0" },
+  "scripts": {
+    "dev": "concurrently -k -n server,web -c cyan,magenta \"pnpm --filter @relay/server dev\" \"pnpm --filter @relay/web dev\"",
+    "build": "pnpm --filter @relay/web build && pnpm --filter @relay/server build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm --filter @relay/server test",
+    "start": "pnpm --filter @relay/server start",
+    "desktop": "pnpm --filter @relay/desktop start"
+  },
+  "devDependencies": { "@types/node": "^24.0.0", "concurrently": "^9.2.0", "typescript": "^5.9.3" }
+}
