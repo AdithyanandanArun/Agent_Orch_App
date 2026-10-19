@@ -1,14 +1,15 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDown, ChevronRight, ShieldAlert, Terminal, Info, FolderPlus } from 'lucide-react';
-import type { Approval, Session } from '@relay/contracts';
+import type { Approval, Session, SessionRun, ToolCall } from '@relay/contracts';
 import { useRelay, useProject, useActiveSession } from '../store/store';
 import { api, errorMessage } from '../lib/api';
 import { clockTime, cx } from '../lib/format';
 import { Markdown } from './Markdown';
 import { Button, EmptyState, PROVIDER_NAME } from './ui';
 import { Composer } from './Composer';
+import { RunActivity } from './RunActivity';
 
-interface DisplayMessage { id: string; role: 'user' | 'assistant' | 'system' | 'tool'; content: string; createdAt: string; kind?: string; live: boolean }
+interface DisplayMessage { id: string; role: 'user' | 'assistant' | 'system' | 'tool'; content: string; createdAt: string; kind?: string; runId?: string; live: boolean }
 
 function useSessionMessages(session: Session | undefined): DisplayMessage[] {
   const all = useRelay((s) => s.boot?.messages);
@@ -23,7 +24,7 @@ function useSessionMessages(session: Session | undefined): DisplayMessage[] {
       const st = streams[m.id];
       const streamed = st ? st.base + st.text : '';
       const content = streamed.length > m.content.length ? streamed : m.content;
-      out.push({ id: m.id, role: m.role, content, createdAt: m.createdAt, kind: m.kind, live: (Boolean(st) || m.kind === 'streaming') && session.status === 'running' });
+      out.push({ id: m.id, role: m.role, content, createdAt: m.createdAt, kind: m.kind, runId: m.runId, live: (Boolean(st) || m.kind === 'streaming') && session.status === 'running' });
     }
     for (const [id, st] of Object.entries(streams)) {
       if (st.sessionId !== session.id || seen.has(id)) continue;
@@ -33,23 +34,43 @@ function useSessionMessages(session: Session | undefined): DisplayMessage[] {
   }, [all, streams, session]);
 }
 
-const ToolCard = memo(function ToolCard({ m }: { m: DisplayMessage }) {
-  const first = m.content.split('\n').find((l) => l.trim()) ?? '';
+function legacyToolTitle(m: DisplayMessage): string {
+  const candidates = [m.kind, ...m.content.split('\n')];
+  for (const value of candidates) {
+    const text = value?.trim();
+    if (!text || /^(?:tool(?:\s+.*)?|shell|command|tool output)$/i.test(text)) continue;
+    return text.slice(0, 120);
+  }
+  return 'Tool output';
+}
+
+const LegacyToolGroup = memo(function LegacyToolGroup({ messages }: { messages: DisplayMessage[] }) {
+  const previews = messages.map(legacyToolTitle);
   return (
-    <details className="conversation-detail conversation-detail--tool">
+    <details className="conversation-detail conversation-detail--tool legacy-tool-group">
       <summary className="conversation-detail__summary">
         <ChevronRight size={12} className="conversation-detail__chevron" aria-hidden="true" />
         <Terminal size={13} aria-hidden="true" />
-        <span className="conversation-detail__label">{m.kind ?? 'Tool output'}</span>
-        <span className="conversation-detail__preview">{first.slice(0, 180)}</span>
+        <span className="conversation-detail__label">Tool activity · {messages.length} output {messages.length === 1 ? 'record' : 'records'}</span>
+        <span className="conversation-detail__preview">{previews.slice(0, 2).join(' · ')}</span>
       </summary>
-      <pre className="conversation-detail__body conversation-detail__body--code">{m.content}</pre>
+      <div className="legacy-tool-group__items">
+        {messages.map((m, index) => {
+          const first = m.content.split('\n').find(line => line.trim() && !/^(?:tool(?:\s+.*)?|shell|command|tool output)$/i.test(line.trim())) ?? '';
+          return (
+            <details key={m.id} className="legacy-tool-item">
+              <summary><ChevronRight size={12} aria-hidden="true" /><span>{previews[index]}</span><code>{first.slice(0, 160)}</code></summary>
+              <pre>{m.content}</pre>
+            </details>
+          );
+        })}
+      </div>
     </details>
   );
 });
 
 const MessageRow = memo(function MessageRow({ m, session }: { m: DisplayMessage; session: Session }) {
-  if (m.role === 'tool') return <ToolCard m={m} />;
+  if (m.role === 'tool') return null;
   if (m.role === 'system') {
     const preview = m.content.split('\n').find((line) => line.trim()) ?? '';
     return (
@@ -126,6 +147,30 @@ export function SessionPane() {
   const session = useActiveSession();
   const hasSessions = useRelay((s) => (s.boot?.sessions ?? []).some((x) => x.projectId === s.activeProjectId));
   const messages = useSessionMessages(session);
+  const allRuns = useRelay((s) => s.boot?.runs ?? []);
+  const runs = useMemo(() => allRuns.filter(run => run.sessionId === session?.id), [allRuns, session?.id]);
+  const allToolCalls = useRelay((s) => s.boot?.toolCalls ?? []);
+  const toolCallsByRun = useMemo(() => {
+    const grouped = new Map<string, ToolCall[]>();
+    for (const call of allToolCalls) {
+      if (call.sessionId !== session?.id) continue;
+      const rows = grouped.get(call.runId) ?? [];
+      rows.push(call);
+      grouped.set(call.runId, rows);
+    }
+    return grouped;
+  }, [allToolCalls, session?.id]);
+  const runsByUserMessage = useMemo(() => {
+    const grouped = new Map<string, SessionRun[]>();
+    for (const run of runs) {
+      const rows = grouped.get(run.userMessageId) ?? [];
+      rows.push(run);
+      grouped.set(run.userMessageId, rows);
+    }
+    return grouped;
+  }, [runs]);
+  const messageIds = useMemo(() => new Set(messages.map(message => message.id)), [messages]);
+  const unplacedRuns = useMemo(() => runs.filter(run => !messageIds.has(run.userMessageId)).sort((a, b) => a.startedAt.localeCompare(b.startedAt)), [runs, messageIds]);
   const approvals = useRelay((s) => s.boot?.approvals);
   const pending = useMemo(() => (approvals ?? []).filter((a) => a.sessionId === session?.id && a.status === 'pending'), [approvals, session?.id]);
   const { openDialog } = useRelay.getState();
@@ -135,7 +180,8 @@ export function SessionPane() {
   const stick = useRef(true);
   const [away, setAway] = useState(false);
   const last = messages[messages.length - 1];
-  const sig = `${session?.id}|${messages.length}|${last?.content.length ?? 0}|${pending.length}`;
+  const activitySig = runs.map(run => `${run.id}:${run.status}:${run.toolCount}`).join('|');
+  const sig = `${session?.id}|${messages.length}|${last?.content.length ?? 0}|${pending.length}|${activitySig}|${allToolCalls.length}`;
 
   useEffect(() => { stick.current = true; setAway(false); }, [session?.id]);
   useLayoutEffect(() => {
@@ -176,8 +222,23 @@ export function SessionPane() {
               <p>Send a message to {PROVIDER_NAME[session.provider]} in this session.</p>
             </div>
           ) : null}
-          {messages.map((m) => <MessageRow key={m.id} m={m} session={session} />)}
-          {session.status === 'running' ? (
+          {messages.map((m, index) => {
+            if (m.role === 'tool') {
+              const group = [m];
+              let next = index + 1;
+              while (next < messages.length && messages[next]?.role === 'tool') group.push(messages[next++]!);
+              if (index > 0 && messages[index - 1]?.role === 'tool') return null;
+              return <LegacyToolGroup key={m.id} messages={group} />;
+            }
+            return (
+              <Fragment key={m.id}>
+                <MessageRow m={m} session={session} />
+                {m.role === 'user' ? (runsByUserMessage.get(m.id) ?? []).map(run => <RunActivity key={run.id} run={run} initialCalls={toolCallsByRun.get(run.id) ?? []} />) : null}
+              </Fragment>
+            );
+          })}
+          {unplacedRuns.map(run => <RunActivity key={run.id} run={run} initialCalls={toolCallsByRun.get(run.id) ?? []} />)}
+          {session.status === 'running' && !runs.some(run => run.status === 'running') ? (
             <div className="working" role="status"><span className="dots" aria-hidden="true"><i /><i /><i /></span> {PROVIDER_NAME[session.provider]} is working…</div>
           ) : null}
           {session.error && session.status === 'error' ? <div className="chat__error" role="alert"><strong>Session error</strong><span>{session.error}</span></div> : null}
