@@ -15,13 +15,16 @@
   box-shadow: 0 16px 48px #0005, 0 2px 8px #0003; animation: fade 100ms ease-out;
 }
 .select-menu__group { padding: 8px 9px 5px; font-size: 11px; color: var(--fg-2); font-weight: 500; }
+.select-menu__popup > div + div:has(> .select-menu__group) { margin-top: 5px; padding-top: 3px; border-top: 1px solid var(--line); }
 .select-menu__option {
   display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 33px;
   padding: 7px 9px; border-radius: 6px; color: var(--fg-1); font-size: 13px; cursor: pointer; line-height: 1.35;
 }
 .select-menu__option > span { min-width: 0; overflow-wrap: anywhere; }
 .select-menu__option-copy { display: grid; gap: 2px; }
+.select-menu__option-copy > span { display: flex; align-items: center; gap: 6px; }
 .select-menu__option-copy small { color: var(--fg-2); font-size: 11px; line-height: 1.35; }
+.select-menu__option-copy .select-menu__badge { flex: none; padding: 0 3px; border: 1px solid var(--line-strong); border-radius: 3px; font-size: 10px; }
 .select-menu__option > svg { flex: none; color: var(--fg-0); }
 .select-menu__option.is-active { background: var(--bg-active); color: var(--fg-0); }
 .select-menu__option.is-selected { color: var(--fg-0); }

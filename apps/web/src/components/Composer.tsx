@@ -48,7 +48,7 @@ export function Composer({ session }: { session: Session }) {
       if (!controller.signal.aborted) setCatalogError(errorMessage(cause));
     });
     return () => controller.abort();
-  }, [catalogKey]);
+  }, [catalogKey, connection]);
 
   useEffect(() => {
     const el = ref.current;
@@ -176,14 +176,15 @@ export function Composer({ session }: { session: Session }) {
   const combinedOptions = [
     ...effortChoices.map((item) => ({
       value: `effort:${item.id}`,
-      label: `${effortLabel(item.id)}${item.id === effortDefault ? ' · Default' : ''}`,
-      description: item.description,
+      label: effortLabel(item.id),
+      badge: item.id === effortDefault ? 'Default' : undefined,
       group: 'Reasoning effort',
     })),
     ...tierChoices.map((item) => ({
       value: `tier:${item.id}`,
-      label: `${tierName(item.id, item.name)}${item.id === tierDefault ? ' · Default' : ''}`,
-      description: item.description,
+      label: tierName(item.id, item.name),
+      badge: item.id === tierDefault ? 'Default' : undefined,
+      description: item.id !== 'standard' ? item.description : undefined,
       group: 'Service tier',
     })),
   ];

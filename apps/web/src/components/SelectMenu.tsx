@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Check, ChevronDown } from 'lucide-react';
 import { cx } from '../lib/format';
 
-export interface SelectOption { value: string; label: string; group?: string; description?: string; disabled?: boolean }
+export interface SelectOption { value: string; label: string; group?: string; description?: string; badge?: string; disabled?: boolean }
 
 /** A compact choice control with a shared popover, keyboard navigation and viewport-aware placement. */
 export function SelectMenu({ id, label, value, onChange, options, disabled, className, placement = 'bottom', title, triggerRef, displayValue, openRequest, selectedValues }: {
@@ -124,7 +124,7 @@ export function SelectMenu({ id, label, value, onChange, options, disabled, clas
           <div id={`${listId}-${index}`} role="option" aria-selected={selectedValues ? selectedValues.includes(option.value) : option.value === value} aria-disabled={option.disabled || undefined}
             data-option-index={index} className={cx('select-menu__option', active === index && 'is-active', (selectedValues ? selectedValues.includes(option.value) : option.value === value) && 'is-selected')}
             onMouseMove={() => { if (!option.disabled) setActive(index); }} onClick={() => choose(index)}>
-            <span className="select-menu__option-copy"><span>{option.label}</span>{option.description ? <small>{option.description}</small> : null}</span>{(selectedValues ? selectedValues.includes(option.value) : option.value === value) ? <Check size={13} aria-hidden="true" /> : null}
+            <span className="select-menu__option-copy"><span>{option.label}{option.badge ? <small className="select-menu__badge">{option.badge}</small> : null}</span>{option.description ? <small>{option.description}</small> : null}</span>{(selectedValues ? selectedValues.includes(option.value) : option.value === value) ? <Check size={13} aria-hidden="true" /> : null}
           </div>
         </div>)}
       </div>, document.body,
