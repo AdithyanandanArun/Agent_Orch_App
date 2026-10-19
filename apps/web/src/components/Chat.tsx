@@ -8,6 +8,7 @@ import { Markdown } from './Markdown';
 import { Button, EmptyState, PROVIDER_NAME } from './ui';
 import { Composer } from './Composer';
 import { RunActivity } from './RunActivity';
+import { RunChanges } from './RunChanges';
 
 interface DisplayMessage { id: string; role: 'user' | 'assistant' | 'system' | 'tool'; content: string; createdAt: string; kind?: string; runId?: string; live: boolean }
 const EMPTY_RUNS: SessionRun[] = [];
@@ -179,6 +180,20 @@ export function SessionPane() {
   }, [runs]);
   const messageIds = useMemo(() => new Set(messages.map(message => message.id)), [messages]);
   const unplacedRuns = useMemo(() => runs.filter(run => !messageIds.has(run.userMessageId)).sort((a, b) => a.startedAt.localeCompare(b.startedAt)), [runs, messageIds]);
+  const changesAfterMessage = useMemo(() => {
+    const placements = new Map<number, SessionRun[]>();
+    for (const run of runs) {
+      const assistants = messages.map((message, index) => ({ message, index })).filter(row => row.message.role === 'assistant' && row.message.runId === run.id);
+      let index = assistants.at(-1)?.index;
+      if (index === undefined) {
+        const fallback = messages.map((message, candidate) => ({ message, candidate })).filter(row => row.message.role !== 'tool').at(-1);
+        index = fallback?.candidate ?? messages.findIndex(message => message.id === run.userMessageId);
+      }
+      if (index === undefined || index < 0) continue;
+      const list = placements.get(index) ?? []; list.push(run); placements.set(index, list);
+    }
+    return placements;
+  }, [runs, messages]);
   const approvals = useRelay((s) => s.boot?.approvals);
   const pending = useMemo(() => (approvals ?? []).filter((a) => a.sessionId === session?.id && a.status === 'pending'), [approvals, session?.id]);
   const { openDialog } = useRelay.getState();
@@ -188,7 +203,7 @@ export function SessionPane() {
   const stick = useRef(true);
   const [away, setAway] = useState(false);
   const last = messages[messages.length - 1];
-  const activitySig = runs.map(run => `${run.id}:${run.status}:${run.toolCount}`).join('|');
+  const activitySig = runs.map(run => `${run.id}:${run.status}:${run.toolCount}:${run.changes?.status ?? 'unknown'}:${run.changes?.fileCount ?? ''}:${run.changes?.additions ?? ''}:${run.changes?.deletions ?? ''}`).join('|');
   const sig = `${session?.id}|${messages.length}|${last?.content.length ?? 0}|${pending.length}|${activitySig}|${allToolCalls.length}`;
 
   useEffect(() => { stick.current = true; setAway(false); }, [session?.id]);
@@ -242,10 +257,11 @@ export function SessionPane() {
               <Fragment key={m.id}>
                 <MessageRow m={m} session={session} />
                 {m.role === 'user' ? (runsByUserMessage.get(m.id) ?? []).map(run => <RunActivity key={run.id} run={run} initialCalls={toolCallsByRun.get(run.id) ?? EMPTY_TOOL_CALLS} />) : null}
+                {(changesAfterMessage.get(index) ?? []).filter(run => run.status !== 'running').map(run => <RunChanges key={run.id} runId={run.id} summary={run.changes} />)}
               </Fragment>
             );
           })}
-          {unplacedRuns.map(run => <RunActivity key={run.id} run={run} initialCalls={toolCallsByRun.get(run.id) ?? EMPTY_TOOL_CALLS} />)}
+          {unplacedRuns.map(run => <Fragment key={run.id}><RunActivity run={run} initialCalls={toolCallsByRun.get(run.id) ?? EMPTY_TOOL_CALLS} />{run.status !== 'running' ? <RunChanges runId={run.id} summary={run.changes} /> : null}</Fragment>)}
           {session.status === 'running' && !runs.some(run => run.status === 'running') ? (
             <div className="working" role="status"><span className="dots" aria-hidden="true"><i /><i /><i /></span> {PROVIDER_NAME[session.provider]} is working…</div>
           ) : null}
