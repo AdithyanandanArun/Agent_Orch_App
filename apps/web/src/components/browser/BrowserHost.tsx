@@ -13,21 +13,24 @@ export function BrowserHost({ expanded, onDismiss, children }: { expanded: boole
     return element;
   }, []);
   const inline = useRef<HTMLDivElement>(null);
+  const returnFocus = useRef<HTMLElement | null>(null);
   const [overlaySlot, setOverlaySlot] = useState<HTMLDivElement | null>(null);
 
   useLayoutEffect(() => {
     const target = expanded ? overlaySlot : inline.current;
     if (!target || host.parentNode === target) return;
     const focused = document.activeElement instanceof HTMLElement && host.contains(document.activeElement) ? document.activeElement : null;
+    if (expanded && focused) returnFocus.current = focused;
     target.appendChild(host);
-    if (focused?.isConnected) focused.focus({ preventScroll: true });
+    const next = focused ?? (!expanded ? returnFocus.current : null);
+    if (next?.isConnected) next.focus({ preventScroll: true });
+    if (!expanded) returnFocus.current = null;
   }, [expanded, overlaySlot, host]);
 
   const dismiss = useRef(onDismiss);
   dismiss.current = onDismiss;
   useLayoutEffect(() => {
     if (!expanded || !overlaySlot) return;
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const focusable = () => Array.from(host.querySelectorAll<HTMLElement>('a[href],button:not([disabled]),input:not([disabled]),[tabindex]:not([tabindex="-1"])'))
       .filter((element) => element.getClientRects().length > 0);
     if (!host.contains(document.activeElement)) (focusable()[0] ?? overlaySlot).focus({ preventScroll: true });
@@ -46,7 +49,6 @@ export function BrowserHost({ expanded, onDismiss, children }: { expanded: boole
     overlaySlot.addEventListener('keydown', onKey);
     return () => {
       overlaySlot.removeEventListener('keydown', onKey);
-      if (previous?.isConnected) previous.focus({ preventScroll: true });
     };
   }, [expanded, overlaySlot, host]);
 
