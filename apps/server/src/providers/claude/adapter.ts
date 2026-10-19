@@ -27,8 +27,24 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): AgentAdapter 
   const resolveBinary = deps.resolveExecutable ?? resolveClaudeExecutable;
   return {
     async run(run: RunOptions): Promise<void> {
-      const { session, prompt, signal, onEvent, requestApproval, settings } = run;
+      const { session, signal, onEvent, requestApproval, settings } = run;
       if (signal.aborted) throw abortError();
+      const selectedSkills = run.skills ?? [];
+      if (selectedSkills.length > 1) {
+        throw new ProviderError('Claude sessions can dispatch one selected skill per run. Choose a single skill or clear the selection.', { code: 'multiple_skills_unsupported' });
+      }
+      const selectedSkill = selectedSkills[0];
+      const selectedSkillName = selectedSkill?.name.replace(/^\/+/, '');
+      if (selectedSkill && (!selectedSkill.enabled || selectedSkill.source === 'user' || !selectedSkillName || !/^[A-Za-z0-9_.:-]+$/.test(selectedSkillName))) {
+        throw new ProviderError('The selected Claude skill is unavailable or has an invalid name. Refresh the provider catalog and select a listed project skill.', { code: 'invalid_skill' });
+      }
+      const prompt = selectedSkillName ? `/${selectedSkillName} ${run.prompt}` : run.prompt;
+      if (session.effort !== 'none' && !['low', 'medium', 'high', 'xhigh', 'max'].includes(session.effort)) {
+        throw new ProviderError(`Claude does not support reasoning effort "${session.effort}". Refresh the model capabilities and choose a listed effort.`, { code: 'unsupported_effort' });
+      }
+      if (session.serviceTier && !['standard', 'fast'].includes(session.serviceTier)) {
+        throw new ProviderError(`Claude does not support service tier "${session.serviceTier}".`, { code: 'unsupported_service_tier' });
+      }
       const childEnv = claudeEnvironment(env);
       const secrets = [childEnv.ANTHROPIC_API_KEY, childEnv.CLAUDE_CODE_OAUTH_TOKEN, childEnv.ANTHROPIC_AUTH_TOKEN];
       const resolved = await resolveBinary(settings, env);
@@ -70,15 +86,17 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): AgentAdapter 
       const options: Options = {
         cwd: session.worktreePath,
         model: session.model,
-        effort: session.effort,
+        ...(session.effort !== 'none' ? { effort: session.effort as NonNullable<Options['effort']> } : {}),
         permissionMode: claudePermissionMode(session.policy),
+        ...(session.policy === 'full-access' ? { allowDangerouslySkipPermissions: true } : {}),
         canUseTool,
         includePartialMessages: true,
         abortController: controller,
         pathToClaudeCodeExecutable: resolved.executable.path,
         systemPrompt: { type: 'preset', preset: 'claude_code' },
         settingSources: ['project'],
-        settings: { disableAllHooks: true },
+        settings: { disableAllHooks: true, fastMode: session.serviceTier === 'fast' },
+        ...(selectedSkillName ? { skills: [selectedSkillName] } : {}),
         env: { ...childEnv, CLAUDE_AGENT_SDK_CLIENT_APP: 'relay/0.1.0' },
         stderr: (data: string) => stderr.push(data),
         ...(session.providerSessionId ? { resume: session.providerSessionId } : {}),
@@ -91,6 +109,13 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): AgentAdapter 
       try {
         const query = deps.query ?? (await loadSdkQuery());
         stream = query({ prompt, options });
+        if (session.serviceTier === 'fast' && typeof (stream as Query).initializationResult === 'function') {
+          const initialized = await (stream as Query).initializationResult();
+          if (initialized.fast_mode_state !== 'on') {
+            const reason = initialized.fast_mode_disabled_reason ? ` (${initialized.fast_mode_disabled_reason})` : '';
+            throw new ProviderError(`Claude Code could not enable requested fast mode${reason}.`, { code: 'fast_mode_unavailable' });
+          }
+        }
         for await (const message of stream) {
           mapper.handle(message);
           if (signal.aborted) break;

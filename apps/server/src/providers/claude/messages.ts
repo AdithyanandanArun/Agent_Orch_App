@@ -3,9 +3,16 @@ import { ProviderError, describeValue, isRecord, truncate } from '../common.js';
 
 export type ClaudePermissionMode = 'default' | 'acceptEdits';
 
-/** supervised: ask for everything except read-only tools. balanced: edits inside the worktree are pre-approved, the rest still asks. */
-export function claudePermissionMode(policy: Policy): ClaudePermissionMode {
-  return policy === 'balanced' ? 'acceptEdits' : 'default';
+export type ClaudeSdkPermissionMode = 'default' | 'acceptEdits' | 'auto' | 'bypassPermissions';
+
+/** Relay policy names map directly to Claude Code permission modes. */
+export function claudePermissionMode(policy: Policy): ClaudeSdkPermissionMode {
+  switch (policy) {
+    case 'supervised': return 'default';
+    case 'balanced': return 'acceptEdits';
+    case 'auto': return 'auto';
+    case 'full-access': return 'bypassPermissions';
+  }
 }
 
 export const CLAUDE_MODELS: { id: string; name: string }[] = [
