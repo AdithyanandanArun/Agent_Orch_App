@@ -16,7 +16,28 @@ export interface Session {
   inputTokens: number; outputTokens: number; costUsd: number | null;
   pinned: boolean; unread: boolean;
 }
-export interface Message { id: string; sessionId: string; role: 'user' | 'assistant' | 'system' | 'tool'; content: string; createdAt: string; kind?: string }
+export type RunStatus = 'running' | 'completed' | 'failed' | 'interrupted';
+export type ToolCategory = 'command' | 'browser' | 'search' | 'file' | 'agent' | 'other';
+export type ToolStatus = 'running' | 'completed' | 'failed' | 'interrupted';
+export interface SessionRun {
+  id: string; sessionId: string; userMessageId: string; provider: Provider; model: string;
+  status: RunStatus; startedAt: string; finishedAt: string | null; durationMs: number | null;
+  toolCount: number; toolCounts: Partial<Record<ToolCategory, number>>;
+}
+/** One provider tool invocation, updated throughout its lifecycle rather than duplicated for start/result. */
+export interface ToolCall {
+  id: string; runId: string; sessionId: string; providerId: string; parentProviderId: string | null;
+  name: string; category: ToolCategory; status: ToolStatus; summary: string; command: string | null;
+  input: string; output: string; cwd: string | null; exitCode: number | null; processId: string | null;
+  startedAt: string; finishedAt: string | null; durationMs: number | null;
+}
+/** Provider-supplied fields; host assigns durable IDs and timestamps. Missing fields retain their previous value. */
+export interface ToolActivity {
+  id: string; name: string; category: ToolCategory; status: ToolStatus;
+  parentId?: string | null; summary?: string; command?: string | null; input?: string; output?: string;
+  cwd?: string | null; exitCode?: number | null; processId?: string | null; durationMs?: number | null;
+}
+export interface Message { id: string; sessionId: string; role: 'user' | 'assistant' | 'system' | 'tool'; content: string; createdAt: string; kind?: string; runId?: string }
 export interface Task { id: string; projectId: string; title: string; description: string; acceptanceCriteria: string; sessionId: string | null; dependsOn: string[]; status: TaskStatus; createdAt: string; updatedAt: string }
 export interface WorkspaceEvent { id: number; projectId: string | null; sessionId: string | null; type: string; summary: string; payload: Record<string, unknown>; createdAt: string }
 export interface Approval { id: string; sessionId: string; tool: string; description: string; input: Record<string, unknown>; status: 'pending' | 'approved' | 'denied'; createdAt: string }
@@ -25,7 +46,7 @@ export interface AppSettings {
   defaultProvider: Provider; defaultCodexModel: string; defaultClaudeModel: string; defaultEffort: Effort; defaultIsolated: boolean;
   defaultPolicy: Policy; theme: 'dark' | 'light'; claudeExecutable: string; codexExecutable: string;
 }
-export interface Bootstrap { projects: Project[]; sessions: Session[]; messages: Message[]; tasks: Task[]; events: WorkspaceEvent[]; approvals: Approval[]; providers: ProviderInfo[]; settings: AppSettings; version: string }
+export interface Bootstrap { projects: Project[]; sessions: Session[]; messages: Message[]; tasks: Task[]; events: WorkspaceEvent[]; approvals: Approval[]; providers: ProviderInfo[]; settings: AppSettings; version: string; runs: SessionRun[]; toolCalls: ToolCall[] }
 export interface GitFile { path: string; status: string }
 export interface GitStatus { branch: string; files: GitFile[]; diff: string; isRepo: boolean }
 export interface FileEntry { path: string; name: string; type: 'file' | 'directory' }
@@ -73,6 +94,8 @@ export type AdapterEvent =
   | { type: 'session'; providerSessionId: string }
   | { type: 'text'; text: string }
   | { type: 'tool'; name: string; content: string }
+  | { type: 'tool.activity'; activity: ToolActivity }
+  | { type: 'tool.output'; id: string; delta: string }
   | { type: 'usage'; inputTokens: number; outputTokens: number; costUsd: number | null }
   | { type: 'info'; content: string };
 export interface AgentAdapter { run(options: RunOptions): Promise<void> }
