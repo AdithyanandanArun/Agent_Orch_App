@@ -49,8 +49,10 @@ function windowLabel(bucketId: string, kind: 'primary' | 'secondary', minutes: n
 function getSnapshots(result: Record<string, unknown>): { entries: [string, unknown][]; malformed: boolean } {
   // The multi-bucket response supersedes its legacy single-bucket mirror; never append both.
   if (isRecord(result.rateLimitsByLimitId)) {
-    const entries = Object.entries(result.rateLimitsByLimitId).slice(0, MAX_BUCKETS);
-    return { entries, malformed: Object.keys(result.rateLimitsByLimitId).length > MAX_BUCKETS };
+    const mapEntries = Object.entries(result.rateLimitsByLimitId);
+    if (mapEntries.length > 0) {
+      return { entries: mapEntries.slice(0, MAX_BUCKETS), malformed: mapEntries.length > MAX_BUCKETS };
+    }
   }
   if (isRecord(result.rateLimits)) return { entries: [['codex', result.rateLimits]], malformed: false };
   return { entries: [], malformed: true };
@@ -68,7 +70,9 @@ function parseWindows(snapshots: [string, unknown][], notices: string[]): UsageW
       const rawWindow = raw[kind];
       if (rawWindow === null || rawWindow === undefined) continue;
       if (!isRecord(rawWindow)) { notices.push(`Codex returned an invalid ${kind} window for ${bucketId}.`); continue; }
-      const usedPercent = typeof rawWindow.usedPercent === 'number' && Number.isFinite(rawWindow.usedPercent) ? rawWindow.usedPercent : null;
+      const usedPercent = typeof rawWindow.usedPercent === 'number' && Number.isFinite(rawWindow.usedPercent) && rawWindow.usedPercent >= 0
+        ? rawWindow.usedPercent
+        : null;
       const windowMinutes = integerOrNull(rawWindow.windowDurationMins);
       const resetAt = isoFromUnixSeconds(rawWindow.resetsAt);
       if (usedPercent === null) notices.push(`Codex did not report valid usage for the ${kind} ${bucketId} window.`);
@@ -83,7 +87,7 @@ function parseWindows(snapshots: [string, unknown][], notices: string[]): UsageW
       seen.add(id);
       windows.push({
         id: truncate(id, 200), label: windowLabel(bucketId, kind, windowMinutes), scope,
-        usedPercent, remainingPercent: usedPercent === null ? null : 100 - usedPercent,
+        usedPercent, remainingPercent: usedPercent === null ? null : Math.max(0, 100 - usedPercent),
         resetAt, windowMinutes,
       });
     }
@@ -155,11 +159,13 @@ function parseUsage(result: unknown): ProviderUsage {
   const plan = parsePlan(entries, notices);
   const credits = parseCredits(entries, notices);
   const resets = Object.hasOwn(result, 'rateLimitResetCredits') ? parseResets(result.rateLimitResetCredits, notices) : null;
-  const hasData = windows.length > 0 || plan !== null || credits !== null || resets !== null;
+  const hasQuotaData = windows.length > 0 || credits !== null || resets !== null;
+  const hasData = hasQuotaData || plan !== null;
   if (!hasData) notices.push('Codex did not report rate limits, credits, plan, or earned resets.');
+  else if (!hasQuotaData) notices.push('Codex reported plan metadata without quota, credit, or reset data.');
   return {
     provider: 'codex', fetchedAt: new Date().toISOString(),
-    status: hasData && notices.length === 0 ? 'available' : 'partial',
+    status: !hasData ? 'unavailable' : !hasQuotaData || notices.length > 0 ? 'partial' : 'available',
     plan, windows, credits, resets,
     notices: [...new Set(notices)].slice(0, 20).map((notice) => truncate(redactSecrets(notice), 300)),
   };
@@ -181,7 +187,7 @@ export async function getCodexUsage(session: Session, settings: AppSettings): Pr
   let conn: JsonRpcConnection | undefined;
   let usage: ProviderUsage | undefined;
   try {
-    const env = cleanEnv(process.env);
+    const env = cleanEnv(process.env, ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN']);
     child = spawn(resolved.executable.path, ['app-server'], {
       cwd: tmpdir(), env, stdio: ['pipe', 'pipe', 'pipe'],
       detached: process.platform !== 'win32', windowsHide: true,
