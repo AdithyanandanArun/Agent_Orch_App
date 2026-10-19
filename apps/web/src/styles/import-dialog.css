@@ -1,4 +1,4 @@
-.modal:has(.import-dialog) { width: min(980px, calc(100vw - 28px)); max-height: min(850px, calc(100dvh - 28px)); }
+.modal:has(.import-dialog) { width: min(980px, calc(100vw - 28px)); max-width: 100%; max-height: min(850px, calc(100dvh - 28px)); }
 .modal:has(.import-dialog) .modal__body { padding: 0; overflow: hidden; display: flex; }
 .modal:has(.import-dialog) .modal__head { padding: 18px 22px 14px; }
 .modal:has(.import-dialog) .modal__head h2 { font-size: 17px; }

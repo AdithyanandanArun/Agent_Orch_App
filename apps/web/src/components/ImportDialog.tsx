@@ -162,7 +162,7 @@ export function ImportDialog() {
   </>;
 
   return (
-    <Modal title="Import a conversation" description="Continue a local Claude or Codex conversation in Relay." onClose={requestClose} width={980} footer={footer}>
+    <Modal title="Import a conversation" description="Continue a local Claude or Codex conversation in Relay." onClose={requestClose} footer={footer}>
       <form id="import-form" className="import-dialog" onSubmit={(event: FormEvent) => { event.preventDefault(); void importAndOpen(); }} onKeyDown={(event) => {
         if (event.key === 'Enter' && event.target instanceof HTMLInputElement) event.preventDefault();
       }}>
