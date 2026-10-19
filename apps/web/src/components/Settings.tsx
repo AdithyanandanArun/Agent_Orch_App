@@ -10,6 +10,7 @@ import { SelectMenu } from './SelectMenu';
 const CATEGORIES: { id: SettingsSection; name: string }[] = [
   { id: 'general', name: 'General' }, { id: 'project', name: 'Project' }, { id: 'providers', name: 'Providers' }, { id: 'appearance', name: 'Appearance' },
 ];
+const effortName = (id: string, label: string) => ({ low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra High', 'extra-high': 'Extra High', max: 'Max', ultra: 'Ultra' } as Record<string, string>)[id.toLowerCase()] ?? label;
 
 function SettingRow({ title, description, htmlFor, children }: { title: string; description?: string; htmlFor: string; children: ReactNode }) {
   return <div className="settings-row">
@@ -67,14 +68,16 @@ export function SettingsPage() {
   const efforts = selectedModel?.reasoningEfforts ?? (selectedModel ? [
     { id: 'low', label: 'Low' }, { id: 'medium', label: 'Medium' }, { id: 'high', label: 'High' },
   ] : []);
-  const tiers = selectedModel?.serviceTiers ?? [];
+  const tiers = [{ id: 'standard', name: 'Standard', description: 'Standard service tier.' }, ...(selectedModel?.serviceTiers ?? []).filter((item) => item.id !== 'standard')];
   const policies = selectedModel?.policies ?? boot.providers.find((p) => p.id === settings.defaultProvider)?.policies ?? [];
   const updateDefaultModel = (value: string) => {
     const nextModel = models.find((model) => model.id === value);
     if (!nextModel) return;
     const patch: Partial<AppSettings> = { [modelKey]: value };
-    if (nextModel.reasoningEfforts?.length && !nextModel.reasoningEfforts.some((item) => item.id === settings.defaultEffort)) patch.defaultEffort = nextModel.defaultReasoningEffort ?? nextModel.reasoningEfforts[0]!.id;
-    if (nextModel.serviceTiers?.length && !nextModel.serviceTiers.some((item) => item.id === (settings.defaultServiceTier ?? 'standard'))) patch.defaultServiceTier = nextModel.defaultServiceTier ?? nextModel.serviceTiers[0]!.id;
+    const nextEfforts = nextModel.reasoningEfforts ?? [{ id: 'low', label: 'Low' }, { id: 'medium', label: 'Medium' }, { id: 'high', label: 'High' }];
+    if (nextEfforts.length && !nextEfforts.some((item) => item.id === settings.defaultEffort)) patch.defaultEffort = nextModel.defaultReasoningEffort ?? nextEfforts[0]!.id;
+    const nextTiers = [{ id: 'standard', name: 'Standard' }, ...(nextModel.serviceTiers ?? []).filter((item) => item.id !== 'standard')];
+    if (!nextTiers.some((item) => item.id === (settings.defaultServiceTier ?? 'standard'))) patch.defaultServiceTier = nextModel.defaultServiceTier ?? nextTiers[0]!.id;
     void update(patch, 'model');
   };
   const pathsDirty = claude.trim() !== settings.claudeExecutable || codex.trim() !== settings.codexExecutable;
@@ -96,11 +99,11 @@ export function SettingsPage() {
           <SelectMenu id="st-model" label="Default model" value={selectedModelId} disabled={disabled || models.length === 0} options={models.map((m) => ({ value: m.id, label: m.name }))} onChange={updateDefaultModel} />
         </SettingRow>
         <SettingRow title="Reasoning effort" description="How much reasoning to use for a response." htmlFor="st-effort">
-          <SelectMenu id="st-effort" label="Default effort" value={settings.defaultEffort} disabled={disabled || efforts.length === 0} options={efforts.map((item) => ({ value: item.id, label: item.label, description: item.description }))} onChange={(value) => void update({ defaultEffort: value }, 'effort')} />
+          <SelectMenu id="st-effort" label="Default effort" value={settings.defaultEffort} disabled={disabled || efforts.length === 0} options={efforts.map((item) => ({ value: item.id, label: `${effortName(item.id, item.label)}${item.id === selectedModel?.defaultReasoningEffort ? ' · Default' : ''}`, description: item.description }))} onChange={(value) => void update({ defaultEffort: value }, 'effort')} />
         </SettingRow>
-        {tiers.length ? <SettingRow title="Service tier" description="Default request speed for models that support service tiers." htmlFor="st-tier">
-          <SelectMenu id="st-tier" label="Default service tier" value={settings.defaultServiceTier ?? 'standard'} disabled={disabled} options={tiers.map((item) => ({ value: item.id, label: item.name, description: item.description }))} onChange={(value) => void update({ defaultServiceTier: value }, 'tier')} />
-        </SettingRow> : null}
+        <SettingRow title="Service tier" description="Request speed for the default model." htmlFor="st-tier">
+          <SelectMenu id="st-tier" label="Default service tier" value={settings.defaultServiceTier ?? 'standard'} disabled={disabled} options={tiers.map((item) => ({ value: item.id, label: `${item.id === 'priority' ? 'Fast' : item.name}${item.id === (selectedModel?.defaultServiceTier ?? 'standard') ? ' · Default' : ''}`, description: item.description }))} onChange={(value) => void update({ defaultServiceTier: value }, 'tier')} />
+        </SettingRow>
         <div className="settings-page__section-head settings-page__section-head--next"><h2>Workspace & permissions</h2></div>
         <SettingRow title="Workspace" description="Use a separate Git worktree, or edit the existing project folder." htmlFor="st-workspace">
           <SelectMenu id="st-workspace" label="Default workspace" value={settings.defaultIsolated ? 'worktree' : 'project'} disabled={disabled} options={[{ value: 'worktree', label: 'Isolated worktree' }, { value: 'project', label: 'Project folder' }]} onChange={(value) => void update({ defaultIsolated: value === 'worktree' }, 'workspace')} />

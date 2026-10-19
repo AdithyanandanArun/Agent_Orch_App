@@ -6,9 +6,10 @@ import { cx } from '../lib/format';
 export interface SelectOption { value: string; label: string; group?: string; description?: string; disabled?: boolean }
 
 /** A compact choice control with a shared popover, keyboard navigation and viewport-aware placement. */
-export function SelectMenu({ id, label, value, onChange, options, disabled, className, placement = 'bottom', title, triggerRef }: {
+export function SelectMenu({ id, label, value, onChange, options, disabled, className, placement = 'bottom', title, triggerRef, displayValue, openRequest }: {
   id?: string; label: string; value: string; onChange: (value: string) => void; options: SelectOption[];
   disabled?: boolean; className?: string; placement?: 'top' | 'bottom'; title?: string; triggerRef?: Ref<HTMLButtonElement>;
+  displayValue?: string; openRequest?: number;
 }) {
   const listId = useId();
   const anchor = useRef<HTMLButtonElement>(null);
@@ -66,6 +67,7 @@ export function SelectMenu({ id, label, value, onChange, options, disabled, clas
   useEffect(() => {
     if (disabled) setOpen(false);
   }, [disabled]);
+  useEffect(() => { if (openRequest) { show(); anchor.current?.focus(); } }, [openRequest]);
   useLayoutEffect(() => {
     if (effectiveOpen && position) popup.current?.querySelector<HTMLElement>(`[data-option-index="${active}"]`)?.scrollIntoView({ block: 'nearest' });
   }, [active, effectiveOpen, position]);
@@ -106,7 +108,7 @@ export function SelectMenu({ id, label, value, onChange, options, disabled, clas
       className={cx('select-menu__trigger', className)} disabled={disabled} title={title}
       onKeyDown={keyDown} onBlur={(event) => { if (!popup.current?.contains(event.relatedTarget as Node | null)) setOpen(false); }}
       onClick={() => effectiveOpen ? setOpen(false) : show()}>
-      <span>{selected?.label ?? value}</span><ChevronDown size={12} aria-hidden="true" />
+      <span>{displayValue ?? selected?.label ?? value}</span><ChevronDown size={12} aria-hidden="true" />
     </button>
     {effectiveOpen ? createPortal(
       <div ref={popup} id={listId} role="listbox" aria-label={label} className="select-menu__popup"

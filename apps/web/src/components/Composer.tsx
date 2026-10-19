@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { ArrowUp, Square } from 'lucide-react';
 import type { ProviderModel, Session } from '@relay/contracts';
 import { useRelay } from '../store/store';
@@ -6,6 +6,10 @@ import { api, errorMessage, type ProviderCatalog, type SessionPatch } from '../l
 import { MOD, PROVIDER_NAME } from './ui';
 import { cx } from '../lib/format';
 import { SelectMenu } from './SelectMenu';
+
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const hasSkillMarker = (text: string, name: string) => new RegExp(`(?:^|\\s)\\$${escapeRegExp(name)}(?=\\s|$)`).test(text);
+const removeSkillMarker = (text: string, name: string) => text.replace(new RegExp(`(^|\\s)\\$${escapeRegExp(name)}(?=\\s|$)`, 'g'), '$1').replace(/[ \t]{2,}/g, ' ');
 
 export function Composer({ session }: { session: Session }) {
   const draft = useRelay((s) => s.drafts[session.id] ?? '');
@@ -22,19 +26,25 @@ export function Composer({ session }: { session: Session }) {
   const [activeSuggestion, setActiveSuggestion] = useState(0);
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const dismissedSuggestion = useRef<string | null>(null);
+  const caret = useRef(0);
+  const pickerId = useId();
+  const [modelOpenRequest, setModelOpenRequest] = useState(0);
+  const [policyOpenRequest, setPolicyOpenRequest] = useState(0);
+  const [reasoningOpenRequest, setReasoningOpenRequest] = useState(0);
   const modelControl = useRef<HTMLButtonElement>(null);
-  const effortControl = useRef<HTMLButtonElement>(null);
+  const reasoningControl = useRef<HTMLButtonElement>(null);
   const policyControl = useRef<HTMLButtonElement>(null);
-  const tierControl = useRef<HTMLButtonElement>(null);
 
+  const catalogKey = `${session.id}:${session.provider}:${session.model}:${session.providerSessionId ?? ''}`;
   useEffect(() => {
     const controller = new AbortController();
     setCatalog(null); setCatalogError(null);
+    setSuggestion(null); setSelectedSkills([]); dismissedSuggestion.current = null;
     void api.sessionCatalog(session.id, controller.signal).then(setCatalog).catch((cause) => {
       if (!controller.signal.aborted) setCatalogError(errorMessage(cause));
     });
     return () => controller.abort();
-  }, [session.id]);
+  }, [catalogKey]);
 
   useEffect(() => {
     const el = ref.current;
@@ -53,30 +63,44 @@ export function Composer({ session }: { session: Session }) {
   const empty = draft.trim().length === 0;
 
   const submit = async () => {
-    const local = /^\/(new|stop|settings|model|effort|permissions|tier|help)(?:\s.*)?$/i.exec(draft.trim());
+    const local = /^\/(new|stop|settings|model|effort|permissions|tier|skills|status|diff|help)(?:\s.*)?$/i.exec(draft.trim());
     if ((blocker && !local) || empty || sending || updating) return;
     setSending(true);
     setError(null);
+    let focusComposerAfter = true;
     try {
       if (local) {
         const action = local[1]!.toLowerCase();
         if (action === 'new') await useRelay.getState().createSession();
         if (action === 'stop') await api.interrupt(session.id);
         if (action === 'settings') useRelay.getState().openSettings();
-        if (action === 'model') modelControl.current?.focus();
-        if (action === 'effort') effortControl.current?.focus();
-        if (action === 'permissions') policyControl.current?.focus();
-        if (action === 'tier') tierControl.current?.focus();
+        if (action === 'model') { focusComposerAfter = false; setModelOpenRequest((value) => value + 1); }
+        if (action === 'effort' || action === 'tier') { focusComposerAfter = false; setReasoningOpenRequest((value) => value + 1); }
+        if (action === 'permissions') { focusComposerAfter = false; setPolicyOpenRequest((value) => value + 1); }
+        if (action === 'skills') {
+          caret.current = 1;
+          useRelay.getState().setDraft(session.id, '$');
+        }
+        if (action === 'diff') useRelay.getState().setContextTab('changes');
+        if (action === 'status') {
+          const currentTier = session.serviceTier ?? 'standard';
+          const tier = currentTier === 'standard' ? 'Standard' : currentTier === 'priority' ? 'Fast' : currentTier;
+          useRelay.getState().toast('info', `${PROVIDER_NAME[session.provider]} · ${session.model} · ${effortLabel(session.effort)} · ${tier}`);
+        }
         if (action === 'help') {
           const providerCommands = catalog?.commands.map((item) => `/${item.name}`).join(', ');
-          useRelay.getState().toast('info', `Commands: /new, /stop, /settings, /model, /effort, /permissions, /tier, /help${providerCommands ? `; provider: ${providerCommands}` : ''}.`);
+          useRelay.getState().toast('info', `Commands: /new, /stop, /settings, /model, /effort, /permissions, /tier, /skills, /status, /diff, /help${providerCommands ? `; provider: ${providerCommands}` : ''}.`);
         }
-        useRelay.getState().setDraft(session.id, '');
+        if (action !== 'skills') useRelay.getState().setDraft(session.id, '');
         setSelectedSkills([]);
         await useRelay.getState().refreshNow();
         return;
       }
-      await api.sendMessage(session.id, draft.trim(), selectedSkills);
+      const messageSkills = selectedSkills.filter((id) => {
+        const skill = catalog?.skills.find((item) => item.id === id && item.enabled);
+        return Boolean(skill && hasSkillMarker(draft, skill.name));
+      });
+      await api.sendMessage(session.id, draft.trim(), messageSkills);
       useRelay.getState().setDraft(session.id, '');
       setSelectedSkills([]);
       await useRelay.getState().refreshNow();
@@ -84,7 +108,7 @@ export function Composer({ session }: { session: Session }) {
       setError(errorMessage(e));
     } finally {
       setSending(false);
-      ref.current?.focus();
+      if (focusComposerAfter) ref.current?.focus();
     }
   };
 
@@ -122,7 +146,36 @@ export function Composer({ session }: { session: Session }) {
   const effortChoices = currentModel?.reasoningEfforts ?? (currentModel ? [
     { id: 'low', label: 'Low' }, { id: 'medium', label: 'Medium' }, { id: 'high', label: 'High' },
   ] : []);
-  const tierChoices = currentModel?.serviceTiers ?? [];
+  const tierChoices = [
+    { id: 'standard', name: 'Standard', description: 'Standard service tier.' },
+    ...(currentModel?.serviceTiers ?? []).filter((item) => item.id !== 'standard'),
+  ];
+  const effortLabel = (id: string) => {
+    const known: Record<string, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra High', 'extra-high': 'Extra High', max: 'Max', ultra: 'Ultra' };
+    return known[id.toLowerCase()] ?? effortChoices.find((item) => item.id === id)?.label ?? id[0]?.toUpperCase() + id.slice(1);
+  };
+  const effortDefault = currentModel?.defaultReasoningEffort;
+  const tierDefault = currentModel?.defaultServiceTier ?? 'standard';
+  const tierName = (id: string, name: string) => id === 'standard' ? 'Standard' : id === 'priority' ? 'Fast' : name;
+  const combinedOptions = [
+    ...effortChoices.map((item) => ({
+      value: `effort:${item.id}`,
+      label: `${effortLabel(item.id)}${item.id === effortDefault ? ' · Default' : ''}`,
+      description: item.description,
+      group: 'Reasoning effort',
+    })),
+    ...tierChoices.map((item) => ({
+      value: `tier:${item.id}`,
+      label: `${tierName(item.id, item.name)}${item.id === tierDefault ? ' · Default' : ''}`,
+      description: item.description,
+      group: 'Service tier',
+    })),
+  ];
+  const currentTier = session.serviceTier ?? 'standard';
+  const combinedValue = effortChoices.some((item) => item.id === session.effort)
+    ? `effort:${session.effort}` : `tier:${currentTier}`;
+  const selectedTier = tierChoices.find((item) => item.id === currentTier);
+  const combinedDisplay = `${effortLabel(session.effort)} · ${selectedTier ? tierName(selectedTier.id, selectedTier.name) : currentTier}`;
   const policyChoices = currentModel?.policies ?? currentProvider?.policies ?? [];
   const policyLabels: Record<string, [string, string]> = {
     supervised: ['Supervised', 'Ask before taking actions that change files or run commands.'],
@@ -130,25 +183,31 @@ export function Composer({ session }: { session: Session }) {
     auto: ['Auto', 'Allow common actions automatically with safety checks.'],
     'full-access': ['Full access', 'Allow all actions without approval prompts.'],
   };
-  const match = draft.match(/(?:^|\s)(\/[^\s]*|\$[^\s]*)$/);
+  const caretIndex = Math.min(caret.current, draft.length);
+  const beforeCaret = draft.slice(0, caretIndex);
+  const match = beforeCaret.match(/(?:^|\s)(\/[^\s]*|\$[^\s]*)$/);
   const trigger = match?.[1] ?? '';
-  const triggerStart = match ? draft.length - trigger.length : 0;
+  const triggerStart = match ? caretIndex - trigger.length : 0;
+  const reservedCommands = new Set(['new', 'stop', 'settings', 'model', 'effort', 'permissions', 'tier', 'skills', 'status', 'diff', 'help']);
   const suggestions = trigger.startsWith('/')
     ? [
       ...[
-        { name: 'new', description: 'Create a new session', kind: 'local' as const },
-        { name: 'stop', description: 'Interrupt the current run', kind: 'local' as const },
-        { name: 'settings', description: 'Open Settings', kind: 'local' as const },
-        { name: 'model', description: 'Focus model selection', kind: 'local' as const },
-        { name: 'effort', description: 'Focus effort selection', kind: 'local' as const },
-        { name: 'permissions', description: 'Focus approval policy', kind: 'local' as const },
-        { name: 'tier', description: 'Focus service tier', kind: 'local' as const },
-        { name: 'help', description: 'List Relay commands', kind: 'local' as const },
+        { name: 'new', description: 'Create a new session', kind: 'local' as const, group: 'Relay' },
+        { name: 'stop', description: 'Interrupt the current run', kind: 'local' as const, group: 'Relay' },
+        { name: 'settings', description: 'Open Settings', kind: 'local' as const, group: 'Relay' },
+        { name: 'model', description: 'Focus model selection', kind: 'local' as const, group: 'Relay' },
+        { name: 'effort', description: 'Focus effort selection', kind: 'local' as const, group: 'Relay' },
+        { name: 'permissions', description: 'Focus approval policy', kind: 'local' as const, group: 'Relay' },
+        { name: 'tier', description: 'Focus service tier', kind: 'local' as const, group: 'Relay' },
+        { name: 'skills', description: 'Choose skills for the next message', kind: 'local' as const, group: 'Relay' },
+        { name: 'status', description: 'Show current provider and settings', kind: 'local' as const, group: 'Relay' },
+        { name: 'diff', description: 'Open the Changes pane', kind: 'local' as const, group: 'Relay' },
+        { name: 'help', description: 'List Relay commands', kind: 'local' as const, group: 'Relay' },
       ].filter((item) => item.name.startsWith(trigger.slice(1).toLowerCase())),
-      ...(catalog?.commands ?? []).filter((item) => item.name.toLowerCase().startsWith(trigger.slice(1).toLowerCase())).map((item) => ({ name: item.name, description: item.description, kind: 'provider' as const, argumentHint: item.argumentHint })),
-    ].map((item) => ({ ...item, token: `/${item.name}` }))
+      ...(catalog?.commands ?? []).filter((item) => !reservedCommands.has(item.name.toLowerCase()) && item.name.toLowerCase().startsWith(trigger.slice(1).toLowerCase())).map((item) => ({ id: item.id, name: item.name, description: `${item.kind} · ${item.description}`, group: item.source[0]!.toUpperCase() + item.source.slice(1), kind: 'provider' as const, argumentHint: item.argumentHint })),
+    ].map((item) => ({ ...item, key: `${item.kind}:${'id' in item ? item.id : item.name}`, token: `/${item.name}` }))
     : trigger.startsWith('$') && catalog
-      ? catalog.skills.filter((item) => item.enabled && item.name.toLowerCase().startsWith(trigger.slice(1).toLowerCase())).map((item) => ({ name: item.name, description: item.description, kind: 'skill' as const, token: `$${item.name}`, id: item.id }))
+      ? catalog.skills.filter((item) => item.enabled && item.name.toLowerCase().startsWith(trigger.slice(1).toLowerCase())).map((item) => ({ name: item.name, description: item.description, group: item.source[0]!.toUpperCase() + item.source.slice(1), kind: 'skill' as const, token: `$${item.name}`, id: item.id, key: `skill:${item.id}` }))
       : [];
   useEffect(() => {
     if (trigger !== dismissedSuggestion.current) dismissedSuggestion.current = null;
@@ -163,8 +222,18 @@ export function Composer({ session }: { session: Session }) {
   const chooseSuggestion = (index: number) => {
     const item = suggestions[index];
     if (!item) return;
-    const text = draft.slice(0, triggerStart) + item.token + (item.kind === 'provider' && item.argumentHint ? ` ${item.argumentHint}` : ' ');
+    let prefix = draft.slice(0, triggerStart);
+    let suffix = draft.slice(caretIndex);
+    if (item.kind === 'skill' && session.provider === 'claude') {
+      for (const id of selectedSkills) {
+        const prior = catalog?.skills.find((skill) => skill.id === id);
+        if (prior) { prefix = removeSkillMarker(prefix, prior.name); suffix = removeSkillMarker(suffix, prior.name); }
+      }
+    }
+    const text = `${prefix}${item.token} ${suffix}`;
+    const nextCaret = prefix.length + item.token.length + 1;
     useRelay.getState().setDraft(session.id, text);
+    caret.current = nextCaret;
     setSuggestion(null);
     dismissedSuggestion.current = null;
     if (item.kind === 'skill' && 'id' in item) setSelectedSkills((current) => {
@@ -172,8 +241,11 @@ export function Composer({ session }: { session: Session }) {
       if (session.provider === 'claude' && current.length && !current.includes(item.id)) useRelay.getState().toast('info', 'Claude supports one selected skill per message; the latest choice replaced the previous one.');
       return next;
     });
-    requestAnimationFrame(() => { const input = ref.current; input?.focus(); input?.setSelectionRange(text.length, text.length); });
+    requestAnimationFrame(() => { const input = ref.current; input?.focus(); input?.setSelectionRange(nextCaret, nextCaret); });
   };
+  useEffect(() => {
+    document.getElementById(`${pickerId}-option-${activeSuggestion}`)?.scrollIntoView({ block: 'nearest' });
+  }, [activeSuggestion, pickerId, suggestion]);
   const modelOptions = modelGroups.flatMap((p) => {
     return p.models.map((m) => ({ value: JSON.stringify([p.id, m.id]), label: m.name, group: p.name }));
   });
@@ -184,8 +256,21 @@ export function Composer({ session }: { session: Session }) {
         <label htmlFor={`composer-${session.id}`} className="sr-only">Message {session.name}</label>
         <textarea
           id={`composer-${session.id}`} ref={ref} className="composer__input" rows={1} value={draft}
+          role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded={Boolean(suggestion && suggestions.length)}
+          aria-controls={suggestion && suggestions.length ? pickerId : undefined}
+          aria-activedescendant={suggestion && suggestions.length ? `${pickerId}-option-${activeSuggestion}` : undefined}
           placeholder="Ask anything, or describe a task…"
-          onChange={(e) => useRelay.getState().setDraft(session.id, e.target.value)}
+          onChange={(e) => {
+            const nextDraft = e.target.value;
+            caret.current = e.target.selectionStart ?? nextDraft.length;
+            useRelay.getState().setDraft(session.id, nextDraft);
+            setSelectedSkills((current) => current.filter((id) => {
+              const skill = catalog?.skills.find((item) => item.id === id);
+              return Boolean(skill && hasSkillMarker(nextDraft, skill.name));
+            }));
+          }}
+          onSelect={(e) => { caret.current = e.currentTarget.selectionStart ?? 0; }}
+          onBlur={() => setSuggestion(null)}
           onKeyDown={(e) => {
             if (suggestion && suggestions.length && !e.nativeEvent.isComposing) {
               if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); setActiveSuggestion((i) => (i + (e.key === 'ArrowDown' ? 1 : -1) + suggestions.length) % suggestions.length); return; }
@@ -195,29 +280,30 @@ export function Composer({ session }: { session: Session }) {
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void submit(); }
           }}
         />
-        {suggestion && suggestions.length ? <div className="composer-picker" role="listbox" aria-label={suggestion.kind === 'skill' ? 'Skills' : 'Commands'}>
-          {suggestions.slice(0, 10).map((item, index) => <button type="button" role="option" aria-selected={index === activeSuggestion} key={`${item.kind}:${item.token}`} className={cx('composer-picker__item', index === activeSuggestion && 'is-active')} onMouseDown={(event) => event.preventDefault()} onClick={() => chooseSuggestion(index)}>
-            <span className="composer-picker__name">{item.token}{item.kind === 'provider' && item.argumentHint ? <small> {item.argumentHint}</small> : null}</span><span className="composer-picker__description">{item.description}</span>
-          </button>)}
+        {suggestion && suggestions.length ? <div className="composer-picker" id={pickerId} role="listbox" aria-label={suggestion.kind === 'skill' ? 'Skills' : 'Commands'}>
+          {suggestions.map((item, index) => <div key={item.key}>
+            {index === 0 || suggestions[index - 1]?.group !== item.group ? <div className="composer-picker__group" role="presentation">{item.group}</div> : null}
+            <div role="option" id={`${pickerId}-option-${index}`} aria-selected={index === activeSuggestion} className={cx('composer-picker__item', index === activeSuggestion && 'is-active')} onMouseDown={(event) => event.preventDefault()} onMouseMove={() => setActiveSuggestion(index)} onClick={() => chooseSuggestion(index)}>
+              <span className="composer-picker__name">{item.token}{item.kind === 'provider' && item.argumentHint ? <small> {item.argumentHint}</small> : null}</span><span className="composer-picker__description">{item.description}</span>
+            </div>
+          </div>)}
         </div> : null}
+        {trigger.startsWith('$') && !suggestions.length && !catalogError ? <div className="composer-picker-empty" role="status">{!catalog ? 'Loading skills…' : catalog.skills.some((item) => item.enabled) ? 'No matching skills.' : 'No skills are available for this provider and session.'}</div> : null}
         <div className="composer__bar">
           <div className="composer__controls" aria-busy={updating}>
-            <SelectMenu triggerRef={modelControl} className="composer__select composer__select--model" label="Model"
+            <SelectMenu triggerRef={modelControl} openRequest={modelOpenRequest} className="composer__select composer__select--model" label="Model"
               value={JSON.stringify([session.provider, selectedModelId])} disabled={disabled || modelOptions.length === 0}
               options={modelOptions} placement="top"
               onChange={(value) => {
                 const [provider, model] = JSON.parse(value) as [Session['provider'], string];
                 void configure({ provider, model });
               }} />
-            {effortChoices.length ? <SelectMenu triggerRef={effortControl} className="composer__select" label="Effort" value={session.effort} disabled={disabled}
-              options={effortChoices.map((item) => ({ value: item.id, label: item.label, description: item.description }))}
-              onChange={(value) => void configure({ effort: value as Session['effort'] })} placement="top" /> : null}
-            <SelectMenu triggerRef={policyControl} className="composer__select composer__select--policy" label="Approval policy" value={session.policy} disabled={disabled || policyChoices.length === 0}
+            <SelectMenu triggerRef={reasoningControl} className="composer__select" label="Reasoning effort and service tier" value={combinedValue} displayValue={combinedDisplay} openRequest={reasoningOpenRequest} disabled={disabled}
+              options={combinedOptions}
+              onChange={(value) => { const [kind, option] = value.split(':'); if (kind === 'effort') void configure({ effort: option }); else if (kind === 'tier') void configure({ serviceTier: option }); }} placement="top" />
+            <SelectMenu triggerRef={policyControl} openRequest={policyOpenRequest} className="composer__select composer__select--policy" label="Approval policy" value={session.policy} disabled={disabled || policyChoices.length === 0}
               options={policyChoices.map((value) => ({ value, label: policyLabels[value]?.[0] ?? value, description: policyLabels[value]?.[1] }))}
               onChange={(value) => void configure({ policy: value as Session['policy'] })} placement="top" />
-            {currentModel?.serviceTiers?.length ? <SelectMenu triggerRef={tierControl} className="composer__select" label="Service tier" value={session.serviceTier ?? 'standard'} disabled={disabled}
-              options={tierChoices.map((item) => ({ value: item.id, label: item.name, description: item.description }))}
-              onChange={(value) => void configure({ serviceTier: value })} placement="top" /> : null}
           </div>
           <div className="composer__send">
             {running ? (
@@ -233,7 +319,8 @@ export function Composer({ session }: { session: Session }) {
       {blocker || error ? (
         <p className={cx('composer__note', error && 'is-error')} role={error ? 'alert' : 'status'}>{error ?? blocker}{!error && provider && !provider.available ? <> <button type="button" className="link-btn" onClick={() => useRelay.getState().openDialog({ kind: 'settings' })}>Open Settings</button></> : null}</p>
       ) : null}
-      {catalogError ? <p className="composer__note" role="status">Command and skill suggestions unavailable: {catalogError}</p> : catalog?.warnings.map((warning, index) => <p className="composer__note" role="status" key={`${index}:${warning}`}>{warning}</p>)}
+      {catalogError && (trigger.startsWith('/') || trigger.startsWith('$')) ? <p className="composer__note" role="status">Command and skill suggestions unavailable: {catalogError}</p> : null}
+      {catalog?.warnings.length && (suggestion || trigger.startsWith('/') || trigger.startsWith('$')) ? <details className="composer__catalog-note"><summary>{catalog.warnings.length} command or skill source{catalog.warnings.length === 1 ? '' : 's'} unavailable</summary><ul>{catalog.warnings.map((warning, index) => <li key={`${index}:${warning}`}>{warning}</li>)}</ul></details> : null}
     </div>
   );
 }
