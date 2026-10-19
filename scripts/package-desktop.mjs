@@ -1,7 +1,7 @@
 import { build } from 'esbuild';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { access, chmod, copyFile, cp, mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { access, chmod, copyFile, cp, mkdir, readdir, readFile, readlink, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 import { dirname, join, resolve, delimiter } from 'node:path';
@@ -10,6 +10,8 @@ import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const require = createRequire(new URL('../apps/desktop/package.json', import.meta.url));
 const pkg = JSON.parse(await readFile(join(root, 'apps/desktop/package.json'), 'utf8'));
+const serverPackage = JSON.parse(await readFile(join(root, 'apps/server/package.json'), 'utf8'));
+if (pkg.version !== serverPackage.version) throw new Error('Desktop and server versions must match before packaging.');
 const runtime = JSON.parse(await readFile(join(root, 'packaging/node-runtime.json'), 'utf8'));
 const target = `${process.platform}-${process.arch}`;
 if (target !== 'linux-x64') throw new Error('Desktop release packaging currently supports Linux x86-64 only. Build on a Linux x86-64 machine.');
@@ -83,7 +85,14 @@ async function removeBrokenLinks(directory) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name);
     if (entry.isSymbolicLink()) {
-      if (!(await present(path))) await rm(path);
+      if (!(await present(path))) {
+        if (!(await readlink(path)).includes('claude-agent-sdk-linux-')) throw new Error(`Broken runtime dependency link: ${path}`);
+        await rm(path);
+      } else {
+        const resolved = await realpath(path);
+        const boundary = resolve(server) + '/';
+        if (!resolved.startsWith(boundary)) throw new Error(`Runtime dependency escapes the release directory: ${path}`);
+      }
     } else if (entry.isDirectory()) await removeBrokenLinks(path);
   }
 }

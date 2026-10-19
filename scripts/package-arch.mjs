@@ -27,7 +27,7 @@ await writeFile(join(build, 'PKGBUILD'), recipe);
 // Only package already-built files. Runtime dependencies are recorded, without installing anything on the builder.
 await writeFile(join(build, 'makepkg.conf'), 'source /etc/makepkg.conf\nPKGEXT=".pkg.tar.zst"\nCOMPRESSZST=(zstd -c -T2 -6 -)\n');
 await new Promise((resolvePromise, reject) => {
-  const child = spawn('makepkg', ['--config', join(build, 'makepkg.conf'), '--nodeps', '--noconfirm'], {
+  const child = spawn('makepkg', ['--config', join(build, 'makepkg.conf'), '--nodeps', '--noconfirm', '--force'], {
     cwd: build, stdio: 'inherit', env: { ...process.env, PKGDEST: release },
   });
   child.once('error', reject);
