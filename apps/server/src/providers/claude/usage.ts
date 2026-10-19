@@ -31,7 +31,7 @@ function timestamp(value: unknown): string | null {
 }
 
 function finitePercent(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
 function makeWindow(
@@ -68,7 +68,7 @@ function nativeWindows(response: SDKControlGetUsageResponse): { windows: UsageWi
   add(makeWindow('seven_day_opus', '7-day Opus', 'Opus', 7 * 24 * 60, limits.seven_day_opus));
   add(makeWindow('seven_day_sonnet', '7-day Sonnet', 'Sonnet', 7 * 24 * 60, limits.seven_day_sonnet));
   if (limits.extra_usage !== undefined && limits.extra_usage !== null) {
-    add(makeWindow('extra_usage', 'Extra usage', undefined, null, limits.extra_usage));
+    add(makeWindow('extra_usage', limits.extra_usage.is_enabled === false ? 'Extra usage (disabled)' : 'Extra usage', undefined, null, limits.extra_usage));
   }
 
   const scoped = Array.isArray(limits.model_scoped) ? limits.model_scoped : [];
@@ -113,7 +113,7 @@ export async function getClaudeUsage(session: Session, settings: AppSettings): P
       return getUsage.call(activeQuery, { skipBehaviors: true });
     });
 
-    const { windows, omittedScoped } = nativeWindows(response);
+    const { windows, omittedScoped } = response.rate_limits_available === true ? nativeWindows(response) : { windows: [], omittedScoped: false };
     const hasExtraUsage = response.rate_limits?.extra_usage !== undefined && response.rate_limits?.extra_usage !== null;
     const rateLimitsAvailable = response.rate_limits_available === true;
     const hasNativeLimits = rateLimitsAvailable && windows.some((window) => window.usedPercent !== null || window.resetAt !== null);
@@ -135,7 +135,7 @@ export async function getClaudeUsage(session: Session, settings: AppSettings): P
     return {
       provider: 'claude',
       fetchedAt: new Date().toISOString(),
-      status: hasNativeLimits ? 'available' : 'partial',
+      status: hasNativeLimits ? 'available' : plan || rateLimitsAvailable ? 'partial' : 'unavailable',
       plan,
       windows,
       credits: null,

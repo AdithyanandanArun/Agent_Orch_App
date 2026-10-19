@@ -1,9 +1,11 @@
-import type { AgentAdapter, AppSettings, Provider, ProviderCatalog, ProviderInfo, Session } from '@relay/contracts';
+import type { AgentAdapter, AppSettings, Provider, ProviderCatalog, ProviderInfo, ProviderUsage, Session } from '@relay/contracts';
 import { createClaudeAdapter } from './claude/adapter.js';
 import { createCodexAdapter } from './codex/adapter.js';
 import { detectProviders as detect } from './detect.js';
 import { getCodexCatalog } from './codex/catalog.js';
 import { getClaudeCatalog } from './claude/catalog.js';
+import { getCodexUsage } from './codex/usage.js';
+import { getClaudeUsage } from './claude/usage.js';
 
 export type { AdapterEvent, AgentAdapter, RunOptions } from '@relay/contracts';
 export { CLAUDE_DEFAULT_MODEL, CODEX_DEFAULT_MODEL } from './detect.js';
@@ -26,4 +28,9 @@ export function detectProviders(settings: AppSettings): Promise<ProviderInfo[]> 
 /** Native catalog metadata only: no prompt or model turn is submitted. */
 export function getCatalog(session: Session, settings: AppSettings): Promise<ProviderCatalog> {
   return session.provider === 'codex' ? getCodexCatalog(session, settings) : getClaudeCatalog(session, settings);
+}
+
+/** Read account quota metadata without inference, credential extraction, or spending reset credits. */
+export function getUsage(session: Session, settings: AppSettings): Promise<ProviderUsage> {
+  return session.provider === 'codex' ? getCodexUsage(session, settings) : getClaudeUsage(session, settings);
 }
