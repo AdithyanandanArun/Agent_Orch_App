@@ -30,7 +30,7 @@ function gitEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
-export interface GitOptions { timeoutMs?: number; allowFailure?: boolean; maxBuffer?: number; extraConfig?: string[]; stdin?: string }
+export interface GitOptions { timeoutMs?: number; allowFailure?: boolean; maxBuffer?: number; extraConfig?: string[]; stdin?: string | Buffer }
 
 /** Runs git with an argv array (never through a shell) and repository-config command execution hooks disabled. */
 export function git(cwd: string, args: string[], options: GitOptions = {}): Promise<GitResult> {
