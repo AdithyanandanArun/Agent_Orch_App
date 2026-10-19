@@ -64,7 +64,10 @@ export function Composer({ session }: { session: Session }) {
   }, [draft, session.id]);
   useEffect(() => { setError(null); }, [session.id]);
   useEffect(() => { setUsageOpen(false); }, [session.id, session.provider, session.model]);
-  const closeUsage = useCallback(() => setUsageOpen(false), []);
+  const closeUsage = useCallback(() => {
+    setUsageOpen(false);
+    window.requestAnimationFrame(() => ref.current?.focus());
+  }, []);
 
   const running = session.status === 'running' || session.status === 'waiting';
   const blocker =

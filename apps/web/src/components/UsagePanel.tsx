@@ -151,7 +151,6 @@ function Dialog({ session, onClose }: { session: Session; onClose: () => void })
   }, []);
 
   useEffect(() => {
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     closeRef.current?.focus();
     const keyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') { event.preventDefault(); onClose(); return; }
@@ -166,7 +165,6 @@ function Dialog({ session, onClose }: { session: Session; onClose: () => void })
     document.addEventListener('keydown', keyDown);
     return () => {
       document.removeEventListener('keydown', keyDown);
-      window.requestAnimationFrame(() => { if (previous?.isConnected) previous.focus(); });
     };
   }, [onClose]);
 
