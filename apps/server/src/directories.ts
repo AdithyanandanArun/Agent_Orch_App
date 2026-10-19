@@ -122,7 +122,7 @@ export class DirectoryService {
     const inHome = relativeHome === '' || relativeHome !== '..' && !relativeHome.startsWith(`..${path.sep}`) && !path.isAbsolute(relativeHome);
     const displayPath = inHome ? `~${path.sep}${relativeHome}${relativeHome ? path.sep : ''}` : real.endsWith(path.sep) ? real : real + path.sep;
     return { path: real, displayPath, parentPath: parent === real ? null : parent, homePath: home, separator: path.sep, platform: process.platform,
-      directories, roots: await this.roots(home), canSelect: exact && parent !== real, truncated };
+      directories, roots: await this.roots(home), canSelect: exact && parent !== real, canCreateWithin: exact, truncated };
   }
 
   async reveal(input: string): Promise<{ ok: true }> {
