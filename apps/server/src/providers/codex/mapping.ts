@@ -8,6 +8,7 @@ import { describeValue, isRecord, truncate, truncateTail } from '../common.js';
  */
 export interface CodexPolicy {
   approvalPolicy: 'on-request' | 'never';
+  approvalsReviewer: 'auto_review' | 'user';
   sandbox: 'read-only' | 'workspace-write' | 'danger-full-access';
   sandboxPolicy: { type: 'readOnly' } | { type: 'workspaceWrite'; writableRoots: string[]; networkAccess: boolean } | { type: 'dangerFullAccess' };
 }
@@ -15,19 +16,20 @@ export interface CodexPolicy {
 /** Map Relay policies directly to app-server policy values; no policy is silently downgraded. */
 export function codexPolicy(policy: Policy, worktreePath: string): CodexPolicy {
   if (policy === 'full-access') {
-    return { approvalPolicy: 'never', sandbox: 'danger-full-access', sandboxPolicy: { type: 'dangerFullAccess' } };
+    return { approvalPolicy: 'never', approvalsReviewer: 'user', sandbox: 'danger-full-access', sandboxPolicy: { type: 'dangerFullAccess' } };
   }
   if (policy === 'auto') {
-    return { approvalPolicy: 'never', sandbox: 'workspace-write', sandboxPolicy: { type: 'workspaceWrite', writableRoots: [resolve(worktreePath)], networkAccess: false } };
+    return { approvalPolicy: 'on-request', approvalsReviewer: 'auto_review', sandbox: 'workspace-write', sandboxPolicy: { type: 'workspaceWrite', writableRoots: [resolve(worktreePath)], networkAccess: false } };
   }
   if (policy === 'balanced') {
     return {
       approvalPolicy: 'on-request',
+      approvalsReviewer: 'user',
       sandbox: 'workspace-write',
       sandboxPolicy: { type: 'workspaceWrite', writableRoots: [resolve(worktreePath)], networkAccess: false },
     };
   }
-  return { approvalPolicy: 'on-request', sandbox: 'read-only', sandboxPolicy: { type: 'readOnly' } };
+  return { approvalPolicy: 'on-request', approvalsReviewer: 'user', sandbox: 'read-only', sandboxPolicy: { type: 'readOnly' } };
 }
 
 export interface ApprovalPrompt { tool: string; description: string; input: Record<string, unknown> }

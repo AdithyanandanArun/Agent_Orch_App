@@ -209,7 +209,7 @@ class CodexRun {
     const { session } = this.options;
     const policy = codexPolicy(session.policy, session.worktreePath);
     const serviceTier = session.serviceTier && session.serviceTier !== 'standard' ? session.serviceTier : null;
-    const common = { model: session.model, cwd: session.worktreePath, approvalPolicy: policy.approvalPolicy, sandbox: policy.sandbox, serviceTier };
+    const common = { model: session.model, cwd: session.worktreePath, approvalPolicy: policy.approvalPolicy, approvalsReviewer: policy.approvalsReviewer, sandbox: policy.sandbox, serviceTier };
     const catalog = parseCodexModels(await this.conn.request('model/list', { limit: 200, includeHidden: false }, this.ctx.timeouts.threadMs));
     const model = catalog.find((candidate) => candidate.id === session.model);
     const effortError = validateCodexEffort(model, session.effort);
@@ -251,7 +251,7 @@ class CodexRun {
     if (this.abortRequested) throw abortError();
     const request = this.conn.request('turn/start', {
       threadId: this.threadId, input: [{ type: 'text', text: prompt, text_elements: [] }, ...skillInputs], cwd: session.worktreePath,
-      model: session.model, effort: session.effort, serviceTier, approvalPolicy: policy.approvalPolicy, sandboxPolicy: policy.sandboxPolicy,
+      model: session.model, effort: session.effort, serviceTier, approvalPolicy: policy.approvalPolicy, approvalsReviewer: policy.approvalsReviewer, sandboxPolicy: policy.sandboxPolicy,
     }, this.ctx.timeouts.turnStartMs);
     request.then((result) => {
       const turn = isRecord(result) && isRecord(result.turn) ? result.turn : null;

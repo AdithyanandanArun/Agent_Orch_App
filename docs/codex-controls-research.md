@@ -4,18 +4,18 @@ Checked against Codex CLI `0.160.1` and the JSON schema generated for that insta
 
 ## Permission policies
 
-`thread/start` and `thread/resume` accept `approvalPolicy` and a sandbox mode. `turn/start` accepts an `approvalPolicy` override and a typed `sandboxPolicy`. The native schemas advertise `read-only`, `workspace-write`, and `danger-full-access`, and approval values include `on-request` and `never`.
+`thread/start` and `thread/resume` accept `approvalPolicy`, `approvalsReviewer`, and a sandbox mode. `turn/start` accepts `approvalPolicy` and `approvalsReviewer` overrides plus a typed `sandboxPolicy`. The native schemas advertise `read-only`, `workspace-write`, and `danger-full-access`; approval values include `on-request` and `never`; reviewer values include `user` and `auto_review`.
 
 Relay maps its choices directly:
 
-| Relay policy | Approval | Sandbox |
-| --- | --- | --- |
-| `supervised` | `on-request` | read-only |
-| `balanced` | `on-request` | workspace-write, session root only, network disabled |
-| `auto` | `never` | workspace-write, session root only, network disabled |
-| `full-access` | `never` | danger-full-access |
+| Relay policy | Approval | Reviewer | Sandbox |
+| --- | --- | --- | --- |
+| `supervised` | `on-request` | `user` | read-only |
+| `balanced` | `on-request` | `user` | workspace-write, session root only, network disabled |
+| `auto` | `on-request` | `auto_review` | workspace-write, session root only, network disabled |
+| `full-access` | `never` | `user` | danger-full-access |
 
-Approval requests from the app-server continue through Relay's existing host approval callback. A native policy value is not replaced with a weaker policy when unsupported: request failures surface as provider errors.
+Auto review is the native reviewer selected by Codex for approval requests; Relay does not disable the request path. Any app-server approval request that reaches the client still goes through Relay's existing host approval callback, which remains fail-closed. The other Relay policies explicitly select the user reviewer so an inherited app-server default cannot silently enable auto review. A native policy value is not replaced with a weaker policy when unsupported: request failures surface as provider errors.
 
 ## Models, effort and service tier
 
