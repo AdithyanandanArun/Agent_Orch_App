@@ -5,6 +5,7 @@ import { useRelay } from '../store/store';
 import { api, errorMessage, type SessionPatch } from '../lib/api';
 import { MOD, PROVIDER_NAME } from './ui';
 import { cx } from '../lib/format';
+import { SelectMenu } from './SelectMenu';
 
 export function Composer({ session }: { session: Session }) {
   const draft = useRelay((s) => s.drafts[session.id] ?? '');
@@ -75,7 +76,14 @@ export function Composer({ session }: { session: Session }) {
   };
   const disabled = running || sending || updating || connection !== 'online';
   const modelGroups = (providers ?? []).filter((p) => !session.providerSessionId || p.id === session.provider);
-  const controlsTitle = running ? 'Available after the current run finishes' : 'Applies to the next message';
+  const modelOptions = modelGroups.flatMap((p) => {
+    const models = p.id === session.provider && !p.models.some((m) => m.id === session.model)
+      ? [{ id: session.model, name: session.model }, ...p.models] : p.models;
+    return models.map((m) => ({ value: JSON.stringify([p.id, m.id]), label: m.name, group: p.name }));
+  });
+  if (!modelGroups.some((p) => p.id === session.provider)) {
+    modelOptions.unshift({ value: JSON.stringify([session.provider, session.model]), label: session.model, group: PROVIDER_NAME[session.provider] });
+  }
 
   return (
     <div className="composer-wrap">
@@ -91,31 +99,22 @@ export function Composer({ session }: { session: Session }) {
         />
         <div className="composer__bar">
           <div className="composer__controls" aria-busy={updating}>
-            <select className="select composer__select composer__select--model" aria-label="Session model" title={controlsTitle}
+            <SelectMenu className="composer__select composer__select--model" label="Model"
               value={JSON.stringify([session.provider, session.model])} disabled={disabled}
-              onChange={(e) => {
-                const [provider, model] = JSON.parse(e.target.value) as [Session['provider'], string];
+              options={modelOptions} placement="top"
+              onChange={(value) => {
+                const [provider, model] = JSON.parse(value) as [Session['provider'], string];
                 void configure({ provider, model });
-              }}>
-              {modelGroups.map((p) => {
-                const models = p.id === session.provider && !p.models.some((m) => m.id === session.model)
-                  ? [{ id: session.model, name: session.model }, ...p.models] : p.models;
-                return <optgroup key={p.id} label={p.name}>{models.map((m) => <option key={m.id} value={JSON.stringify([p.id, m.id])}>{m.name}</option>)}</optgroup>;
-              })}
-              {!modelGroups.some((p) => p.id === session.provider) ? <option value={JSON.stringify([session.provider, session.model])}>{session.model}</option> : null}
-            </select>
-            <select className="select composer__select" aria-label="Reasoning effort" title={controlsTitle} value={session.effort} disabled={disabled}
-              onChange={(e) => void configure({ effort: e.target.value as Session['effort'] })}>
-              <option value="low">Low effort</option><option value="medium">Medium effort</option><option value="high">High effort</option>
-            </select>
+              }} />
+            <SelectMenu className="composer__select" label="Effort" value={session.effort} disabled={disabled}
+              options={[{ value: 'low', label: 'Low' }, { value: 'medium', label: 'Medium' }, { value: 'high', label: 'High' }]}
+              onChange={(value) => void configure({ effort: value as Session['effort'] })} placement="top" />
             <details className="composer__details">
               <summary aria-label="Session options" title="Session options"><MoreHorizontal size={15} /></summary>
               <div className="composer__options">
-                <label htmlFor={`policy-${session.id}`}>Approval policy</label>
-                <select id={`policy-${session.id}`} className="select" value={session.policy} disabled={disabled}
-                  onChange={(e) => void configure({ policy: e.target.value as Session['policy'] })}>
-                  <option value="supervised">Supervised</option><option value="balanced">Balanced</option>
-                </select>
+                <SelectMenu className="composer__select composer__select--policy" label="Approval policy" value={session.policy} disabled={disabled}
+                  options={[{ value: 'supervised', label: 'Supervised' }, { value: 'balanced', label: 'Balanced' }]}
+                  onChange={(value) => void configure({ policy: value as Session['policy'] })} placement="top" />
               </div>
             </details>
           </div>
