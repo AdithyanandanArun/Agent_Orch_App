@@ -85,7 +85,7 @@ function validateProjectName(value: string): string {
 
 async function canonicalParent(value: string): Promise<string> {
   if (!value || value.length > 4096 || /[\u0000-\u001f\u007f]/u.test(value)) throw badRequest('Parent folder must be a valid path of at most 4096 characters');
-  let requested = value.trim();
+  let requested = value;
   if (requested === '~') requested = os.homedir();
   else if (path.sep === '/' && requested.startsWith('~/')) {
     const remainder = requested.slice(2);
