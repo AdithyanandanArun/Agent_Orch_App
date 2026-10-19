@@ -27,6 +27,7 @@
 .project-picker__roots select { max-width: 180px; padding: 3px 6px; color: var(--fg-1); border: 1px solid var(--line-soft); background: var(--bg-panel); border-radius: 5px; font-size: var(--text-xs); }
 .project-picker__form-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 8px 0 11px; }
 .project-picker__field { display: grid; gap: 5px; color: var(--fg-2); font-size: var(--text-xs); }
+.project-picker__field small { color: var(--fg-3); font-size: var(--text-xs); line-height: 1.4; }
 .project-picker__field input { min-width: 0; }
 .project-picker__search { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 9px; margin: 2px 0 8px; color: var(--fg-3); border: 1px solid var(--line-soft); background: var(--bg-inset); border-radius: 6px; }
 .project-picker__search input { min-width: 0; flex: 1; padding: 0; border: 0; outline: 0; background: transparent; color: var(--fg-0); font-size: var(--text-sm); }
