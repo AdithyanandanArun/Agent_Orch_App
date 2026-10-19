@@ -41,7 +41,7 @@ function makeWindow(
   windowMinutes: number | null,
   value: { utilization?: unknown; resets_at?: unknown } | null | undefined,
 ): UsageWindow | null {
-  if (value === undefined) return null;
+  if (value === undefined || value === null) return null;
   const usedPercent = finitePercent(value?.utilization);
   return {
     id,
@@ -114,8 +114,8 @@ export async function getClaudeUsage(session: Session, settings: AppSettings): P
     });
 
     const { windows, omittedScoped } = response.rate_limits_available === true ? nativeWindows(response) : { windows: [], omittedScoped: false };
-    const hasExtraUsage = response.rate_limits?.extra_usage !== undefined && response.rate_limits?.extra_usage !== null;
     const rateLimitsAvailable = response.rate_limits_available === true;
+    const hasExtraUsage = rateLimitsAvailable && response.rate_limits?.extra_usage !== undefined && response.rate_limits?.extra_usage !== null;
     const hasNativeLimits = rateLimitsAvailable && windows.some((window) => window.usedPercent !== null || window.resetAt !== null);
     const notices: string[] = [];
     if (!rateLimitsAvailable) {

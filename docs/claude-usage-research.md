@@ -8,7 +8,7 @@ The SDK exposes `/usage` through `Query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_REL
 
 The response includes `subscription_type`, `rate_limits_available`, and optional `rate_limits`. Relay maps the SDK's five-hour, seven-day, OAuth-app, Opus, Sonnet, and per-model weekly utilization rows directly to usage windows. It preserves finite utilization values, including values above 100, and computes remaining percentage as `max(0, 100 - used)`; it never reports negative remaining capacity. Reset fields accept the SDK's documented ISO string and normalize numeric epoch values if a runtime version returns them.
 
-The SDK says rate limits are unavailable when they do not apply to the session, including API-key and third-party provider sessions, or when required profile scope is missing. Relay returns `partial` with null plan-limit data and a notice in those cases. It does not turn unavailable limits into zero usage.
+The SDK says rate limits are unavailable when they do not apply to the session, including API-key and third-party provider sessions, or when required profile scope is missing. Relay returns `partial` when plan metadata is still available, otherwise `unavailable`, with no plan-limit rows and a notice. It does not turn unavailable limits into zero usage. Optional null windows are omitted rather than presented as additional applicable limits.
 
 ## Credits and resets
 

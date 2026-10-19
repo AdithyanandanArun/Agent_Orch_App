@@ -27,7 +27,7 @@ function localDate(value: string | null, now: number): { exact: string; relative
 }
 
 function percent(value: number | null): string {
-  return value === null ? 'Not reported' : `${Math.round(value)}%`;
+  return value === null ? 'Not reported' : `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(value)}%`;
 }
 
 function tokenCount(value: number): string {
@@ -53,7 +53,7 @@ function LimitWindow({ item, now }: { item: UsageWindow; now: number }) {
       <span><strong>{percent(item.usedPercent)}</strong> used</span>
       <span><strong>{percent(item.remainingPercent)}</strong> left</span>
     </div>
-    <div className="usage-window__track" role="meter" aria-label={`${item.label} used`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={meterPercent ?? undefined}>
+    <div className="usage-window__track" role={meterPercent === null ? undefined : 'meter'} aria-label={`${item.label} used`} aria-valuemin={meterPercent === null ? undefined : 0} aria-valuemax={meterPercent === null ? undefined : 100} aria-valuenow={meterPercent ?? undefined} aria-valuetext={meterPercent === null ? undefined : `${percent(item.usedPercent)} used`}>
       {meterPercent !== null ? <span style={{ width: `${meterPercent}%` }} /> : null}
     </div>
     <div className="usage-window__reset"><span>Resets</span>{item.resetAt ? <DateValue value={item.resetAt} now={now} passedLabel="Reset time passed—refresh" /> : <span className="usage__unknown">Timing not reported</span>}</div>
@@ -63,20 +63,20 @@ function LimitWindow({ item, now }: { item: UsageWindow; now: number }) {
 function CreditDetails({ usage, now }: { usage: SessionUsage; now: number }) {
   const credits = usage.credits;
   if (!credits) return <p className="usage__unknown">Credit balance not reported.</p>;
-  return <div className="usage__facts">
+  return <dl className="usage__facts">
     <div><dt>Balance</dt><dd>{credits.unlimited === true ? 'Unlimited' : credits.balance === null ? 'Not reported' : `${credits.balance}${credits.unit ? ` ${credits.unit}` : ''}`}</dd></div>
     {credits.resetAt ? <div><dt>Credit reset</dt><dd><DateValue value={credits.resetAt} now={now} passedLabel="Reset time passed—refresh" /></dd></div> : null}
-  </div>;
+  </dl>;
 }
 
 function ResetDetails({ usage, now }: { usage: SessionUsage; now: number }) {
   const resets = usage.resets;
   if (!resets) return <p className="usage__unknown">Reset information not reported.</p>;
   return <>
-    <div className="usage__facts">
+    <dl className="usage__facts">
       <div><dt>Available resets</dt><dd>{resets.available === null ? 'Not reported' : resets.available}</dd></div>
       <div><dt>Replenishes</dt><dd>{resets.replenishesAt ? <DateValue value={resets.replenishesAt} now={now} passedLabel="Replenishment time passed—refresh" /> : 'Replenishment timing not reported'}</dd></div>
-    </div>
+    </dl>
     <div className="usage-resets">
       <h3>Banked reset grants</h3>
       {!resets.grants.length ? <p className="usage__unknown">{resets.detailsKnown ? 'No banked grants reported.' : 'Grant details not reported.'}</p> : resets.grants.map((grant) => <Grant key={grant.id} grant={grant} now={now} />)}
@@ -171,7 +171,7 @@ function Dialog({ session, onClose }: { session: Session; onClose: () => void })
   }, [onClose]);
 
   const cooldownLabel = Math.ceil(refreshWait / 1000);
-  const canRefresh = refreshWait <= 0 && !refreshing;
+  const canRefresh = refreshWait <= 0 && !refreshing && !loading;
   const fetched = usage ? localDate(usage.fetchedAt, now)?.exact ?? 'Updated time not reported' : null;
   const sharedLabel = usage?.provider ? `${PROVIDER_NAME[usage.provider]} account limits` : 'Provider account limits';
   const hasAccountDetails = Boolean(usage && (usage.windows.length || usage.credits || usage.resets));
