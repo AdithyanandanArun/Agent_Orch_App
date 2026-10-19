@@ -5,7 +5,7 @@ import { useRelay, useProject, useActiveSession } from '../store/store';
 import { api, errorMessage } from '../lib/api';
 import { clockTime, cx } from '../lib/format';
 import { Markdown } from './Markdown';
-import { Badge, Button, EmptyState, ProviderMark, PROVIDER_NAME } from './ui';
+import { Badge, Button, EmptyState, PROVIDER_NAME } from './ui';
 import { Composer } from './Composer';
 
 interface DisplayMessage { id: string; role: 'user' | 'assistant' | 'system' | 'tool'; content: string; createdAt: string; kind?: string; live: boolean }
@@ -61,24 +61,20 @@ const MessageRow = memo(function MessageRow({ m, session }: { m: DisplayMessage;
   }
   if (m.role === 'user') {
     return (
-      <div className="msg msg--user">
+      <article className="msg msg--user" aria-label="Your message">
         <div className="msg__bubble"><Markdown text={m.content} /></div>
-        {m.createdAt ? <time className="msg__time" dateTime={m.createdAt}>{clockTime(m.createdAt)}</time> : null}
-      </div>
+        {m.createdAt ? <time className="msg__time" dateTime={m.createdAt} title={clockTime(m.createdAt)}>{clockTime(m.createdAt)}</time> : null}
+      </article>
     );
   }
   return (
-    <div className="msg msg--assistant">
-      <div className="msg__avatar"><ProviderMark provider={session.provider} size={20} /></div>
+    <article className="msg msg--assistant" aria-label={`Assistant response from ${PROVIDER_NAME[session.provider]}`}>
       <div className="msg__main">
-        <div className="msg__meta">
-          <strong>{PROVIDER_NAME[session.provider]}</strong>
-          <span>{session.model}</span>
-          {m.createdAt ? <time dateTime={m.createdAt}>{clockTime(m.createdAt)}</time> : null}
-        </div>
+        <span className="sr-only">Assistant</span>
         <div className={cx('msg__content', m.live && 'is-live')}><Markdown text={m.content || '…'} /></div>
+        {m.createdAt ? <time className="msg__time" dateTime={m.createdAt} title={clockTime(m.createdAt)}>{clockTime(m.createdAt)}</time> : null}
       </div>
-    </div>
+    </article>
   );
 });
 
