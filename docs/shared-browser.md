@@ -17,7 +17,7 @@ Use **Take control** to click, type, paste, scroll and navigate. **Release to ag
 
 ## Agent access
 
-Both Codex and Claude Code receive a local HTTP MCP connection on each enabled run. It provides status, tabs, open, snapshot, navigate, click, type, hover, select, press, scroll, resize, evaluate, wait, dialog, back, forward, reload and close tools. A snapshot includes bounded visible text, accessibility targets and an optional PNG. Tools should begin with status and use fresh snapshot refs or role/name targets.
+Both Codex and Claude Code receive a local HTTP MCP connection on each enabled run. It provides status, tabs, open, snapshot, navigate, click, type, hover, select, press, scroll, resize, evaluate, wait, dialog, back, forward, reload and close tools. A snapshot includes bounded visible text, tab- and snapshot-scoped accessibility targets and an optional PNG. Textbox values are hidden; navigation or another snapshot invalidates old refs. Tools should begin with status and use fresh snapshot refs or role/name targets.
 
 **Settings → Browser → Let agents use the browser** controls this access. Supervised and Auto-accept edits sessions require approval before the run's first browser mutation; Auto and Full access follow their selected policy. The browser is capable of actions in signed-in accounts, so those actions must follow the user's task and authorization.
 
@@ -31,7 +31,7 @@ Connections use ephemeral random bearer capabilities stored hashed in memory, bo
 
 The same server and viewer are used in the web and Electron shells. Browser discovery contains native Linux, macOS and Windows locations, but this implementation was exercised on Linux; other platforms still need device verification. Playwright's [CDP connection](https://playwright.dev/docs/api/class-browsertype#browser-type-connect-over-cdp) supports Chromium only and has lower fidelity than its native transport.
 
-This first version does not add file uploads, download management, recording, browser extension management, or profile copying. Browser-internal pages and file URLs are excluded from navigation. Native browser permission prompts still need the user. Closing Relay closes its managed browser; attached personal browsers are detached. The session's dedicated managed profile remains on disk.
+This first version does not add file uploads, download management, recording, browser extension management, or profile copying. Browser-internal pages and file URLs are excluded from navigation. Native browser permission prompts still need the user. Page JavaScript that starts timers or promises cannot have its earlier side effects undone; timed-out evaluations report that limitation. Synchronous scripts have an execution deadline and termination handling, without closing personal tabs. Closing Relay closes its managed browser; attached personal browsers are detached. The session's dedicated managed profile remains on disk.
 
 ## Research references
 

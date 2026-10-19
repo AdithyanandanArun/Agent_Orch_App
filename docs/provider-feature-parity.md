@@ -13,6 +13,8 @@ Updated 2026-10-20 using native harness protocols and original Relay UI. This re
 | `$` picker | Native installed skill catalog; explicit skill input items | SDK skill catalog; one selected skill dispatched by name |
 | Skill scope | Scopes returned by Codex `skills/list` | Bundled/project/available plugin skills reported under the project settings source |
 | Catalog refresh | On session/model changes, reconnect or explicit retry; fresh selection validation before a run | Same; metadata RPCs have a bounded deadline and close the CLI afterward |
+| Shared browser | Run-scoped local MCP tools for the visible Chromium tabs | Same, injected through SDK HTTP MCP |
+| Auto-compaction | Native per-thread token threshold from provider capacity metadata | Native percentage environment override |
 | `/usage` | Native quota windows, credit balance, available reset count and grant expiry details when reported | Native five-hour, seven-day and applicable scoped windows; no spendable credit balance or reset-grant count exposed by the SDK |
 
 ## Relay commands
@@ -27,7 +29,9 @@ The picker supports caret-aware completion, arrow navigation, Enter/Tab selectio
 
 Personal Claude settings/skills are not imported. Its SDK couples the user settings source to permission rules and other configuration; Relay currently keeps its project source and disabled hooks. Discovery notices explain this boundary. Fast mode and automatic review remain subject to provider/account policy and availability.
 
-Attachments, file mentions, a dedicated planning interface, interactive provider questions, provider context management, MCP/plugin management, and additional native command actions need their own client implementations. They are not covered by this release. The existing file editor, terminal, Changes, tasks and activity views remain available.
+Attachments, file mentions, a dedicated planning interface, interactive provider questions, advanced context inspection, general MCP/plugin management, and additional native command actions need their own client implementations. They are not covered by this release. The existing file editor, terminal, Changes, tasks and activity views remain available.
+
+The shared browser and automatic compaction setting are covered in [browser setup and limits](shared-browser.md). General MCP server/plugin management remains separate from Relay’s built-in browser connection.
 
 ## References
 

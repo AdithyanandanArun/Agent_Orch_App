@@ -19,6 +19,11 @@ flowchart TD
   Sessions --> Claude[Claude Agent SDK process]
   Sessions --> Git[Isolated Git worktrees]
   Live --> PTY[Owned local PTY]
+  UI <-->|JPEG stream and human input| Browser[Shared Chromium host]
+  Codex --> MCP[Run-scoped browser MCP]
+  Claude --> MCP
+  MCP --> Browser
+  API --> Browser
   Electron[Electron shell] --> UI
 ```
 
@@ -37,3 +42,7 @@ An artifact handoff is a durable reference to a committed file at a specific rev
 ## Desktop shell
 
 The first Electron entry point starts the same local server on a selected loopback port and opens the built web client in a sandboxed window. It requires the local Node runtime used to install dependencies, preserving native PTY compatibility. Desktop application data lives in Electron's user-data directory. Installer packaging, code signing, update delivery and bundled runtime distribution remain later release work.
+
+## Shared browser
+
+The Node browser host owns managed Chromium profiles and explicit CDP attachments to running Chromium browsers. A separate WebSocket streams the page to React; both provider adapters receive ephemeral run-scoped MCP access to those same session-owned tabs. Human control invalidates queued agent writes. Existing-browser disconnects detach without closing native tabs. The browser host is separate from Electron so the web and desktop clients use the same implementation. See shared-browser.md for setup, bounds and platform limits.
