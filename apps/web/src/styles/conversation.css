@@ -188,6 +188,16 @@
 .sendbtn--stop { background: var(--bg-active); color: var(--fg-0); }
 .sendbtn--stop:hover:not(:disabled) { background: var(--bg-raised); }
 .composer__note { padding: 4px 8px 0; }
+.composer-picker {
+  position: absolute; z-index: 30; left: 12px; bottom: calc(100% + 8px); width: min(420px, calc(100% - 24px));
+  max-height: 280px; overflow: auto; padding: 5px; border: 1px solid var(--line-strong); border-radius: 10px;
+  background: var(--bg-raised); box-shadow: var(--shadow-pop);
+}
+.composer-picker__item { display: flex; width: 100%; min-height: 40px; align-items: center; justify-content: space-between; gap: 14px; padding: 7px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--fg-1); text-align: left; cursor: pointer; }
+.composer-picker__item.is-active, .composer-picker__item:hover { background: var(--bg-active); color: var(--fg-0); }
+.composer-picker__name { flex: none; max-width: 45%; overflow: hidden; color: var(--fg-0); text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.composer-picker__name small { color: var(--fg-3); font-size: 11px; }
+.composer-picker__description { overflow: hidden; color: var(--fg-2); text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
 .working, .approval { margin-left: 0; }
 .approval { border-color: var(--line-strong); background: var(--bg-panel); border-radius: 12px; padding: 18px; }
 

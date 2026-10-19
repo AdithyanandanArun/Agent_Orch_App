@@ -1,14 +1,14 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type Ref } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, ChevronDown } from 'lucide-react';
 import { cx } from '../lib/format';
 
-export interface SelectOption { value: string; label: string; group?: string; disabled?: boolean }
+export interface SelectOption { value: string; label: string; group?: string; description?: string; disabled?: boolean }
 
 /** A compact choice control with a shared popover, keyboard navigation and viewport-aware placement. */
-export function SelectMenu({ id, label, value, onChange, options, disabled, className, placement = 'bottom', title }: {
+export function SelectMenu({ id, label, value, onChange, options, disabled, className, placement = 'bottom', title, triggerRef }: {
   id?: string; label: string; value: string; onChange: (value: string) => void; options: SelectOption[];
-  disabled?: boolean; className?: string; placement?: 'top' | 'bottom'; title?: string;
+  disabled?: boolean; className?: string; placement?: 'top' | 'bottom'; title?: string; triggerRef?: Ref<HTMLButtonElement>;
 }) {
   const listId = useId();
   const anchor = useRef<HTMLButtonElement>(null);
@@ -100,7 +100,7 @@ export function SelectMenu({ id, label, value, onChange, options, disabled, clas
   };
 
   return <>
-    <button id={id} ref={anchor} type="button" role="combobox" aria-label={label} aria-haspopup="listbox"
+    <button id={id} ref={(element) => { anchor.current = element; if (typeof triggerRef === 'function') triggerRef(element); else if (triggerRef) triggerRef.current = element; }} type="button" role="combobox" aria-label={label} aria-haspopup="listbox"
       aria-expanded={effectiveOpen} aria-controls={effectiveOpen ? listId : undefined}
       aria-activedescendant={effectiveOpen ? `${listId}-${active}` : undefined}
       className={cx('select-menu__trigger', className)} disabled={disabled} title={title}
@@ -116,7 +116,7 @@ export function SelectMenu({ id, label, value, onChange, options, disabled, clas
           <div id={`${listId}-${index}`} role="option" aria-selected={option.value === value} aria-disabled={option.disabled || undefined}
             data-option-index={index} className={cx('select-menu__option', active === index && 'is-active', option.value === value && 'is-selected')}
             onMouseMove={() => { if (!option.disabled) setActive(index); }} onClick={() => choose(index)}>
-            <span>{option.label}</span>{option.value === value ? <Check size={13} aria-hidden="true" /> : null}
+            <span className="select-menu__option-copy"><span>{option.label}</span>{option.description ? <small>{option.description}</small> : null}</span>{option.value === value ? <Check size={13} aria-hidden="true" /> : null}
           </div>
         </div>)}
       </div>, document.body,

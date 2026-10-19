@@ -20,6 +20,8 @@
   padding: 7px 9px; border-radius: 6px; color: var(--fg-1); font-size: 13px; cursor: pointer; line-height: 1.35;
 }
 .select-menu__option > span { min-width: 0; overflow-wrap: anywhere; }
+.select-menu__option-copy { display: grid; gap: 2px; }
+.select-menu__option-copy small { color: var(--fg-2); font-size: 11px; line-height: 1.35; }
 .select-menu__option > svg { flex: none; color: var(--fg-0); }
 .select-menu__option.is-active { background: var(--bg-active); color: var(--fg-0); }
 .select-menu__option.is-selected { color: var(--fg-0); }

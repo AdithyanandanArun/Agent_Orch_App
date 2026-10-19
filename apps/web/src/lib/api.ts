@@ -63,7 +63,7 @@ export interface NewSessionInput {
   projectId: string; name?: string; provider?: Session['provider']; model?: string;
   effort?: Session['effort']; policy?: Session['policy']; isolated?: boolean;
 }
-export type SessionPatch = Partial<Pick<Session, 'name' | 'provider' | 'model' | 'effort' | 'policy' | 'pinned' | 'unread'>>;
+export type SessionPatch = Partial<Pick<Session, 'name' | 'provider' | 'model' | 'effort' | 'policy' | 'serviceTier' | 'pinned' | 'unread'>>;
 export interface NewTaskInput {
   projectId: string; title: string; description: string; acceptanceCriteria: string; sessionId: string | null; dependsOn: string[];
 }
@@ -75,6 +75,11 @@ export interface HandoffInput {
 }
 
 export interface FileDoc { path: string; content: string }
+export interface ProviderCatalog {
+  commands: { id: string; name: string; description: string; argumentHint?: string; source: string; kind: 'prompt' | 'action' }[];
+  skills: { id: string; name: string; description: string; path?: string; source: string; enabled: boolean }[];
+  warnings: string[];
+}
 
 /** The file endpoint is documented as `{content, path}`, but tolerate a raw text body as well. */
 async function readFile(projectId: string, path: string, sessionId: string | null): Promise<FileDoc> {
@@ -111,7 +116,8 @@ export const api = {
   toolCall: (id: string) => json<ToolCall>(`/api/tool-calls/${encodeURIComponent(id)}`),
   renameSession: (id: string, name: string) => json<Session>(`/api/sessions/${encodeURIComponent(id)}`, 'PATCH', { name }),
   archiveSession: (id: string) => json<unknown>(`/api/sessions/${encodeURIComponent(id)}`, 'DELETE'),
-  sendMessage: (id: string, content: string) => json<{ accepted: boolean }>(`/api/sessions/${encodeURIComponent(id)}/messages`, 'POST', { content }),
+  sendMessage: (id: string, content: string, skills?: string[]) => json<{ accepted: boolean }>(`/api/sessions/${encodeURIComponent(id)}/messages`, 'POST', { content, ...(skills?.length ? { skills } : {}) }),
+  sessionCatalog: (id: string, signal?: AbortSignal) => json<ProviderCatalog>(`/api/sessions/${encodeURIComponent(id)}/catalog`, 'GET', undefined, signal),
   interrupt: (id: string) => json<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(id)}/interrupt`, 'POST'),
   createTask: (input: NewTaskInput) => json<Task>('/api/tasks', 'POST', input),
   updateTask: (id: string, patch: TaskPatch) => json<Task>(`/api/tasks/${encodeURIComponent(id)}`, 'PATCH', patch),

@@ -61,7 +61,22 @@ export function SettingsPage() {
   const modelKey = settings.defaultProvider === 'codex' ? 'defaultCodexModel' : 'defaultClaudeModel';
   const defaultModel = settings[modelKey];
   const reportedModels = boot.providers.find((p) => p.id === settings.defaultProvider)?.models ?? [];
-  const models = reportedModels.some((m) => m.id === defaultModel) ? reportedModels : [{ id: defaultModel, name: defaultModel }, ...reportedModels];
+  const models = reportedModels;
+  const selectedModel = models.find((m) => m.id === defaultModel || m.aliases?.includes(defaultModel));
+  const selectedModelId = selectedModel?.id ?? defaultModel;
+  const efforts = selectedModel?.reasoningEfforts ?? (selectedModel ? [
+    { id: 'low', label: 'Low' }, { id: 'medium', label: 'Medium' }, { id: 'high', label: 'High' },
+  ] : []);
+  const tiers = selectedModel?.serviceTiers ?? [];
+  const policies = selectedModel?.policies ?? boot.providers.find((p) => p.id === settings.defaultProvider)?.policies ?? [];
+  const updateDefaultModel = (value: string) => {
+    const nextModel = models.find((model) => model.id === value);
+    if (!nextModel) return;
+    const patch: Partial<AppSettings> = { [modelKey]: value };
+    if (nextModel.reasoningEfforts?.length && !nextModel.reasoningEfforts.some((item) => item.id === settings.defaultEffort)) patch.defaultEffort = nextModel.defaultReasoningEffort ?? nextModel.reasoningEfforts[0]!.id;
+    if (nextModel.serviceTiers?.length && !nextModel.serviceTiers.some((item) => item.id === (settings.defaultServiceTier ?? 'standard'))) patch.defaultServiceTier = nextModel.defaultServiceTier ?? nextModel.serviceTiers[0]!.id;
+    void update(patch, 'model');
+  };
   const pathsDirty = claude.trim() !== settings.claudeExecutable || codex.trim() !== settings.codexExecutable;
   const status = busy === 'providers' ? 'Checking providers…' : busy ? 'Saving…' : error ? 'Could not complete change' : saved ? 'All changes saved' : category === 'project' ? 'Project details' : 'Changes save automatically';
 
@@ -78,17 +93,20 @@ export function SettingsPage() {
           <SelectMenu id="st-provider" label="Default provider" value={settings.defaultProvider} disabled={disabled} options={[{ value: 'codex', label: 'Codex' }, { value: 'claude', label: 'Claude' }]} onChange={(value) => void update({ defaultProvider: value as AppSettings['defaultProvider'] }, 'provider')} />
         </SettingRow>
         <SettingRow title="Model" description={`Default for ${settings.defaultProvider === 'codex' ? 'Codex' : 'Claude'} sessions.`} htmlFor="st-model">
-          <SelectMenu id="st-model" label="Default model" value={defaultModel} disabled={disabled} options={models.map((m) => ({ value: m.id, label: m.name }))} onChange={(value) => void update({ [modelKey]: value }, 'model')} />
+          <SelectMenu id="st-model" label="Default model" value={selectedModelId} disabled={disabled || models.length === 0} options={models.map((m) => ({ value: m.id, label: m.name }))} onChange={updateDefaultModel} />
         </SettingRow>
         <SettingRow title="Reasoning effort" description="How much reasoning to use for a response." htmlFor="st-effort">
-          <SelectMenu id="st-effort" label="Default effort" value={settings.defaultEffort} disabled={disabled} options={[{ value: 'low', label: 'Low' }, { value: 'medium', label: 'Medium' }, { value: 'high', label: 'High' }]} onChange={(value) => void update({ defaultEffort: value as AppSettings['defaultEffort'] }, 'effort')} />
+          <SelectMenu id="st-effort" label="Default effort" value={settings.defaultEffort} disabled={disabled || efforts.length === 0} options={efforts.map((item) => ({ value: item.id, label: item.label, description: item.description }))} onChange={(value) => void update({ defaultEffort: value }, 'effort')} />
         </SettingRow>
+        {tiers.length ? <SettingRow title="Service tier" description="Default request speed for models that support service tiers." htmlFor="st-tier">
+          <SelectMenu id="st-tier" label="Default service tier" value={settings.defaultServiceTier ?? 'standard'} disabled={disabled} options={tiers.map((item) => ({ value: item.id, label: item.name, description: item.description }))} onChange={(value) => void update({ defaultServiceTier: value }, 'tier')} />
+        </SettingRow> : null}
         <div className="settings-page__section-head settings-page__section-head--next"><h2>Workspace & permissions</h2></div>
         <SettingRow title="Workspace" description="Use a separate Git worktree, or edit the existing project folder." htmlFor="st-workspace">
           <SelectMenu id="st-workspace" label="Default workspace" value={settings.defaultIsolated ? 'worktree' : 'project'} disabled={disabled} options={[{ value: 'worktree', label: 'Isolated worktree' }, { value: 'project', label: 'Project folder' }]} onChange={(value) => void update({ defaultIsolated: value === 'worktree' }, 'workspace')} />
         </SettingRow>
         <SettingRow title="Approval policy" description="Supervised asks before changes. Balanced allows edits with fewer prompts." htmlFor="st-policy">
-          <SelectMenu id="st-policy" label="Default approval policy" value={settings.defaultPolicy} disabled={disabled} options={[{ value: 'supervised', label: 'Supervised' }, { value: 'balanced', label: 'Balanced' }]} onChange={(value) => void update({ defaultPolicy: value as AppSettings['defaultPolicy'] }, 'policy')} />
+          <SelectMenu id="st-policy" label="Default approval policy" value={settings.defaultPolicy} disabled={disabled || policies.length === 0} options={policies.map((value) => ({ value, label: value === 'balanced' ? 'Auto-accept edits' : value === 'full-access' ? 'Full access' : value[0]!.toUpperCase() + value.slice(1), description: value === 'supervised' ? 'Ask before taking actions that change files or run commands.' : value === 'balanced' ? 'Allow file edits while keeping command approvals.' : value === 'auto' ? 'Allow common actions automatically with safety checks.' : 'Allow all actions without approval prompts.' }))} onChange={(value) => void update({ defaultPolicy: value as AppSettings['defaultPolicy'] }, 'policy')} />
         </SettingRow>
       </div> : null}
       {category === 'project' && project ? <ProjectSettings key={`${project.id}:${project.name}`} project={project} /> : null}

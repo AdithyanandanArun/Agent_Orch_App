@@ -206,7 +206,7 @@
 .approval__actions { display: flex; align-items: center; gap: 8px; }
 .approval__note { font-size: var(--text-xs); color: var(--fg-2); margin-left: 4px; }
 
-.composer-wrap { padding: 4px 28px 20px; width: min(836px, 100%); margin: 0 auto; flex: none; }
+.composer-wrap { position: relative; padding: 4px 28px 20px; width: min(836px, 100%); margin: 0 auto; flex: none; }
 .composer { background: var(--bg-surface); border: 1px solid var(--line); border-radius: var(--radius-md); transition: border-color var(--dur-fast); }
 .composer:focus-within { border-color: var(--line-strong); }
 .composer.is-blocked { opacity: 0.92; }
