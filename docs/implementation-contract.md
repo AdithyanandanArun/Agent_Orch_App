@@ -98,4 +98,4 @@ The server owns `BrowserService` separately from provider runtimes and the UI. M
 
 ## Next phase: group sessions
 
-The owner's Cowork/Orchestrated group-session direction is specified in phase-2-group-sessions.md. It is proposed work, not part of the currently implemented HTTP/provider contract. Preserve existing provider sessions as independent execution units beneath a new shared conversation/membership layer. Group routing, team tools, delivery persistence and automatic dispatch require explicit new typed contracts and additive migrations before implementation.
+The owner's Cowork, Orchestrated and Current agent leads group-session direction is specified in phase-2-group-sessions.md. It is proposed work, not part of the currently implemented HTTP/provider contract. Preserve existing provider sessions as independent execution units beneath a new shared conversation/membership layer. Group routing, team tools, delivery persistence and automatic dispatch require explicit new typed contracts and additive migrations before implementation.
