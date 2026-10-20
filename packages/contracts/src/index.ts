@@ -60,6 +60,12 @@ export interface ProviderModel {
   policies?: Policy[];
 }
 export interface ProviderInfo { id: Provider; name: string; available: boolean; version: string | null; executable: string | null; reason: string | null; models: ProviderModel[]; policies?: Policy[] }
+/** Installation is explicit and separate from provider authentication and model execution. */
+export interface AntigravityInstallState {
+  supported: boolean; version: string;
+  state: 'not-installed' | 'installing' | 'installed' | 'error';
+  executable: string | null; error: string | null;
+}
 export interface ProviderCommand {
   id: string; name: string; description: string; argumentHint?: string;
   source: 'provider' | 'project' | 'user' | 'relay'; kind: 'prompt' | 'action';
