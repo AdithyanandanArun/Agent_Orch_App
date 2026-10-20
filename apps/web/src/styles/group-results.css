@@ -12,8 +12,9 @@
 .group-result--active, .group-result--review { --result-accent: var(--blue); }
 .group-result--warn { --result-accent: var(--warn); }
 .group-result--alert { --result-accent: var(--err); }
-.group-result p, .group-result h3, .group-result h4, .group-result ul, .group-result dl, .group-result dd { margin: 0; }
-.group-result ul { padding: 0; list-style: none; }
+.group-result__head p, .group-result__title, .group-result__report-label, .group-result__lead > p, .group-result__agent > p, .group-result__caveat,
+.group-result__report > p, .group-result__workspace p, .group-result__workspace dl, .group-result__workspace dd, .group-result__details > p { margin: 0; }
+.group-result__agents, .group-result__tasks, .group-result__workspace ul { margin: 0; padding: 0; list-style: none; }
 
 .group-result__head { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; }
 .group-result__label, .group-result__report-label { color: var(--fg-3); font-size: var(--text-2xs); font-weight: 500; letter-spacing: .04em; text-transform: uppercase; }

@@ -10,10 +10,10 @@ import '../../styles/group-results.css';
 
 const TONE: Record<GroupResultStatus, string> = {
   pending: 'quiet', 'in-progress': 'active', paused: 'warn', failed: 'alert', stopped: 'alert', blocked: 'alert',
-  'follow-up': 'warn', finalizing: 'active', unknown: 'quiet', review: 'review',
+  'follow-up': 'warn', finalizing: 'active', unknown: 'quiet', review: 'review', accepted: 'quiet', responded: 'quiet',
 };
 
-const AGENT_REPORT_NOTE = 'Written by the agent. Any checks or integration it mentions are its own claims; Relay has not verified them.';
+const AGENT_REPORT_NOTE = 'Checks and integration below are reported by this agent.';
 
 function ReportBody({ report, label }: { report: ResultReport; label: string }) {
   return (
@@ -51,7 +51,7 @@ function AgentRow({ agent }: { agent: ResultAgent }) {
   const { workspace } = agent;
   const written = agent.reports.filter((report) => report.text !== null);
   const preview = written.length ? written[written.length - 1]!.text! : null;
-  const hasDetails = agent.reports.length > 0 || workspace.scope.length > 0 || workspace.paths.length > 0 || workspace.notes.length > 0;
+  const hasDetails = agent.reports.length > 0 || workspace.location !== null || workspace.scope.length > 0 || workspace.paths.length > 0 || workspace.notes.length > 0;
   return (
     <li className="group-result__agent">
       <div className="group-result__agent-head">
@@ -66,10 +66,10 @@ function AgentRow({ agent }: { agent: ResultAgent }) {
         </ul>
       ) : null}
       {agent.problems.map((problem) => <p key={problem} className="group-result__problem">{problem}</p>)}
-      {preview ? <p className="group-result__preview">{reportPreview(preview, 280)}</p> : null}
+      {preview ? <p className="group-result__preview"><span className="group-result__quiet">Agent report · </span>{reportPreview(preview, 280)}</p> : null}
       {hasDetails ? (
         <details className="group-result__details">
-          <summary>Agent report and workspace</summary>
+          <summary>{agent.reports.length ? 'Agent report and workspace' : 'Workspace details'}</summary>
           {agent.reports.length ? <p className="group-result__quiet">{AGENT_REPORT_NOTE}</p> : null}
           {agent.reports.map((report) => <ReportBody key={report.key} report={report} label="Agent report" />)}
           <div className="group-result__workspace">
@@ -95,7 +95,7 @@ function AgentRow({ agent }: { agent: ResultAgent }) {
                   : <span className="group-result__quiet">None recorded.</span>}
               </dd>
             </dl>
-            <p className="group-result__quiet">Recorded in this agent&apos;s workspace only. This does not show the edits were merged into another worktree.</p>
+            <p className="group-result__quiet">Changes recorded in this checkout.</p>
             {workspace.notes.map((note) => <p key={note} className="group-result__quiet">{note}</p>)}
           </div>
         </details>
@@ -109,6 +109,7 @@ export function GroupResultSummary({ snapshot, sessions, messages, runs, tasks }
 }) {
   const model = useMemo(() => buildGroupResultModel({ snapshot, sessions, messages, runs, tasks }), [snapshot, sessions, messages, runs, tasks]);
   if (!model) return null;
+  const compact = model.active && model.status !== 'paused';
   const meta = [
     ...model.facts,
     model.changedPathCount ? `${model.changedPathCount} changed ${model.changedPathCount === 1 ? 'path' : 'paths'} in ${model.workspaceCount} ${model.workspaceCount === 1 ? 'workspace' : 'workspaces'}` : null,
@@ -117,21 +118,21 @@ export function GroupResultSummary({ snapshot, sessions, messages, runs, tasks }
     <section className={cx('group-result', `group-result--${TONE[model.status]}`)} aria-label="Team result">
       <header className="group-result__head">
         <span className="group-result__label">Team result</span>
-        {model.requestExcerpt ? <p className="group-result__request" title={model.requestExcerpt}>{model.requestExcerpt}</p> : null}
+        {!compact && model.requestExcerpt ? <p className="group-result__request" title={model.requestExcerpt}>{model.requestExcerpt}</p> : null}
         <div aria-live="polite" aria-atomic="true">
           <h3 className="group-result__title">{model.title}</h3>
           <p className="group-result__summary">{model.summary}</p>
           {model.detail ? <p className="group-result__detail">{model.detail}</p> : null}
         </div>
-        {meta.length ? <p className="group-result__meta">{meta.join(' · ')}</p> : null}
+        {!compact && meta.length ? <p className="group-result__meta">{meta.join(' · ')}</p> : null}
       </header>
-      {model.lead ? <LeadReport lead={model.lead} /> : null}
-      {model.agents.length ? (
+      {!compact && model.lead ? <LeadReport lead={model.lead} /> : null}
+      {!compact && model.agents.length ? (
         <ul className="group-result__agents" aria-label="Participating agents">
           {model.agents.map((agent) => <AgentRow key={agent.memberId} agent={agent} />)}
         </ul>
       ) : null}
-      <p className="group-result__caveat">{model.caveat}</p>
+      {!compact ? <p className="group-result__caveat">{model.caveat}</p> : null}
     </section>
   );
 }

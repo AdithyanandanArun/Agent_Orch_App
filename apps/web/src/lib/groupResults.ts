@@ -11,7 +11,7 @@ export interface GroupResultInput {
 }
 
 export type GroupResultStatus =
-  | 'pending' | 'in-progress' | 'paused' | 'failed' | 'stopped' | 'blocked' | 'follow-up' | 'finalizing' | 'unknown' | 'review';
+  | 'pending' | 'in-progress' | 'paused' | 'failed' | 'stopped' | 'blocked' | 'follow-up' | 'finalizing' | 'unknown' | 'review' | 'accepted' | 'responded';
 export type DeliveryKind = NonNullable<GroupDelivery['kind']>;
 
 export interface ResultTask { id: string; title: string; status: TaskStatus | null; label: string }
@@ -48,7 +48,7 @@ export const TASK_STATUS_LABEL: Record<TaskStatus, string> = {
   backlog: 'Backlog', ready: 'Ready', running: 'Running', blocked: 'Blocked', review: 'Needs review', done: 'Accepted',
 };
 export const CHANGE_STATUS_LABEL: Record<RunChangedFile['status'], string> = { A: 'Added', M: 'Modified', D: 'Deleted', T: 'Type changed' };
-const CAVEAT = 'A finished turn does not show the work is implemented, checked or integrated.';
+const CAVEAT = 'Task status is recorded by Relay; checks and integration are described in the agent reports.';
 const NO_REPORT = 'No final report recorded.';
 
 const time = (iso: string | null | undefined): number => {
@@ -152,7 +152,8 @@ export function buildGroupResultModel({ snapshot, sessions, messages, runs, task
   const allTasks = unique(assignments.map((assignment) => assignment.taskId)).map(taskFor);
 
   const linkedRuns = unique(deliveries.flatMap((delivery) => (delivery.runId ? [delivery.runId] : [])))
-    .flatMap((id) => runById.get(id) ?? []);
+    .flatMap((id) => runById.get(id) ?? [])
+    .filter((run) => deliveries.some((delivery) => delivery.runId === run.id && memberById.get(delivery.memberId)?.sessionId === run.sessionId));
   const activeDeliveries = deliveries.filter(isActive);
   const runningRuns = linkedRuns.filter((run) => run.status === 'running');
   const activeTurns = Math.max(activeDeliveries.length, runningRuns.length);
@@ -161,7 +162,7 @@ export function buildGroupResultModel({ snapshot, sessions, messages, runs, task
 
   const plannerId = request.plannerMemberId;
   const participantIds = new Set<string>([plannerId]);
-  for (const delivery of deliveries) if (kindOf(delivery) === 'request') participantIds.add(delivery.memberId);
+  for (const delivery of deliveries) participantIds.add(delivery.memberId);
   for (const assignment of assignments) { participantIds.add(assignment.fromMemberId); participantIds.add(assignment.toMemberId); }
 
   const workspaceKeys = new Set<string>();
@@ -191,6 +192,10 @@ export function buildGroupResultModel({ snapshot, sessions, messages, runs, task
     if (!isLead && !assignmentDeliveries.length) {
       const latestRequest = own.filter((delivery) => kindOf(delivery) === 'request').sort(newestFirst)[0];
       if (latestRequest) reports.push(reportFor(`r:${latestRequest.id}`, latestRequest, member, []));
+      else {
+        const latestReply = own.filter((delivery) => kindOf(delivery) === 'message').sort(newestFirst)[0];
+        if (latestReply) reports.push(reportFor(`m:${latestReply.id}`, latestReply, member, []));
+      }
     }
     // Only completed reports and honest gaps are listed; superseded failures are not repeated here.
     const problems: string[] = [];
@@ -241,8 +246,8 @@ export function buildGroupResultModel({ snapshot, sessions, messages, runs, task
 
   const ordered = snapshot.members.filter((member) => participantIds.has(member.id));
   const built = ordered.map(buildAgent);
-  // The lead gets its own report block; its agent row stays only when it carries work, problems or workspace facts.
-  const agents = built.filter((agent) => !agent.isLead || agent.tasks.length || agent.problems.length || agent.reports.length || agent.workspace.paths.length || agent.workspace.notes.length);
+  // Every participant keeps a workspace row; the lead's native result is highlighted separately.
+  const agents = built;
 
   let lead: ResultLead | null = null;
   const plannerMember = memberById.get(plannerId);
@@ -293,7 +298,7 @@ export function buildGroupResultModel({ snapshot, sessions, messages, runs, task
   let title: string;
   let summary: string;
   let detail: string | null = null;
-  if (paused && request.status !== 'completed') {
+  if (paused && (request.status !== 'completed' || active)) {
     status = 'paused'; title = 'Paused';
     detail = pauseReason ? `Reason: ${pauseReason}` : 'No pause reason recorded.';
     const parts = [
@@ -325,12 +330,13 @@ export function buildGroupResultModel({ snapshot, sessions, messages, runs, task
   } else if (!deliveries.length) {
     status = 'pending'; title = 'Waiting to start'; summary = 'This request has no recorded turns yet.';
   } else {
-    status = 'review'; title = 'Ready for your review';
-    summary = allTasks.length && allTasks.every((task) => task.status === 'done')
-      ? 'Linked tasks are recorded as accepted.'
-      : allTasks.length
-        ? 'Tasks require your acceptance; they are not accepted automatically.'
-        : 'No tasks were assigned. Review the reports and changes yourself.';
+    if (allTasks.length && allTasks.every((task) => task.status === 'done')) {
+      status = 'accepted'; title = 'Tasks accepted'; summary = 'All assigned tasks are marked done.';
+    } else if (allTasks.length) {
+      status = 'review'; title = 'Ready for your review'; summary = 'Tasks require your acceptance; they are not accepted automatically.';
+    } else {
+      status = 'responded'; title = 'Team finished responding'; summary = 'No tasks were assigned to this request.';
+    }
   }
   if (paused && request.status === 'completed' && !detail) detail = pauseReason ? `Group is paused · ${pauseReason}` : 'Group is paused.';
 
