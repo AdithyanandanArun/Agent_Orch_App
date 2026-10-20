@@ -15,6 +15,8 @@ import { antigravityInfo, ANTIGRAVITY_DEFAULT, cachedAntigravityMetadata, isAnti
 
 export const CODEX_DEFAULT_MODEL = 'gpt-6.1-sol';
 const CODEX_DEFAULT_MODEL_ENTRY = { id: CODEX_DEFAULT_MODEL, name: 'GPT-6.1 Sol' };
+const ANTIGRAVITY_AUTH_CHECKED = 'Authenticated metadata was checked earlier in this Relay process. Account access and quota are checked again when a run starts.';
+const ANTIGRAVITY_AUTH_UNVERIFIED = 'Google sign-in is not verified; sign in from Settings. Authentication is checked when a run starts.';
 
 export interface DetectDeps {
   env?: NodeJS.ProcessEnv;
@@ -38,11 +40,12 @@ export async function detectAntigravity(settings: AppSettings, deps: DetectDeps 
       env, cwd: process.cwd(),
       ...(deps.spawn ? { spawn: deps.spawn as never } : {}), timeoutMs: 12_000,
     });
-    const cached = cachedAntigravityMetadata(found.executable.path, env);
+    const remembered = cachedAntigravityMetadata(found.executable.path, env);
+    const cached = remembered?.version === runtime.version ? remembered : undefined;
     const mcp = runtime.capabilities.mcpCapabilities;
     const authNote = isAntigravityAuthenticated(found.executable.path, env)
-      ? 'Authenticated metadata was checked earlier in this Relay process. Account access and quota are checked again when a run starts.'
-      : 'Google sign-in is not verified; sign in from Settings. Authentication is checked when a run starts.';
+      ? ANTIGRAVITY_AUTH_CHECKED
+      : ANTIGRAVITY_AUTH_UNVERIFIED;
     const note = `${isRecord(mcp) && mcp.http === true ? '' : 'ACP did not advertise HTTP MCP; browser/team connections are unavailable. '}${authNote}`;
     return antigravityInfo(found.executable.path, runtime.version, cached?.models ?? [ANTIGRAVITY_DEFAULT], true, note);
   } catch (error) {
@@ -217,7 +220,17 @@ export function detectProviders(settings: AppSettings, deps: DetectDeps = {}): P
   const key = JSON.stringify([settings.claudeExecutable, settings.codexExecutable, settings.antigravityExecutable, settings.opencodeExecutable, deps.env === undefined ? 'process' : 'custom']);
   const pending = inFlight.get(key);
   if (pending && !deps.probe && !deps.spawn) return pending;
-  const run = Promise.all([detectCodex(settings, deps), detectClaude(settings, deps), detectAntigravity(settings, deps), detectOpencode(settings, deps)]).then(([codex, claude, antigravity, opencode]) => [codex, claude, antigravity, opencode]);
+  const run = Promise.all([detectCodex(settings, deps), detectClaude(settings, deps), detectAntigravity(settings, deps), detectOpencode(settings, deps)]).then(([codex, claude, antigravity, opencode]) => {
+    // Google catalog refresh can finish while another provider is still probing.
+    // Publish that refreshed catalog instead of an earlier generic default.
+    if (antigravity.available && antigravity.executable) {
+      const env = deps.env ?? process.env;
+      const latest = cachedAntigravityMetadata(antigravity.executable, env);
+      if (latest?.version === antigravity.version) antigravity = { ...antigravity, models: latest.models,
+        reason: isAntigravityAuthenticated(antigravity.executable, env) ? antigravity.reason?.replace(ANTIGRAVITY_AUTH_UNVERIFIED, ANTIGRAVITY_AUTH_CHECKED) ?? null : antigravity.reason };
+    }
+    return [codex, claude, antigravity, opencode];
+  });
   if (!deps.probe && !deps.spawn) {
     inFlight.set(key, run);
     void run.finally(() => inFlight.delete(key)).catch(() => undefined);
