@@ -26,6 +26,10 @@ When delegated work finishes, Relay queues a results handoff to the assigning ag
 
 Completed files can live in the integrating agent's isolated worktree rather than the original project folder. The checkout control and file links identify that location. Finishing a provider turn neither commits nor publishes those files automatically, and delegated tasks remain in Review until accepted.
 
+The live agent list stays beside the conversation as messages scroll. It shows each active member's provider identity, configuration and current state. An agent doing work with a pending follow-up remains **Working**, with the queued count shown alongside it. Approval waits, pauses, errors and idle states are shown separately. Working time uses the native run's start time; queue age is not reported as work time. During a connection loss, the list identifies its state as last known.
+
+Opening the right context pane hides the agent list; closing the pane restores it. On narrow layouts the list becomes a compact strip above the conversation. The Members menu remains available for agent settings and controls.
+
 ## Agent communication
 
 During a recorded group run, Codex and Claude receive the same host-authenticated team interface:
