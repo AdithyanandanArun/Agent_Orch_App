@@ -4,10 +4,7 @@ import { api, errorMessage } from '../lib/api';
 import { Button, InlineError, Spinner } from './ui';
 
 const POLL_MS = 1_500;
-type AuthPhase = 'starting' | 'waiting-for-browser' | 'loading-models';
-/** Auth state with the optional native-login progress fields reported by the server. */
-type AuthView = AntigravityAuthState & { phase?: AuthPhase; authorizationUrl?: string; browserError?: string };
-const IDLE_AUTH: AuthView = { state: 'idle', error: null };
+const IDLE_AUTH: AntigravityAuthState = { state: 'idle', error: null };
 const AUTH_PHASES: readonly string[] = ['starting', 'waiting-for-browser', 'loading-models'];
 
 /** The authorization URL is sensitive: it is held in component memory only and never logged or stored. */
@@ -15,13 +12,14 @@ function googleAuthUrl(value: unknown): string | null {
   if (typeof value !== 'string' || value.length > 8_192) return null;
   try {
     const url = new URL(value);
-    return url.protocol === 'https:' && url.hostname === 'accounts.google.com' && !url.port && !url.username && !url.password ? url.href : null;
+    const nativePath = url.pathname === '/o/oauth2/auth' || url.pathname === '/o/oauth2/v2/auth';
+    return url.protocol === 'https:' && url.hostname === 'accounts.google.com' && nativePath && !url.port && !url.username && !url.password && !url.hash ? url.href : null;
   } catch { return null; }
 }
 
 /** Keeps only fields that are meaningful for the reported state; the link survives only in the active waiting phase. */
-function sanitizeAuth(next: AuthView): AuthView {
-  const result: AuthView = { state: next.state, error: next.error };
+function sanitizeAuth(next: AntigravityAuthState): AntigravityAuthState {
+  const result: AntigravityAuthState = { state: next.state, error: next.error };
   if (next.state !== 'authenticating') return result;
   const phase = AUTH_PHASES.includes(next.phase as string) ? next.phase : undefined;
   if (phase) result.phase = phase;
@@ -37,7 +35,7 @@ function sanitizeAuth(next: AuthView): AuthView {
 
 export function AntigravityRuntimeSetup({ providerInfo, onProviderChanged }: { providerInfo?: ProviderInfo; onProviderChanged: () => Promise<void> }) {
   const [install, setInstall] = useState<AntigravityInstallState | null>(null);
-  const [auth, setAuth] = useState<AuthView>(IDLE_AUTH);
+  const [auth, setAuth] = useState<AntigravityAuthState>(IDLE_AUTH);
   const [loading, setLoading] = useState(true);
   const [installBusy, setInstallBusy] = useState(false);
   const [authBusy, setAuthBusy] = useState(false);
@@ -88,7 +86,7 @@ export function AntigravityRuntimeSetup({ providerInfo, onProviderChanged }: { p
     }
   }, [onProviderChanged]);
 
-  const applyAuthState = useCallback((reported: AuthView, allowCompletion: boolean, immediatePost = false) => {
+  const applyAuthState = useCallback((reported: AntigravityAuthState, allowCompletion: boolean, immediatePost = false) => {
     const next = sanitizeAuth(reported);
     const previous = authStateRef.current;
     authStateRef.current = next.state;
