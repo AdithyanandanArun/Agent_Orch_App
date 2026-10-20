@@ -207,7 +207,8 @@ export function itemToolActivity(item: Record<string, unknown>, phase: 'started'
       const name = `mcp:${str(item.server) ?? '?'}/${str(item.tool) ?? '?'}`;
       const failure = isRecord(item.error) ? str(item.error.message) : str(item.error);
       const identity = `${str(item.server) ?? ''} ${str(item.tool) ?? ''}`.toLowerCase();
-      const category: ToolCategory = /browser|playwright|puppeteer/.test(identity) || (/t3_code/.test(identity) && /preview_/.test(identity)) ? 'browser' : 'other';
+      const category: ToolCategory = str(item.server) === 'relay_team' && /^team_/.test(str(item.tool) ?? '') ? 'agent'
+        : /browser|playwright|puppeteer/.test(identity) || (/t3_code/.test(identity) && /preview_/.test(identity)) ? 'browser' : 'other';
       const output = [failure, done ? mcpResultText(item.result) : undefined].filter(Boolean).join('\n');
       return { ...base, name, category, summary: name, ...(item.arguments !== undefined ? { input: describeValue(item.arguments, 4_000) } : {}), ...(output ? { output: truncate(output, 20_000) } : {}) };
     }

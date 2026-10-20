@@ -18,6 +18,8 @@ export function resolveClaudeExecutable(settings: AppSettings, env: NodeJS.Proce
   return resolveExecutableCached({ name: 'claude', override: settings.claudeExecutable, env, extraCandidates: bundledClaudeCandidates() });
 }
 
+const TEAM_TOOL_NAMES: ReadonlySet<string> = new Set(['team_members', 'team_inbox', 'team_assign', 'team_message', 'team_artifact', 'team_status'].map((name) => `mcp__relay_team__${name}`));
+
 function promptWithSelectedClaudeSkill(prompt: string, skillName: string): string {
   const escapedName = skillName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   let body = prompt.replace(new RegExp(`(^|\\s)\\$${escapedName}(?=$|\\s)`, 'g'), '$1');
@@ -57,7 +59,7 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): AgentAdapter 
       }
       const compactPercent = autoCompactPercent(settings);
       const childEnv = { ...claudeEnvironment(env), ...claudeCompactEnv(compactPercent) };
-      const secrets = [childEnv.ANTHROPIC_API_KEY, childEnv.CLAUDE_CODE_OAUTH_TOKEN, childEnv.ANTHROPIC_AUTH_TOKEN, run.browserMcp?.token];
+      const secrets = [childEnv.ANTHROPIC_API_KEY, childEnv.CLAUDE_CODE_OAUTH_TOKEN, childEnv.ANTHROPIC_AUTH_TOKEN, run.browserMcp?.token, run.teamMcp?.token];
       const resolved = await resolveBinary(settings, env);
       if (!resolved.ok) throw new ProviderError(resolved.reason, { code: 'executable_unavailable' });
       if (signal.aborted) throw abortError();
@@ -72,6 +74,8 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): AgentAdapter 
         if (signal.aborted || context.signal.aborted) return { behavior: 'deny', message: 'The run was interrupted.', interrupt: true };
         // Relay's authenticated browser gateway enforces this run's policy and shared-control ownership.
         if (run.browserMcp && toolName.startsWith('mcp__relay_browser__')) return { behavior: 'allow', updatedInput: input };
+        // Only the six host-backed team tools; the bridge re-checks the run, membership and delivery on every call.
+        if (run.teamMcp && TEAM_TOOL_NAMES.has(toolName)) return { behavior: 'allow', updatedInput: input };
         if (toolName === 'AskUserQuestion') {
           return { behavior: 'deny', message: 'Interactive questions are not available in this environment. Continue with your best judgement and note any assumptions in your reply.' };
         }
@@ -96,6 +100,10 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): AgentAdapter 
           : { behavior: 'deny', message: 'The user denied this tool call. Do not retry it; continue without it or explain what is blocked.' };
       };
 
+      const mcpServers: NonNullable<Options['mcpServers']> = {};
+      if (run.browserMcp) mcpServers.relay_browser = { type: 'http', url: run.browserMcp.url, headers: { Authorization: `Bearer ${run.browserMcp.token}` } };
+      if (run.teamMcp) mcpServers.relay_team = { type: 'http', url: run.teamMcp.url, headers: { Authorization: `Bearer ${run.teamMcp.token}` } };
+
       const options: Options = {
         cwd: session.worktreePath,
         model: session.model,
@@ -113,7 +121,7 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): AgentAdapter 
         env: { ...childEnv, CLAUDE_AGENT_SDK_CLIENT_APP: 'relay/0.1.0' },
         stderr: (data: string) => stderr.push(data),
         ...(session.providerSessionId ? { resume: session.providerSessionId } : {}),
-        ...(run.browserMcp ? { mcpServers: { relay_browser: { type: 'http' as const, url: run.browserMcp.url, headers: { Authorization: `Bearer ${run.browserMcp.token}` } } } } : {}),
+        ...(Object.keys(mcpServers).length ? { mcpServers } : {}),
       };
 
       const emit = (event: AdapterEvent): void => {

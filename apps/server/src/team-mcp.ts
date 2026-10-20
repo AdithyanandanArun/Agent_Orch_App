@@ -1,0 +1,148 @@
+import { createHash, randomBytes } from 'node:crypto';
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { z } from 'zod';
+import { TeamArtifactSchema, TeamAssignSchema, TeamMessageSchema, TeamStatusSchema } from '@relay/contracts';
+import type { GroupRunContext, Session, TeamMcpConnection } from '@relay/contracts';
+import type { Store } from './store.ts';
+import { errorMessage, truncate } from './util.ts';
+import { redactSecrets } from './providers/common.ts';
+
+type Input<S extends z.ZodType> = z.input<S>;
+
+/**
+ * The group operations this bridge relies on. GroupService implements them; every call receives the
+ * host-owned run context, so the service derives sender, role, lease and ownership itself.
+ */
+export interface TeamGroupService {
+  /** Throws unless this run is the active delivery of this member's current session. */
+  assertRunContext(ctx: GroupRunContext, runId: string, sessionId: string): void;
+  members(ctx: GroupRunContext): unknown;
+  inbox(ctx: GroupRunContext): unknown;
+  assign(ctx: GroupRunContext, input: Input<typeof TeamAssignSchema>): unknown;
+  message(ctx: GroupRunContext, input: Input<typeof TeamMessageSchema>): unknown;
+  artifact(ctx: GroupRunContext, input: Input<typeof TeamArtifactSchema>): Promise<unknown>;
+  status(ctx: GroupRunContext, input: Input<typeof TeamStatusSchema>): unknown;
+}
+
+interface Binding {
+  runId: string; sessionId: string; signal: AbortSignal; context: Readonly<GroupRunContext>;
+  revoked: boolean; inFlight: number;
+}
+
+const MAX_BINDINGS = 64;
+const MAX_IN_FLIGHT = 8;
+const MAX_BODY_BYTES = 256 * 1024;
+const OUTPUT_LIMIT = 64_000;
+const ERROR_LIMIT = 1_000;
+const hash = (value: string) => createHash('sha256').update(value).digest('hex');
+
+const INSTRUCTIONS = [
+  'These tools are Relay’s host-authenticated team interface for this one run. Relay derives your identity, role and group from the run itself; you cannot choose or change the sender.',
+  'Call team_members first to see each member’s handle, role and actual status, including your own. Call team_inbox to read what Relay has queued for you.',
+  'Who may assign work is enforced by the host on every call. In Orchestrated and Current agent leads groups only the designated orchestrator assigns work. In Cowork only the peer holding this request’s temporary planning lease may assign, and only within that lease; any member may message or report on its own work. A refusal is final: do not try to work around it.',
+  'team_assign, team_message and team_artifact confirm acceptance or queueing, never completion. team_status reports progress on a task you own. Recipients are handles such as claude1; Relay never dispatches work by scanning your prose for @mentions, so use these tools to reach someone.',
+  'Keep payloads compact: scoped objectives, exact paths and revisions, and concise questions. Limits, edit-scope ownership and delegation budgets are enforced by the host.',
+].join(' ');
+
+/** Authenticated, run-scoped MCP access to the group coordination layer. */
+export class TeamMcpBridge {
+  private bindings = new Map<string, Binding>();
+  constructor(private groups: TeamGroupService, private store: Store, private getPort: () => number, private getHost: () => string = () => '127.0.0.1') {}
+
+  create(runId: string, session: Session, signal: AbortSignal, context: GroupRunContext): TeamMcpConnection {
+    if (this.bindings.size >= MAX_BINDINGS) throw new Error('Too many active team tool connections');
+    if (!runId || !session.id) throw new Error('A team tool connection requires a run and session');
+    for (const binding of this.bindings.values()) if (binding.runId === runId) throw new Error('This run already has a team tool connection');
+    const token = randomBytes(32).toString('base64url');
+    const frozen = Object.freeze({ groupId: context.groupId, memberId: context.memberId, requestId: context.requestId, deliveryId: context.deliveryId, hop: context.hop, instructions: context.instructions });
+    this.bindings.set(hash(token), { runId, sessionId: session.id, signal, context: frozen, revoked: false, inFlight: 0 });
+    const host = this.getHost();
+    return { url: `http://${host.includes(':') ? `[${host}]` : host}:${this.getPort()}/api/team/mcp`, token };
+  }
+
+  revoke(runId: string): void {
+    for (const [key, binding] of this.bindings) if (binding.runId === runId) { binding.revoked = true; this.bindings.delete(key); }
+  }
+
+  close(): void {
+    for (const binding of this.bindings.values()) binding.revoked = true;
+    this.bindings.clear();
+  }
+
+  /** True while the run is live, its session exists, and the group service still recognizes this delivery. */
+  private active(binding: Binding): boolean {
+    if (binding.revoked || binding.signal.aborted || !this.store.getSession(binding.sessionId)) return false;
+    try { this.groups.assertRunContext(binding.context, binding.runId, binding.sessionId); return true; } catch { return false; }
+  }
+
+  private ensure(binding: Binding, requestSignal: AbortSignal, finishing = false): void {
+    if (requestSignal.aborted) throw new Error('This team request was cancelled');
+    if (!this.active(binding)) {
+      throw new Error(finishing
+        ? 'This team tool connection expired while the request was finishing; the action may already have been recorded.'
+        : 'This team tool connection has expired');
+    }
+  }
+
+  private tools(binding: Binding, requestSignal: AbortSignal): McpServer {
+    const server = new McpServer({ name: 'relay-team', version: '0.1.0' }, { instructions: INSTRUCTIONS });
+    const output = (value: unknown) => ({ content: [{ type: 'text' as const, text: truncate(redactSecrets(JSON.stringify(value) ?? 'null'), OUTPUT_LIMIT) }] });
+    const register = (name: string, description: string, shape: z.ZodRawShape, hints: { readOnly: boolean; idempotent: boolean },
+      operation: (args: Record<string, unknown>) => Promise<unknown> | unknown) => {
+      server.registerTool(name, { description, inputSchema: shape, annotations: { readOnlyHint: hints.readOnly, destructiveHint: false, idempotentHint: hints.idempotent, openWorldHint: false } }, async (args) => {
+        try {
+          this.ensure(binding, requestSignal);
+          const result = await operation(args as Record<string, unknown>);
+          this.ensure(binding, requestSignal, true);
+          return output(result);
+        } catch (error) {
+          return { content: [{ type: 'text' as const, text: truncate(redactSecrets(errorMessage(error)), ERROR_LIMIT) }], isError: true };
+        }
+      });
+    };
+    const ctx = binding.context;
+    register('team_members', 'List this group’s members with their handles, roles and actual status. Start here to learn your role and who you can reach.', {}, { readOnly: true, idempotent: true }, () => this.groups.members(ctx));
+    register('team_inbox', 'Read the messages, assignments and artifact references Relay has queued for you.', {}, { readOnly: false, idempotent: true }, () => this.groups.inbox(ctx));
+    register('team_assign', 'Assign a scoped task to another member. Allowed only when your role or planning lease permits it. A success means the assignment was accepted and queued, not completed.',
+      TeamAssignSchema.shape, { readOnly: false, idempotent: false }, (args) => this.groups.assign(ctx, TeamAssignSchema.parse(args)));
+    register('team_message', 'Send a targeted question, reply or note to one member. Set expectsReply only when you need an answer; success means the message was queued.',
+      TeamMessageSchema.shape, { readOnly: false, idempotent: false }, (args) => this.groups.message(ctx, TeamMessageSchema.parse(args)));
+    register('team_artifact', 'Offer another member a committed file revision. The host verifies the path and revision before delivery; unverified references are rejected.',
+      TeamArtifactSchema.shape, { readOnly: false, idempotent: false }, (args) => this.groups.artifact(ctx, TeamArtifactSchema.parse(args)));
+    register('team_status', 'Report running, blocked or review status for a task you own. This records an event and does not itself start a model run.',
+      TeamStatusSchema.shape, { readOnly: false, idempotent: true }, (args) => this.groups.status(ctx, TeamStatusSchema.parse(args)));
+    return server;
+  }
+
+  async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const reply = (status: number, error: string, headers: Record<string, string> = {}) => {
+      if (res.headersSent) { res.destroy(); return; }
+      res.writeHead(status, { 'Content-Type': 'application/json', ...headers }); res.end(JSON.stringify({ error }));
+    };
+    res.setHeader('Cache-Control', 'no-store');
+    const token = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(req.headers.authorization ?? '')?.[1];
+    const binding = token ? this.bindings.get(hash(token)) : undefined;
+    if (!binding || !this.active(binding)) { reply(401, 'Team tool connection is unavailable or expired'); return; }
+    if (req.method !== 'POST') { res.writeHead(405, { Allow: 'POST' }); res.end(); return; }
+    const length = Number(req.headers['content-length'] ?? 0);
+    if (Number.isFinite(length) && length > MAX_BODY_BYTES) { reply(413, 'Team tool request is too large'); return; }
+    if (binding.inFlight >= MAX_IN_FLIGHT) { reply(429, 'Too many concurrent team tool requests', { 'Retry-After': '1' }); return; }
+    binding.inFlight += 1;
+    const requestController = new AbortController();
+    const server = this.tools(binding, requestController.signal);
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+    let released = false;
+    const release = () => { if (!released) { released = true; binding.inFlight -= 1; } };
+    res.once('close', () => { if (!res.writableFinished) requestController.abort(); release(); void transport.close(); void server.close(); });
+    try {
+      await server.connect(transport);
+      await transport.handleRequest(req, res);
+    } catch {
+      reply(500, 'Team tool request failed');
+      release();
+      await transport.close(); await server.close();
+    }
+  }
+}

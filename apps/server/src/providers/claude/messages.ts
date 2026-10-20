@@ -104,6 +104,7 @@ export class ClaudeMessageMapper {
 
   private toolActivity(id: string, name: string, input: string, parentId: string | null, status: ToolActivity['status'], output?: string, durationMs?: number, summaryOverride?: string, details?: { cwd?: string; exitCode?: number; processId?: string }): void {
     const category: ToolCategory = name === 'Bash' ? 'command'
+      : /^mcp__relay_team__team_/.test(name) ? 'agent'
       : /websearch|search/i.test(name) ? 'search'
       : /webfetch|browser|playwright/i.test(name) || /mcp__t3_code__preview_/i.test(name) ? 'browser'
       : /^(Agent|Task)$/.test(name) ? 'agent'

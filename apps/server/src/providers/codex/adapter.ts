@@ -123,7 +123,7 @@ class CodexRun {
     const how = info.error
       ? `could not be started (${info.error.message}${(info.error as NodeJS.ErrnoException).code === 'ENOENT' ? '; check that the executable and the session worktree exist' : ''})`
       : `exited unexpectedly ${info.signal ? `from signal ${info.signal}` : `with code ${info.exitCode}`}`;
-    const detail = this.stderr.summary(1_500);
+    const detail = this.stderr.summary(1_500, [this.options.browserMcp?.token, this.options.teamMcp?.token]);
     return `Codex app-server ${how}.${detail ? ` stderr: ${detail}` : ''}`;
   }
 
@@ -131,6 +131,7 @@ class CodexRun {
     const { session, signal } = this.options;
     const env = cleanEnv(this.ctx.env, ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN']);
     if (this.options.browserMcp) env.RELAY_BROWSER_MCP_TOKEN = this.options.browserMcp.token;
+    if (this.options.teamMcp) env.RELAY_TEAM_MCP_TOKEN = this.options.teamMcp.token;
     this.child = this.ctx.spawn(this.executable, ['app-server'], {
       cwd: session.worktreePath, env, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsHide: true,
     });
@@ -242,6 +243,11 @@ class CodexRun {
     const overrides: Record<string, unknown> = { ...this.compaction?.config };
     if (this.options.browserMcp) overrides['mcp_servers.relay_browser'] = {
       url: this.options.browserMcp.url, bearer_token_env_var: 'RELAY_BROWSER_MCP_TOKEN', enabled: true,
+      startup_timeout_sec: 15, tool_timeout_sec: 180, default_tools_approval_mode: 'approve',
+    };
+    // Independent of the browser server; both are per-thread and neither edits global Codex configuration.
+    if (this.options.teamMcp) overrides['mcp_servers.relay_team'] = {
+      url: this.options.teamMcp.url, bearer_token_env_var: 'RELAY_TEAM_MCP_TOKEN', enabled: true,
       startup_timeout_sec: 15, tool_timeout_sec: 180, default_tools_approval_mode: 'approve',
     };
     const threadConfig = Object.keys(overrides).length ? { config: overrides } : {};
