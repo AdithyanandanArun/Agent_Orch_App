@@ -55,3 +55,14 @@ The owner's updated direction is recorded in [Group sessions and an orchestrator
 - [x] Add bounded automatic assignments, durable peer requests/replies and compact artifact/context exchange.
 - [x] Demonstrate a Codex/OpenCode feature through Mingle with a committed contract automatically unblocking its dependent consumer; see [live group-session proof](group-session-live-proof.md).
 - [ ] Demonstrate an integrated Codex/Claude feature through Mingle without manually copying the contract; Claude was not invoked in the recorded proof.
+
+## Account foundation — 2026-10-20
+
+- [x] Add Google sign-in through Supabase with an account UUID separate from coding-provider sessions.
+- [x] Store an explicit allowlist of portable preferences with owner-only RLS and concurrent-save detection.
+- [x] Add desktop OS-protected session storage with an explicit memory-only fallback.
+- [ ] Add team invitations, membership roles and shared project authorization.
+- [ ] Verify desktop keyring persistence on Linux, Windows and macOS devices.
+- [ ] Complete public Google app branding, privacy policy and release verification.
+
+See [account deployment and limits](accounts.md). This does not complete two-computer collaboration.

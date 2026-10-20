@@ -46,6 +46,10 @@ pnpm start
 
 `pnpm start` serves the built workspace and API together at **http://127.0.0.1:4310**. Tests use local fixtures rather than paid inference.
 
+## Mingle account
+
+Open **Settings → Account → Continue with Google** to sign in and explicitly save or restore appearance and model defaults across devices. The current Google app is in testing mode with the owner's account allowed. Desktop sign-ins use the OS keyring when available; Node/web-only sessions are memory-only. Local projects remain usable while signed out. Repository data, provider credentials and permission grants are not synchronized. This adds identity for future team projects; shared multi-user projects are not implemented. See [Google accounts and preferences](docs/accounts.md).
+
 ## Provider setup
 
 **Codex:** install the supported Codex CLI and authenticate it yourself with `codex login`. Mingle talks to its documented app-server protocol, using the conversation identifier for later turns.
