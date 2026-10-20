@@ -27,6 +27,8 @@ import { BrowserError } from './browser/errors.ts';
 import { ProjectIntelligenceService } from './project-intelligence/service.ts';
 import { RepositoryService } from './repository/service.ts';
 import { BrowserMcpBridge } from './browser-mcp.ts';
+import { GroupService } from './groups/service.ts';
+import { TeamMcpBridge } from './team-mcp.ts';
 
 export interface ApplicationOptions extends ConfigOptions {
   /** Provider adapters and detection. Inject a fake in tests; the CLI entry passes ./providers/index.ts. */
@@ -46,6 +48,7 @@ export interface RelayApplication {
   readonly store: Store;
   readonly server: Server;
   readonly runtime: SessionRuntime;
+  readonly groups: GroupService;
   readonly terminals: TerminalManager;
   readonly hub: Hub;
   readonly providers: ProviderService;
@@ -119,8 +122,13 @@ export function createApplication(options: ApplicationOptions): RelayApplication
   const terminals = new TerminalManager(store, hub, log, options.terminal);
   const workspace = new WorkspaceService(store, config.dataDir, runtime, () => providers.cached());
   const repository = new RepositoryService({ store, workspace, runtime, log });
+  const handoffs = new HandoffService(store);
+  const groups = new GroupService({ store, workspace, tasks, handoffs, runtime, log, providers: () => providers.cached() ?? [] });
+  const teamMcp = new TeamMcpBridge(groups, store, () => boundPort, () => config.host);
+  runtime.setGroupServices(groups, teamMcp);
+  groups.recover();
   const services: Services = {
-    config, store, hub, runtime, tasks, terminals, providers, browser, intelligence, repository, handoffs: new HandoffService(store), workspace,
+    config, store, hub, runtime, tasks, terminals, providers, browser, intelligence, repository, groups, handoffs, workspace,
     imports: new ImportService(store, options.providers, providers, runtime), directories: new DirectoryService(), projectSources: new ProjectSources(workspace), startedAt: Date.now(), getPort: () => boundPort,
   };
   hub.bind({ onMessage: (socket, raw) => terminals.handleMessage(socket, raw), onClose: (socket) => terminals.releaseSocket(socket) });
@@ -150,6 +158,7 @@ export function createApplication(options: ApplicationOptions): RelayApplication
       const verdict = security.checkHttp(req);
       if (!verdict.ok) return send(res, 403, { error: verdict.reason ?? 'Forbidden' });
       const url = new URL(req.url ?? '/', 'http://relay.local');
+      if (url.pathname === '/api/team/mcp') return await teamMcp.handle(req, res);
       if (url.pathname === '/api/browser/mcp') return await browserMcp.handle(req, res);
       if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
         const reply = await dispatch(req, res, url);
@@ -188,7 +197,7 @@ export function createApplication(options: ApplicationOptions): RelayApplication
   const address = () => ({ host: config.host, port: boundPort, url: `http://${config.host.includes(':') ? `[${config.host}]` : config.host}:${boundPort}` });
 
   const app: RelayApplication = {
-    config, store, server, runtime, terminals, hub, providers, browser, intelligence, repository,
+    config, store, server, runtime, groups, terminals, hub, providers, browser, intelligence, repository,
     initialize() {
       initialized ??= (async () => {
         if (options.exampleWorkspace !== false) await seedExampleWorkspace(store, config.dataDir, log);
@@ -214,7 +223,9 @@ export function createApplication(options: ApplicationOptions): RelayApplication
     close() {
       closing ??= (async () => {
         if (pendingNotify) clearTimeout(pendingNotify);
+        groups.close();
         await runtime.shutdown();
+        teamMcp.close();
         await intelligence.close();
         await repository.close();
         browserMcp.close();

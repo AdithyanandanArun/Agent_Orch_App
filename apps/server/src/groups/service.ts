@@ -24,6 +24,7 @@ import { RESERVED_HANDLES, extractMentions, normalizeScopes, safeArtifactPath, s
 export type GroupLog = (level: 'info' | 'warn' | 'error', message: string, detail?: unknown) => void;
 export interface GroupRuntime {
   isActive(sessionId: string): boolean;
+  isRunLive?(sessionId: string, runId: string): boolean;
   start(sessionId: string, content: string, options?: { taskId?: string; groupDeliveryId?: string; userMessage?: { content: string; kind?: string } }): string;
   interrupt(sessionId: string): boolean;
 }
@@ -633,7 +634,9 @@ export class GroupService {
       if (!group || group.paused) return;
       const queued = this.repo.deliveries(groupId, ['queued']);
       if (!queued.length) return;
-      let capacity = group.maxParallel - this.repo.deliveries(groupId, ['running']).length;
+      // An interrupted delivery can still own a provider cleanup lock. It continues to consume a parallel slot.
+      const activeProviders = this.repo.members(groupId, false).filter((member) => this.runtime.isActive(member.sessionId)).length;
+      let capacity = group.maxParallel - Math.max(activeProviders, this.repo.deliveries(groupId, ['running']).length);
       if (capacity <= 0) return;
       const members = new Map(this.repo.members(groupId, false).map((m) => [m.id, m]));
       const lastStart = this.repo.lastStarts(groupId);
@@ -1154,7 +1157,7 @@ export class GroupService {
     if (member.removedAt || member.held) throw conflict('This agent is stopped or no longer in the group');
     const session = this.store.getSession(member.sessionId);
     if (!session) throw conflict('This agent session is archived');
-    if (!this.runtime.isActive(session.id)) throw conflict('This agent run has finished');
+    if (!this.runtime.isActive(session.id) || this.runtime.isRunLive && !this.runtime.isRunLive(session.id, delivery.runId)) throw conflict('This agent run has finished');
     return { delivery, group, member, session, request };
   }
 

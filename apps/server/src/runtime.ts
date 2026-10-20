@@ -8,6 +8,8 @@ import type { TaskService } from './tasks.ts';
 import type { Logger, ProviderRuntime } from './types.ts';
 import { conflict, errorMessage, notFound, redactSecrets, truncate, newId, nowIso } from './util.ts';
 import { captureRunTree, compareRunTrees, unavailableRunChanges, type RunTreeSnapshot } from './run-changes.ts';
+import type { GroupService } from './groups/service.ts';
+import type { TeamMcpBridge } from './team-mcp.ts';
 import type { BrowserMcpBridge } from './browser-mcp.ts';
 
 export interface RuntimeOptions {
@@ -28,6 +30,7 @@ interface ActiveRun {
   controller: AbortController;
   closed: boolean;
   cleanupPending: boolean;
+  acceptingTools: boolean;
   approvals: Map<string, (allowed: boolean) => void>;
   stream: { messageId: string; text: string; dirty: boolean } | null;
   flushTimer: NodeJS.Timeout | null;
@@ -42,13 +45,15 @@ interface ActiveRun {
   promise: Promise<void>;
 }
 
-export interface StartOptions { taskId?: string; userMessage?: { content: string; kind?: string }; skills?: ProviderSkill[] }
+export interface StartOptions { groupDeliveryId?: string; taskId?: string; userMessage?: { content: string; kind?: string }; skills?: ProviderSkill[] }
 
 const MAX_TOOL_CHARS = 20_000;
 const MAX_APPROVAL_INPUT_CHARS = 20_000;
 
 export class SessionRuntime {
   private readonly active = new Map<string, ActiveRun>();
+  private groups?: GroupService;
+  private teamMcp?: TeamMcpBridge;
   private readonly abortGraceMs: number;
   private readonly flushIntervalMs: number;
 
@@ -61,20 +66,31 @@ export class SessionRuntime {
     this.flushIntervalMs = options.flushIntervalMs ?? 300;
   }
 
+  setGroupServices(groups: GroupService, teamMcp: TeamMcpBridge): void {
+    this.groups = groups;
+    this.teamMcp = teamMcp;
+  }
+
   activeCount(): number {
     return this.active.size;
   }
   isActive(sessionId: string): boolean {
     return this.active.has(sessionId);
   }
+  /** A cleanup lock can outlive provider execution; it must not keep tool authority alive. */
+  isRunLive(sessionId: string, runId: string): boolean {
+    const run = this.active.get(sessionId);
+    return Boolean(run && run.id === runId && run.acceptingTools && !run.closed && !run.controller.signal.aborted);
+  }
 
   /**
    * Starts an asynchronous provider run. All validation and bookkeeping is synchronous and the session is registered as
    * active before any await, so two concurrent requests can never both start a provider Promise for one session.
    */
-  start(sessionId: string, content: string, options: StartOptions = {}): void {
+  start(sessionId: string, content: string, options: StartOptions = {}): string {
     const session = this.store.getSession(sessionId);
     if (!session) throw notFound('Session not found');
+    if (this.groups?.forSession(sessionId) && !options.groupDeliveryId) throw conflict('Start grouped work through its recorded group delivery.');
     if (this.active.has(sessionId) || session.status === 'running' || session.status === 'waiting') throw conflict('Session already has an active run or provider cleanup is still in progress');
     if (!existsSync(session.worktreePath) || !statSync(session.worktreePath).isDirectory()) throw conflict('The session worktree no longer exists on disk');
     this.validateSession?.(session);
@@ -83,7 +99,7 @@ export class SessionRuntime {
     const prompt = this.composePrompt(handoffs, content);
     const run: ActiveRun = {
       id: newId('run'), startedAt: nowIso(), tick: performance.now(), tools: new Map(), activityTimer: null,
-      sessionId, controller: new AbortController(), closed: false, cleanupPending: false, approvals: new Map(), stream: null, flushTimer: null, consumedHandoffs: handoffs.map((h) => h.id), firstEvent: false,
+      sessionId, controller: new AbortController(), closed: false, cleanupPending: false, acceptingTools: false, approvals: new Map(), stream: null, flushTimer: null, consumedHandoffs: handoffs.map((h) => h.id), firstEvent: false,
       baseInput: session.inputTokens, baseOutput: session.outputTokens, baseCost: session.costUsd, taskId: options.taskId ?? null, skills: options.skills ?? [], changeBaseline: null, promise: Promise.resolve(),
     };
     this.store.tx(() => {
@@ -99,6 +115,7 @@ export class SessionRuntime {
     });
     this.active.set(sessionId, run);
     run.promise = this.execute(run, session, prompt);
+    return run.id;
   }
 
   private composePrompt(handoffs: Message[], content: string): string {
@@ -110,7 +127,8 @@ export class SessionRuntime {
   private async execute(run: ActiveRun, startSession: Session, prompt: string): Promise<void> {
     let outcome: 'completed' | 'failed' | 'interrupted' = 'completed';
     let failure: string | null = null;
-    let browserToken: string | undefined;
+    const capabilityTokens: string[] = [];
+    const scrubCapabilities = (value: string): string => capabilityTokens.reduce((text, token) => text.split(token).join('[redacted]'), value);
     try {
       run.changeBaseline = await captureRunTree(startSession.worktreePath);
       if (run.controller.signal.aborted) {
@@ -120,12 +138,24 @@ export class SessionRuntime {
       const adapter = this.providers.createAdapter(startSession.provider);
       const session = this.store.getSession(run.sessionId) ?? startSession;
       const settings = this.store.getSettings();
+      // A queue pause can arrive while the initial Git snapshot is being captured. Do not start inference after that pause.
+      if (this.groups?.forSession(session.id)?.group.paused) {
+        run.controller.abort();
+        this.finish(run, 'interrupted', null, unavailableRunChanges('Group scheduling was paused before the provider started.'));
+        return;
+      }
+      run.acceptingTools = true;
       const browserMcp = settings.browserAgentEnabled !== false ? this.browserMcp?.create(run.id, session, run.controller.signal, (request) => this.requestApproval(run, request)) : undefined;
-      browserToken = browserMcp?.token;
+      if (browserMcp) capabilityTokens.push(browserMcp.token);
+      const groupContext = this.groups?.contextForRun(session.id, run.id);
+      if (this.groups?.forSession(session.id) && !groupContext) throw conflict('Group runs must start through a recorded group delivery. Refresh and send through the group conversation.');
+      const teamMcp = groupContext ? this.teamMcp?.create(run.id, session, run.controller.signal, groupContext) : undefined;
+      if (teamMcp) capabilityTokens.push(teamMcp.token);
+      const effectivePrompt = groupContext ? `${groupContext.instructions}\n\n${prompt}` : prompt;
       const adapterRun = Promise.resolve().then(() => adapter.run({
-        session, prompt, providerTaskState: this.nativeTaskState(session), skills: run.skills, browserMcp, signal: run.controller.signal, settings,
-        onEvent: (event) => this.handleEvent(run, browserToken ? JSON.parse(JSON.stringify(event).split(browserToken).join('[redacted]')) as AdapterEvent : event),
-        requestApproval: (request) => this.requestApproval(run, request),
+        session, prompt: effectivePrompt, teamMcp, providerTaskState: this.nativeTaskState(session), skills: run.skills, browserMcp, signal: run.controller.signal, settings,
+        onEvent: (event) => this.handleEvent(run, capabilityTokens.length ? JSON.parse(scrubCapabilities(JSON.stringify(event))) as AdapterEvent : event),
+        requestApproval: (request) => this.requestApproval(run, JSON.parse(scrubCapabilities(JSON.stringify(request)))),
       }));
       const grace = new Promise<'grace'>((resolve) => {
         run.controller.signal.addEventListener('abort', () => setTimeout(() => resolve('grace'), this.abortGraceMs).unref(), { once: true });
@@ -144,10 +174,12 @@ export class SessionRuntime {
       else {
         outcome = 'failed';
         const detail = redactSecrets(errorMessage(error));
-        failure = truncate(browserToken ? detail.split(browserToken).join('[redacted]') : detail, 4000);
+        failure = truncate(scrubCapabilities(detail), 4000);
       }
     }
+    run.acceptingTools = false;
     this.browserMcp?.revoke(run.id);
+    this.teamMcp?.revoke(run.id);
     let changes: RunChanges;
     try {
       changes = run.cleanupPending
@@ -174,7 +206,11 @@ export class SessionRuntime {
 
   private releaseAfterCleanup(run: ActiveRun): void {
     run.cleanupPending = false;
-    if (run.closed && this.active.get(run.sessionId) === run) this.active.delete(run.sessionId);
+    if (run.closed && this.active.get(run.sessionId) === run) {
+      this.active.delete(run.sessionId);
+      try { this.groups?.onRuntimeIdle(run.sessionId); }
+      catch (error) { this.log('error', `Failed to resume group queue after provider cleanup for ${run.sessionId}`, error); }
+    }
   }
 
   private consumeHandoffsOnce(run: ActiveRun): void {
@@ -407,6 +443,7 @@ export class SessionRuntime {
 
   private finish(run: ActiveRun, outcome: 'completed' | 'failed' | 'interrupted', failure: string | null, changes: RunChanges, durationMs = Math.max(0, Math.round(performance.now() - run.tick)), finishedAt = nowIso()): void {
     run.closed = true;
+    run.acceptingTools = false;
     this.denyApprovals(run, outcome === 'completed' ? 'run finished' : outcome);
     try {
       this.store.tx(() => {
@@ -439,6 +476,8 @@ export class SessionRuntime {
       this.log('error', `Failed to finalise run for ${run.sessionId}`, error);
     } finally {
       if (!run.cleanupPending) this.active.delete(run.sessionId);
+      try { this.groups?.onRunFinished(run.sessionId, run.id, outcome); }
+      catch (error) { this.log('error', `Failed to record group delivery outcome for ${run.sessionId}`, error); }
     }
   }
 

@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { z } from 'zod';
 import {
-  RepositoryCommitSchema, RepositoryPushSchema, RepositoryBranchSchema, RepositoryPullRequestSchema, BrowserConnectSchema, BrowserActionSchema, ApprovalDecisionSchema, ConversationIdSchema, ImportConversationSchema, ProviderSchema, CloneProjectSchema, NewProjectSchema, CreateProjectSchema, CreateSessionSchema, CreateTaskSchema, HandoffSchema, SendMessageSchema, UpdateProjectSchema, UpdateSessionSchema, UpdateSettingsSchema, UpdateTaskSchema,
+  CreateGroupSchema, AddGroupAgentSchema, UpdateGroupSchema, SendGroupMessageSchema, RepositoryCommitSchema, RepositoryPushSchema, RepositoryBranchSchema, RepositoryPullRequestSchema, BrowserConnectSchema, BrowserActionSchema, ApprovalDecisionSchema, ConversationIdSchema, ImportConversationSchema, ProviderSchema, CloneProjectSchema, NewProjectSchema, CreateProjectSchema, CreateSessionSchema, CreateTaskSchema, HandoffSchema, SendMessageSchema, UpdateProjectSchema, UpdateSessionSchema, UpdateSettingsSchema, UpdateTaskSchema,
 } from '@relay/contracts';
 import type { Bootstrap, SessionUsage } from '@relay/contracts';
 import { gitStatus } from './git.ts';
@@ -22,11 +22,12 @@ import type { DirectoryService } from './directories.ts';
 import type { ProjectSources } from './project-sources.ts';
 import type { ProjectIntelligenceService } from './project-intelligence/service.ts';
 import type { RepositoryService } from './repository/service.ts';
+import type { GroupService } from './groups/service.ts';
 import type { BrowserService } from './browser/service.ts';
 
 export interface Services {
   config: ServerConfig; store: Store; hub: Hub; workspace: WorkspaceService; runtime: SessionRuntime; tasks: TaskService; handoffs: HandoffService;
-  intelligence: ProjectIntelligenceService; repository: RepositoryService; browser: BrowserService; providers: ProviderService; imports: ImportService; directories: DirectoryService; projectSources: ProjectSources; terminals: TerminalManager; startedAt: number; getPort: () => number;
+  groups: GroupService; intelligence: ProjectIntelligenceService; repository: RepositoryService; browser: BrowserService; providers: ProviderService; imports: ImportService; directories: DirectoryService; projectSources: ProjectSources; terminals: TerminalManager; startedAt: number; getPort: () => number;
 }
 
 export class Reply {
@@ -138,7 +139,7 @@ export function buildRouter(s: Services) {
     const providers = await s.providers.snapshot();
     const runs = s.store.bootstrapRuns();
     const body: Bootstrap = {
-      runs, toolCalls: s.store.bootstrapToolCalls(runs.map((run) => run.id)),
+      groups: s.groups.snapshots(), runs, toolCalls: s.store.bootstrapToolCalls(runs.map((run) => run.id)),
       projects: s.store.listProjects(), sessions: s.store.listSessions(), messages: s.store.bootstrapMessages(300), tasks: s.store.listTasks(),
       events: s.store.recentEvents(500), approvals: s.store.bootstrapApprovals(50), providers, settings: s.store.getSettings(), version: s.config.version,
     };
@@ -228,11 +229,31 @@ export function buildRouter(s: Services) {
     return gitStatus(scope.root);
   });
 
+  const emptyGroupBody = z.object({}).strict();
+  add('POST', '/api/groups', async (ctx) => new Reply(201, await s.groups.create(await ctx.body(CreateGroupSchema))));
+  add('GET', '/api/groups/:id', (ctx) => s.groups.get(param(ctx, 'id')));
+  add('PATCH', '/api/groups/:id', async (ctx) => s.groups.update(param(ctx, 'id'), await ctx.body(UpdateGroupSchema)));
+  add('POST', '/api/groups/:id/agents', async (ctx) => new Reply(201, await s.groups.addAgent(param(ctx, 'id'), await ctx.body(AddGroupAgentSchema))));
+  add('DELETE', '/api/groups/:id/members/:memberId', (ctx) => s.groups.removeMember(param(ctx, 'id'), param(ctx, 'memberId')));
+  add('POST', '/api/groups/:id/messages', async (ctx) => new Reply(202, s.groups.send(param(ctx, 'id'), await ctx.body(SendGroupMessageSchema))));
+  add('POST', '/api/groups/:id/pause', async (ctx) => { await ctx.body(emptyGroupBody); return s.groups.pause(param(ctx, 'id')); });
+  add('POST', '/api/groups/:id/stop', async (ctx) => { await ctx.body(emptyGroupBody); return s.groups.stop(param(ctx, 'id')); });
+  add('POST', '/api/groups/:id/resume', async (ctx) => { await ctx.body(emptyGroupBody); return s.groups.resume(param(ctx, 'id')); });
+  add('POST', '/api/groups/:id/members/:memberId/resume', async (ctx) => { await ctx.body(emptyGroupBody); return s.groups.resumeMember(param(ctx, 'id'), param(ctx, 'memberId')); });
+  add('POST', '/api/groups/:id/members/:memberId/interrupt', async (ctx) => { await ctx.body(emptyGroupBody); return s.groups.stopMember(param(ctx, 'id'), param(ctx, 'memberId')); });
+
   add('POST', '/api/sessions', async (ctx) => new Reply(201, await s.workspace.createSession(await ctx.body(CreateSessionSchema))));
   add('PATCH', '/api/projects/:id', async (ctx) => s.workspace.renameProject(param(ctx, 'id'), (await ctx.body(UpdateProjectSchema)).name));
-  add('PATCH', '/api/sessions/:id', async (ctx) => s.workspace.updateSession(param(ctx, 'id'), await ctx.body(UpdateSessionSchema)));
+  add('PATCH', '/api/sessions/:id', async (ctx) => {
+    const id = param(ctx, 'id');
+    const patch = await ctx.body(UpdateSessionSchema);
+    const session = s.store.getSession(id);
+    if (s.groups.forSession(id) && patch.provider && patch.provider !== session?.provider) throw conflict('Group members retain their provider identity. Add another agent to use a different provider.');
+    return s.workspace.updateSession(id, patch);
+  });
   add('DELETE', '/api/sessions/:id', async (ctx) => {
     const id = param(ctx, 'id');
+    if (s.groups.forSession(id)) throw conflict('Remove this agent from its group before archiving it. The original conversation remains the group entry.');
     s.workspace.archiveSession(id);
     await s.browser.disconnect(id);
     return { ok: true };
@@ -263,6 +284,13 @@ export function buildRouter(s: Services) {
     const { content, skills: selected } = await ctx.body(SendMessageSchema);
     const session = s.store.getSession(id);
     if (!session) throw notFound('Session not found');
+    const group = s.groups.forSession(id);
+    if (group) {
+      if (selected?.length) throw badRequest('Select skills in an independent session. Group messages currently route through the team composer.');
+      const member = group.members.find((row) => row.sessionId === id && !row.removedAt);
+      if (!member) throw conflict('This agent is no longer in the group. Refresh the conversation.');
+      return new Reply(202, s.groups.send(group.group.id, { content, ...(id === group.group.anchorSessionId ? {} : { recipients: [member.id] }) }));
+    }
     if (s.runtime.isActive(id)) throw conflict('Session already has an active run or provider cleanup is still in progress');
     const catalog = selected?.length ? await s.providers.catalog(session, true) : null;
     const skills = [...new Set(selected ?? [])].map((key) => {
@@ -273,6 +301,7 @@ export function buildRouter(s: Services) {
     if (session.provider === 'claude' && skills.length > 1) throw badRequest('Claude supports one explicitly selected skill per message.');
     const latest = s.store.getSession(id);
     if (!latest) throw notFound('Session not found');
+    if (s.groups.forSession(id)) throw conflict('This session joined a group while loading skills. Send through its group conversation.');
     if (latest.provider !== session.provider || latest.model !== session.model || latest.worktreePath !== session.worktreePath) throw conflict('Session settings changed while loading skills. Send the message again.');
     s.runtime.start(id, content, { skills });
     return new Reply(202, { accepted: true });
@@ -280,7 +309,10 @@ export function buildRouter(s: Services) {
   add('POST', '/api/sessions/:id/interrupt', (ctx) => {
     const id = param(ctx, 'id');
     if (!s.store.getSession(id)) throw notFound('Session not found');
-    s.runtime.interrupt(id);
+    const group = s.groups.forSession(id);
+    const member = group?.members.find((row) => row.sessionId === id && !row.removedAt);
+    if (group && member) s.groups.stopMember(group.group.id, member.id);
+    else s.runtime.interrupt(id);
     return { ok: true };
   });
 
@@ -288,6 +320,7 @@ export function buildRouter(s: Services) {
   add('PATCH', '/api/tasks/:id', async (ctx) => s.tasks.update(param(ctx, 'id'), await ctx.body(UpdateTaskSchema)));
   add('POST', '/api/tasks/:id/run', (ctx) => {
     const task = s.tasks.assertRunnable(param(ctx, 'id'));
+    if (s.groups.forSession(task.sessionId!)) return new Reply(202, s.groups.runTask(task.id));
     const prompt = s.tasks.buildPrompt(task);
     s.runtime.start(task.sessionId!, prompt, { taskId: task.id, userMessage: { content: prompt, kind: 'task' } });
     return new Reply(202, { accepted: true });
@@ -308,6 +341,14 @@ export function buildRouter(s: Services) {
         policy: proposed.defaultPolicy, serviceTier: proposed.defaultServiceTier,
       }, { effort: patch.defaultEffort !== undefined, policy: patch.defaultPolicy !== undefined, serviceTier: patch.defaultServiceTier !== undefined });
       patch = { ...patch, defaultEffort: resolved.effort, defaultPolicy: resolved.policy, defaultServiceTier: resolved.serviceTier };
+    }
+    if (patch.groupDefaults) {
+      for (const configuration of [patch.groupDefaults.orchestrator, patch.groupDefaults.worker]) {
+        if (!configuration) continue;
+        const info = s.providers.cached()?.find((row) => row.id === configuration.provider);
+        if (info?.models.length && !info.models.some((model) => model.id === configuration.model || model.aliases?.includes(configuration.model))) throw badRequest('Choose a model from the current provider catalog for agent defaults.');
+        resolveRunConfig(info, configuration, { effort: true, policy: true, serviceTier: true });
+      }
     }
     const next = s.store.tx(() => {
       const updated = s.store.updateSettings(patch);

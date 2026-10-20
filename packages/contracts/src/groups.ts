@@ -43,7 +43,7 @@ export interface ConversationGroup {
 }
 export interface GroupMember {
   id: string; groupId: string; sessionId: string; handle: string; role: 'peer' | 'orchestrator' | 'worker';
-  joinedAt: string; removedAt: string | null;
+  joinedAt: string; removedAt: string | null; held?: boolean;
 }
 export interface GroupMessage {
   id: string; seq: number; groupId: string; senderMemberId: string | null; recipientMemberIds: string[];
