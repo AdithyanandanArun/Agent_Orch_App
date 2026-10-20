@@ -691,6 +691,7 @@ export class GroupService {
     const assignment = d.assignmentId ? this.repo.getAssignment(d.assignmentId) : undefined;
     const task = assignment ? this.store.getTask(assignment.taskId) : undefined;
     if (!assignment || !task) { this.cancel(d, 'The assignment task no longer exists'); return 'cancel'; }
+    if (task.sessionId !== member.sessionId || task.projectId !== group.projectId || assignment.toMemberId !== member.id) { this.cancel(d, 'The assignment task was reassigned or no longer belongs to this agent'); return 'cancel'; }
     if (task.status === 'done') { this.cancel(d, 'The task was already accepted as done'); return 'cancel'; }
     if (task.status === 'running' || task.status === 'backlog') return 'defer';
     return this.dependencyState(assignment, task).waiting.length ? 'defer' : 'ready';
@@ -1098,7 +1099,15 @@ export class GroupService {
       if (known) return this.artifactResult(known, true);
     }
     // The handoff re-checks authority inside its own transaction, immediately before it writes to the recipient session.
-    const authorize = () => { this.live(ctx); };
+    const authorize = () => {
+      this.live(ctx);
+      const currentRecipient = this.requireMember(group, recipient.id);
+      if (currentRecipient.sessionId !== recipient.sessionId || !this.store.getSession(currentRecipient.sessionId)) throw conflict('The artifact recipient is no longer available');
+      if (taskId) {
+        const task = this.store.getTask(taskId);
+        if (!task || task.projectId !== group.projectId || task.sessionId !== member.sessionId) throw forbidden('This artifact task is no longer owned by the sender');
+      }
+    };
     authorize();
     const event = await this.handoffs.create({ fromSessionId: member.sessionId, toSessionId: recipient.sessionId, taskId, path, revision: input.revision, note: clean(input.note ?? '', 4000) }, authorize);
     const handoffMessageId = typeof event.payload.messageId === 'string' ? event.payload.messageId : null;
