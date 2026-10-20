@@ -228,6 +228,7 @@ export function GroupConversation({ snapshot }: { snapshot: GroupSnapshot }) {
       <GroupBar snapshot={snapshot} membersOpen={membersOpen} setMembersOpen={setMembersOpen} />
       <div className="group-body">
       <section className="group-body__conversation" aria-label="Group conversation">
+      <div className="group-transcript">
       <div
         className="chat__scroll" ref={scroller} role="log" aria-live="polite" aria-label={`Group conversation: ${snapshot.group.title || anchor.name}`}
         onScroll={(event) => {
@@ -274,6 +275,7 @@ export function GroupConversation({ snapshot }: { snapshot: GroupSnapshot }) {
           <ArrowDown size={13} /> Latest
         </button>
       ) : null}
+      </div>
       <GroupComposer key={snapshot.group.id} snapshot={snapshot} anchor={anchor} onOpenMembers={() => setMembersOpen(true)} footer={<GitBar project={project} session={anchor} />} />
       </section>
       <AgentPresenceRail snapshot={snapshot} members={members} sessions={sessions} runs={allRuns} approvals={approvals ?? []} connection={connection} providers={providers} hidden={contextOpen} />
