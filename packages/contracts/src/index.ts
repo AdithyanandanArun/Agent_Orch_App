@@ -106,7 +106,9 @@ export const ConversationIdSchema = z.string().min(1).max(200).regex(/^[A-Za-z0-
 export const ImportConversationSchema = z.object({ provider: ProviderSchema, conversationId: ConversationIdSchema }).strict();
 export interface AppSettings {
   defaultProvider: Provider; defaultCodexModel: string; defaultClaudeModel: string; defaultEffort: Effort; defaultIsolated: boolean;
+  defaultAntigravityModel?: string;
   defaultPolicy: Policy; defaultServiceTier?: string; theme: 'dark' | 'light'; claudeExecutable: string; codexExecutable: string;
+  antigravityExecutable?: string;
   groupDefaults?: import('./groups').GroupDefaults;
   autoCompactPercent?: number | null;
   browserAgentEnabled?: boolean; browserExecutable?: string;
@@ -161,9 +163,11 @@ export const HandoffSchema = z.object({ fromSessionId: z.string().min(1), toSess
 export const UpdateSettingsSchema = z.object({
   defaultProvider: ProviderSchema.optional(), defaultCodexModel: z.string().trim().min(1).max(150).optional(),
   defaultClaudeModel: z.string().trim().min(1).max(150).optional(), defaultEffort: EffortSchema.optional(),
+  defaultAntigravityModel: z.string().trim().min(1).max(150).optional(),
   defaultIsolated: z.boolean().optional(),
   defaultPolicy: PolicySchema.optional(), defaultServiceTier: ServiceTierSchema.optional(), theme: z.enum(['dark', 'light']).optional(),
   claudeExecutable: z.string().max(4096).optional(), codexExecutable: z.string().max(4096).optional(),
+  antigravityExecutable: z.string().max(4096).optional(),
   groupDefaults: z.lazy(() => GroupDefaultsSchema).optional(),
   autoCompactPercent: z.number().int().min(1).max(95).nullable().optional(),
   browserAgentEnabled: z.boolean().optional(), browserExecutable: z.string().max(4096).optional(),
