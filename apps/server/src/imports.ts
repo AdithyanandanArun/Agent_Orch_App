@@ -6,6 +6,7 @@ import type { RuntimeLike } from './app-types.ts';
 import { repoInfo } from './git.ts';
 import type { ProviderService } from './provider-service.ts';
 import { resolveRunConfig } from './session-config.ts';
+import { defaultModel, providerExecutable, providerName } from './provider-config.ts';
 import type { Store } from './store.ts';
 import type { ProviderRuntime } from './types.ts';
 import { badRequest, conflict, errorMessage, HttpError, notFound, redactSecrets, truncate } from './util.ts';
@@ -28,11 +29,12 @@ export class ImportService {
   }
 
   async list(provider: Provider, projectId?: string, cursor?: string): Promise<ExternalConversationList> {
+    if (provider === 'antigravity') throw badRequest('Antigravity conversation import is not supported because its native history protocol has not been verified.');
     if (!this.native.listConversations) throw badRequest('This runtime does not support importing conversations.');
     const project = projectId ? this.store.getProject(projectId) : undefined;
     if (projectId && !project) throw notFound('Project not found');
     const settings = this.store.getSettings();
-    const result = await this.discover(JSON.stringify(['list', provider, project?.path, cursor, settings.codexExecutable, settings.claudeExecutable]),
+    const result = await this.discover(JSON.stringify(['list', provider, project?.path, cursor, providerExecutable(provider, settings)]),
       () => this.native.listConversations!(provider, settings, { directory: project?.path, cursor }));
     return { ...result, conversations: result.conversations.filter((row) => row.provider === provider && ConversationIdSchema.safeParse(row.id).success).map((row) => {
       const existing = this.store.findProviderSession(provider, row.id);
@@ -52,13 +54,14 @@ export class ImportService {
   }
 
   async read(provider: Provider, id: string): Promise<ExternalConversationDetails> {
+    if (provider === 'antigravity') throw badRequest('Antigravity conversation import is not supported because its native history protocol has not been verified.');
     if (!ConversationIdSchema.safeParse(id).success) throw badRequest('Invalid conversation ID');
     if (!this.native.readConversation) throw badRequest('This runtime does not support importing conversations.');
     const settings = this.store.getSettings();
-    const result = await this.discover(JSON.stringify(['read', provider, id, settings.codexExecutable, settings.claudeExecutable]),
+    const result = await this.discover(JSON.stringify(['read', provider, id, providerExecutable(provider, settings)]),
       () => this.native.readConversation!(provider, settings, id));
     const latestSettings = this.store.getSettings();
-    if (latestSettings.codexExecutable !== settings.codexExecutable || latestSettings.claudeExecutable !== settings.claudeExecutable) throw conflict('Provider settings changed while loading history. Open the conversation again.');
+    if (latestSettings.codexExecutable !== settings.codexExecutable || latestSettings.claudeExecutable !== settings.claudeExecutable || latestSettings.antigravityExecutable !== settings.antigravityExecutable) throw conflict('Provider settings changed while loading history. Open the conversation again.');
     if (result.conversation.id !== id || result.conversation.provider !== provider) throw conflict('The provider returned a different conversation. Refresh the history list.');
     // Never mutate a shared in-flight result while decorating it for this request.
     const conversation = { ...result.conversation };
@@ -70,6 +73,7 @@ export class ImportService {
   }
 
   async import(provider: Provider, id: string): Promise<ImportConversationResult> {
+    if (provider === 'antigravity') throw badRequest('Antigravity conversation import is not supported because its native history protocol has not been verified.');
     const details = await this.read(provider, id);
     if (details.conversation.unavailableReason) throw badRequest(details.conversation.unavailableReason);
     const directory = await this.directory(details.conversation.directory);
@@ -78,7 +82,7 @@ export class ImportService {
     const metadata = this.providers.cached()?.find((row) => row.id === provider);
     const recordedModel = details.conversation.model;
     const known = metadata?.models.find((row) => row.id === recordedModel || row.aliases?.includes(recordedModel ?? ''));
-    const model = known?.id ?? (provider === 'codex' ? settings.defaultCodexModel : settings.defaultClaudeModel);
+    const model = known?.id ?? defaultModel(provider, settings);
     const config = resolveRunConfig(metadata, { provider, model, effort: settings.defaultEffort, policy: 'supervised', serviceTier: 'standard' });
     const notices = [...details.notices];
     if (!known) notices.push('The original model was not reported or is no longer listed. This session uses your saved provider model.');
@@ -118,7 +122,7 @@ export class ImportService {
         this.store.insertMessage({ sessionId: session.id, role: message.role, content: message.content, kind: 'imported', createdAt: date });
       }
       this.store.insertMessage({ sessionId: session.id, role: 'system', kind: 'info', content: [
-        `Imported ${provider === 'codex' ? 'Codex' : 'Claude'} conversation. Your next message resumes it in its original folder. This session works directly in that folder with Supervised permissions.`, ...notices,
+        `Imported ${providerName(provider)} conversation. Your next message resumes it in its original folder. This session works directly in that folder with Supervised permissions.`, ...notices,
       ].join('\n\n') });
       this.store.recordEvent({ projectId: project.id, sessionId: session.id, type: 'session.imported', summary: `Conversation imported: ${session.name}`, payload: { provider, isolated: false } });
       return { session, project, alreadyImported: false, notices };

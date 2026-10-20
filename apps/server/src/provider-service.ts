@@ -1,14 +1,23 @@
 import type { AppSettings, Provider, ProviderCatalog, ProviderInfo, ProviderUsage, Session } from '@relay/contracts';
 import type { Logger, ProviderRuntime } from './types.ts';
 import { errorMessage, redactSecrets, truncate } from './util.ts';
+import { providerExecutable, providerName } from './provider-config.ts';
 
 const BOOTSTRAP_WAIT_MS = 4000;
 const USAGE_CACHE_MS = 60_000;
 const USAGE_REFRESH_MIN_MS = 15_000;
-const PROVIDERS: Array<{ id: Provider; name: string }> = [{ id: 'codex', name: 'Codex' }, { id: 'claude', name: 'Claude' }];
+const PROVIDERS: Provider[] = ['codex', 'claude', 'antigravity'];
 
 function placeholder(reason: string): ProviderInfo[] {
-  return PROVIDERS.map((p) => ({ id: p.id, name: p.name, available: false, version: null, executable: null, reason, models: [] }));
+  return PROVIDERS.map((id) => ({ id, name: providerName(id), available: false, version: null, executable: null, reason, models: [] }));
+}
+
+function completeProviderList(result: ProviderInfo[], reason: string): ProviderInfo[] {
+  const byId = new Map(result.map((row) => [row.id, row]));
+  return PROVIDERS.map((id) => byId.get(id) ?? {
+    id, name: providerName(id), available: false, version: null, executable: null,
+    reason: `${providerName(id)} detection did not report this provider. ${reason}`, models: [],
+  });
 }
 
 /** Caches provider diagnostics; probes check CLI versions, login state and models without inference. */
@@ -27,7 +36,8 @@ export class ProviderService {
   private probe(): Promise<ProviderInfo[]> {
     const generation = ++this.generation;
     const promise = this.providers.detectProviders(this.getSettings()).then(
-      (result) => {
+      (detected) => {
+        const result = completeProviderList(detected, 'Refresh providers to see current availability.');
         if (generation === this.generation) { this.cache = result; this.onChange(); }
         return result;
       },
@@ -91,7 +101,7 @@ export class ProviderService {
   /** Quota reporting never starts a model turn or redeems earned resets. */
   usage(session: Session, force = false): Promise<ProviderUsage> {
     const settings = this.getSettings();
-    const key = JSON.stringify([session.provider, session.model, session.worktreePath, settings.codexExecutable, settings.claudeExecutable]);
+    const key = JSON.stringify([session.provider, session.model, session.worktreePath, providerExecutable(session.provider, settings)]);
     const now = Date.now();
     const cached = this.usageCache.get(key);
     if (cached && (cached.expires > now && !force || now - cached.receivedAt < USAGE_REFRESH_MIN_MS)) return Promise.resolve(cached.value);
@@ -118,7 +128,7 @@ export class ProviderService {
   /** Discover commands and skills without submitting a model prompt. Cache briefly per session configuration. */
   catalog(session: Session, force = false): Promise<ProviderCatalog> {
     const settings = this.getSettings();
-    const key = JSON.stringify([session.id, session.provider, session.model, session.worktreePath, settings.codexExecutable, settings.claudeExecutable]);
+    const key = JSON.stringify([session.id, session.provider, session.model, session.worktreePath, providerExecutable(session.provider, settings)]);
     const cached = this.catalogs.get(key);
     if (!force && cached && cached.expires > Date.now()) return Promise.resolve(cached.value);
     const inflight = this.catalogInflight.get(key);

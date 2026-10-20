@@ -9,6 +9,7 @@ import type { RuntimeLike } from './app-types.ts';
 import type { Store } from './store.ts';
 import { badRequest, conflict, newId, notFound, slugify, unprocessable } from './util.ts';
 import { resolveRunConfig } from './session-config.ts';
+import { defaultModel } from './provider-config.ts';
 
 type CreateProject = z.infer<typeof CreateProjectSchema>;
 type CreateSession = z.infer<typeof CreateSessionSchema>;
@@ -59,7 +60,7 @@ export class WorkspaceService {
     if (!project) throw notFound('Project not found');
     const settings = this.store.getSettings();
     const provider = input.provider ?? settings.defaultProvider;
-    const model = input.model ?? (provider === 'codex' ? settings.defaultCodexModel : settings.defaultClaudeModel);
+    const model = input.model ?? defaultModel(provider, settings);
     const name = input.name ?? `Session ${this.store.listSessions(project.id).length + 1}`;
     const { effort, policy, serviceTier } = resolveRunConfig(this.getProviders()?.find((row) => row.id === provider), {
       provider, model, effort: input.effort ?? settings.defaultEffort, policy: input.policy ?? settings.defaultPolicy,
@@ -98,7 +99,7 @@ export class WorkspaceService {
     if (patch.provider && patch.provider !== session.provider) {
       if (session.providerSessionId) throw conflict('This conversation belongs to its current provider. Start a new session to use another provider.');
       const settings = this.store.getSettings();
-      patch = { ...patch, model: patch.model ?? (patch.provider === 'codex' ? settings.defaultCodexModel : settings.defaultClaudeModel) };
+      patch = { ...patch, model: patch.model ?? defaultModel(patch.provider, settings) };
     }
     if (changingRun) {
       const proposed = { ...session, ...patch };

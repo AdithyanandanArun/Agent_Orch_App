@@ -18,6 +18,7 @@ import type { TerminalManager } from './terminal.ts';
 import { HttpError, badRequest, conflict, notFound } from './util.ts';
 import { resolveRunConfig } from './session-config.ts';
 import type { ImportService } from './imports.ts';
+import { defaultModel } from './provider-config.ts';
 import type { DirectoryService } from './directories.ts';
 import type { ProjectSources } from './project-sources.ts';
 import type { ProjectIntelligenceService } from './project-intelligence/service.ts';
@@ -74,7 +75,7 @@ export function parse<T>(schema: z.ZodType<T>, value: unknown): T {
 }
 
 const executable = z.string().max(4096).refine((v) => !/[\0\r\n]/.test(v), 'Executable path contains control characters');
-const SettingsPatch = UpdateSettingsSchema.extend({ claudeExecutable: executable.optional(), codexExecutable: executable.optional(), browserExecutable: executable.optional(), browserCdpEndpoint: z.string().max(2048).refine((value) => {
+const SettingsPatch = UpdateSettingsSchema.extend({ claudeExecutable: executable.optional(), codexExecutable: executable.optional(), antigravityExecutable: executable.optional(), browserExecutable: executable.optional(), browserCdpEndpoint: z.string().max(2048).refine((value) => {
   if (!value) return true;
   try { const url = new URL(value); return ['http:', 'ws:'].includes(url.protocol) && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) && Boolean(url.port) && !url.username && !url.password && !url.search && !url.hash; } catch { return false; }
 }, 'Use a loopback HTTP or WebSocket endpoint with an explicit port').optional() });
@@ -334,10 +335,11 @@ export function buildRouter(s: Services) {
     let patch = await ctx.body(SettingsPatch);
     const before = s.store.getSettings();
     const proposed = { ...before, ...patch };
-    const selectedModelKey = proposed.defaultProvider === 'codex' ? 'defaultCodexModel' : 'defaultClaudeModel';
-    if (patch.defaultProvider !== undefined || patch[selectedModelKey] !== undefined || patch.defaultEffort !== undefined || patch.defaultPolicy !== undefined || patch.defaultServiceTier !== undefined) {
+    const selectedModel = defaultModel(proposed.defaultProvider, proposed);
+    const selectedModelWasPatched = defaultModel(proposed.defaultProvider, before) !== selectedModel;
+    if (patch.defaultProvider !== undefined || selectedModelWasPatched || patch.defaultEffort !== undefined || patch.defaultPolicy !== undefined || patch.defaultServiceTier !== undefined) {
       const resolved = resolveRunConfig(s.providers.cached()?.find((row) => row.id === proposed.defaultProvider), {
-        provider: proposed.defaultProvider, model: proposed[selectedModelKey], effort: proposed.defaultEffort,
+        provider: proposed.defaultProvider, model: selectedModel, effort: proposed.defaultEffort,
         policy: proposed.defaultPolicy, serviceTier: proposed.defaultServiceTier,
       }, { effort: patch.defaultEffort !== undefined, policy: patch.defaultPolicy !== undefined, serviceTier: patch.defaultServiceTier !== undefined });
       patch = { ...patch, defaultEffort: resolved.effort, defaultPolicy: resolved.policy, defaultServiceTier: resolved.serviceTier };
@@ -355,7 +357,7 @@ export function buildRouter(s: Services) {
       s.store.recordEvent({ type: 'settings.updated', summary: 'Settings updated', payload: { fields: Object.keys(patch) } });
       return updated;
     });
-    if (before.claudeExecutable !== next.claudeExecutable || before.codexExecutable !== next.codexExecutable) s.providers.invalidate();
+    if (before.claudeExecutable !== next.claudeExecutable || before.codexExecutable !== next.codexExecutable || before.antigravityExecutable !== next.antigravityExecutable) s.providers.invalidate();
     return next;
   });
   add('GET', '/api/providers', () => s.providers.list());
