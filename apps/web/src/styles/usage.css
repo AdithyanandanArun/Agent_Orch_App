@@ -1,12 +1,14 @@
 .usage-backdrop {
   position: fixed; z-index: 300; inset: 0; display: grid; place-items: center; padding: 18px;
-  background: var(--bg-overlay); backdrop-filter: blur(5px); animation: fade 100ms ease-out;
+  background: var(--bg-overlay); backdrop-filter: blur(5px); animation: fade var(--motion-overlay) var(--ease-standard) both;
 }
+.usage-backdrop.is-closing { pointer-events: none; animation: fade-out var(--motion-overlay) var(--ease-standard) both; }
 .usage-dialog {
   display: flex; flex-direction: column; width: min(680px, 100%); max-height: min(800px, calc(100vh - 36px));
   overflow: hidden; border: 1px solid var(--line-strong); border-radius: 16px; background: var(--bg-panel);
-  color: var(--fg-0); box-shadow: var(--shadow-pop); animation: fade 120ms ease-out;
+  color: var(--fg-0); box-shadow: var(--shadow-pop); animation: pop-in var(--motion-overlay) var(--ease-out) both;
 }
+.usage-backdrop.is-closing .usage-dialog { animation: pop-out var(--motion-overlay) var(--ease-out) both; }
 .usage-dialog__head, .usage-dialog__foot { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex: none; padding: 16px 18px; }
 .usage-dialog__head { border-bottom: 1px solid var(--line); }
 .usage-dialog__head h1 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -.02em; }

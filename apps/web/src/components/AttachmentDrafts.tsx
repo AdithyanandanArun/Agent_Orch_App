@@ -3,6 +3,7 @@ import { Paperclip, RotateCcw, X } from 'lucide-react';
 import { ATTACHMENT_LIMITS, type AttachmentRef } from '@mingle/contracts';
 import { api, errorMessage } from '../lib/api';
 import { cx } from '../lib/format';
+import { usePresenceList } from '../lib/motion';
 
 type Scope = { kind: 'session' | 'group'; id: string };
 export interface DraftUpload {
@@ -165,17 +166,19 @@ export function AttachmentTray({ attachments, disabled, busy, uploads = [], onRe
   uploads?: DraftUpload[]; onRetry?: (id: string) => void; onForget?: (id: string) => void;
   loading?: boolean; loadError?: string | null; onReload?: () => void;
 }) {
-  const showTray = attachments.length > 0 || uploads.length > 0 || Boolean(loadError);
+  const attachmentRows = usePresenceList(attachments);
+  const uploadRows = usePresenceList(uploads);
+  const showTray = attachmentRows.length > 0 || uploadRows.length > 0 || Boolean(loadError);
   return showTray ? <div className="attachment-tray" aria-label="Message attachments">
-    {attachments.map((file) => <div className={cx('attachment-drafts__item', file.kind === 'image' && 'is-image')} key={file.id} title={file.name}>
+    {attachmentRows.map(({ item: file, closing }) => <div className={cx('attachment-drafts__item', file.kind === 'image' && 'is-image', closing && 'is-closing')} key={file.id} title={file.name} aria-hidden={closing || undefined} inert={closing}>
       {file.kind === 'image' ? <img src={api.attachmentUrl(file.id)} alt={file.name} /> : <span className="attachment-drafts__file">{file.name}</span>}
-      <button type="button" aria-label={`Remove ${file.name}`} title="Remove attachment" disabled={disabled || busy} onClick={() => onRemove(file.id)}><X size={12} aria-hidden="true" /></button>
+      <button type="button" aria-label={`Remove ${file.name}`} title="Remove attachment" disabled={closing || disabled || busy} onClick={() => onRemove(file.id)}><X size={12} aria-hidden="true" /></button>
     </div>)}
-    {uploads.map((item) => <div className={cx('attachment-drafts__upload', item.status === 'failed' && 'has-error')} key={item.id}>
+    {uploadRows.map(({ item, closing }) => <div className={cx('attachment-drafts__upload', item.status === 'failed' && 'has-error', closing && 'is-closing')} key={item.id} aria-hidden={closing || undefined} inert={closing}>
       {item.previewUrl ? <img src={item.previewUrl} alt="" /> : null}
       <div><span className="attachment-drafts__file" title={item.name}>{item.name}</span><span className="attachment-drafts__state" role="status">{item.status === 'failed' ? item.error || 'Upload failed' : item.status === 'uploading' ? 'Uploading…' : 'Queued'}</span></div>
-      {item.status === 'failed' && onRetry ? <button type="button" className="attachment-drafts__button" disabled={disabled} aria-label={`Retry ${item.name}`} title="Retry upload" onClick={() => onRetry(item.id)}><RotateCcw size={13} aria-hidden="true" /></button> : null}
-      {onForget ? <button type="button" className="attachment-drafts__button" disabled={disabled || item.status === 'uploading'} aria-label={`Remove ${item.name}`} title="Remove attachment" onClick={() => onForget(item.id)}><X size={13} aria-hidden="true" /></button> : null}
+      {item.status === 'failed' && onRetry ? <button type="button" className="attachment-drafts__button" disabled={closing || disabled} aria-label={`Retry ${item.name}`} title="Retry upload" onClick={() => onRetry(item.id)}><RotateCcw size={13} aria-hidden="true" /></button> : null}
+      {onForget ? <button type="button" className="attachment-drafts__button" disabled={closing || disabled || item.status === 'uploading'} aria-label={`Remove ${item.name}`} title="Remove attachment" onClick={() => onForget(item.id)}><X size={13} aria-hidden="true" /></button> : null}
     </div>)}
     {loading ? <span className="attachment-drafts__state" role="status">Loading attachments…</span> : busy && !uploads.length ? <span className="attachment-drafts__state" role="status">Updating attachments…</span> : null}
     {loadError ? <div className="attachment-drafts__load-error"><span>Could not restore attachments.</span>{onReload ? <button type="button" className="link-btn" disabled={disabled || busy} onClick={onReload}>Retry</button> : null}</div> : null}

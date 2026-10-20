@@ -5,8 +5,10 @@
 .browser-center strong { color: var(--fg-0); font-weight: 550; }
 .ctab__live { width: 5px; height: 5px; margin-left: 1px; border-radius: 50%; background: var(--ok); flex: none; }
 
-.browser-overlay { position: fixed; inset: 0; z-index: 90; display: flex; padding: 14px; background: var(--bg-overlay); animation: fade var(--dur-fast) ease-out; }
-.browser-overlay__panel { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--bg-panel); box-shadow: var(--shadow-pop); }
+.browser-overlay { position: fixed; inset: 0; z-index: 90; display: flex; padding: 14px; background: var(--bg-overlay); animation: fade var(--motion-overlay) var(--ease-standard) both; }
+.browser-overlay.is-closing { pointer-events: none; animation: fade-out var(--motion-overlay) var(--ease-standard) both; }
+.browser-overlay__panel { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--bg-panel); box-shadow: var(--shadow-pop); animation: pop-in var(--motion-overlay) var(--ease-out) both; }
+.browser-overlay.is-closing .browser-overlay__panel { visibility: hidden; }
 .browser-overlay .browser-viewport { min-height: 0; }
 @media (max-width: 700px) { .browser-overlay { padding: 0; } .browser-overlay__panel { border-radius: 0; border-width: 0; } }
 
@@ -18,14 +20,16 @@
 .browser-tab__close { display: grid; place-items: center; flex: none; width: 18px; height: 18px; margin-right: 4px; border: 0; border-radius: 4px; background: transparent; color: var(--fg-3); }
 .browser-tab__close:hover:not(:disabled) { background: var(--bg-active); color: var(--fg-0); }
 .browser-tabs__new { flex: none; align-self: center; width: 26px; height: 26px; margin-left: 2px; }
-.browser-confirm { display: flex; align-items: center; gap: 8px; flex: none; flex-wrap: wrap; padding: 8px 10px; border-bottom: 1px solid var(--line-soft); background: var(--warn-soft); font-size: var(--text-xs); color: var(--fg-0); }
+.browser-confirm { display: flex; align-items: center; gap: 8px; flex: none; flex-wrap: wrap; padding: 8px 10px; border-bottom: 1px solid var(--line-soft); background: var(--warn-soft); font-size: var(--text-xs); color: var(--fg-0); animation: fade-up var(--motion-ui) var(--ease-out) both; }
+.browser-confirm.is-closing { pointer-events: none; animation: fade-out var(--motion-overlay) var(--ease-standard) both; }
 .browser-confirm span { flex: 1; min-width: 160px; }
 
 .browser-bar { display: flex; align-items: center; gap: 3px; flex: none; padding: 8px 10px; border-bottom: 1px solid var(--line-soft); }
 .browser-bar__url { flex: 1; min-width: 0; height: 30px; margin: 0 3px; font-size: var(--text-xs); }
 .browser-bar__url[readonly] { cursor: default; color: var(--fg-1); }
 .browser-addr-error { flex: none; padding: 6px 12px; color: var(--err); font-size: var(--text-xs); }
-.browser-dialog { flex: none; display: grid; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line-soft); background: var(--bg-surface); font-size: var(--text-xs); color: var(--fg-1); }
+.browser-dialog { flex: none; display: grid; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line-soft); background: var(--bg-surface); font-size: var(--text-xs); color: var(--fg-1); animation: fade-up var(--motion-ui) var(--ease-out) both; }
+.browser-dialog.is-closing { pointer-events: none; animation: fade-out var(--motion-overlay) var(--ease-standard) both; }
 .browser-dialog p { overflow-wrap: anywhere; line-height: 1.5; }
 .browser-dialog strong { color: var(--fg-0); font-weight: 550; }
 .browser-dialog > div { display: flex; gap: 6px; }

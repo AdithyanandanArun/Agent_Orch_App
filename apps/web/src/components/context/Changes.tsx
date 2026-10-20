@@ -6,6 +6,7 @@ import { useActiveSession, useMingle } from '../../store/store';
 import { useEditor } from '../../store/editor';
 import { parseDiff, type DiffFile } from '../../lib/diff';
 import { cx } from '../../lib/format';
+import { usePresence } from '../../lib/motion';
 import { Badge, EmptyState, IconButton, InlineError, Spinner } from '../ui';
 import { ScopeSwitch, useScopeIds } from './scope';
 
@@ -18,6 +19,7 @@ const statusTone = (s: string): 'ok' | 'warn' | 'err' | 'info' | 'neutral' => {
 
 const DiffBlock = memo(function DiffBlock({ file, projectId, sessionId }: { file: DiffFile; projectId: string; sessionId: string | null }) {
   const [open, setOpen] = useState(true);
+  const { present: bodyPresent, closing: bodyClosing } = usePresence(open);
   const [all, setAll] = useState(false);
   const shown = all ? file.lines : file.lines.slice(0, LINE_CAP);
   return (
@@ -30,18 +32,20 @@ const DiffBlock = memo(function DiffBlock({ file, projectId, sessionId }: { file
         <span className="diff__stat"><b className="add">+{file.adds}</b> <b className="del">−{file.dels}</b></span>
         <IconButton label={`Open ${file.path} in editor`} onClick={() => { useMingle.getState().setView('workspace'); useEditor.getState().open(projectId, sessionId, file.path); }}><FileCode2 size={13} /></IconButton>
       </header>
-      {open ? (
-        <div className="diff__body" role="table" aria-label={`Diff for ${file.path}`}>
-          {file.binary ? <p className="muted small pane-pad">Binary file changed.</p> : null}
-          {shown.map((l, i) => (
-            <div key={i} role="row" className={cx('dl', `dl--${l.kind}`)}>
-              <span className="dl__no" aria-hidden="true">{l.oldNo ?? ''}</span>
-              <span className="dl__no" aria-hidden="true">{l.newNo ?? ''}</span>
-              <span className="dl__sign" aria-hidden="true">{l.kind === 'add' ? '+' : l.kind === 'del' ? '−' : ''}</span>
-              <code className="dl__text">{l.text || ' '}</code>
-            </div>
-          ))}
-          {!all && file.lines.length > LINE_CAP ? <button type="button" className="link-btn pane-pad" onClick={() => setAll(true)}>Show {file.lines.length - LINE_CAP} more lines</button> : null}
+      {bodyPresent ? (
+        <div className={cx('diff__body-frame', bodyClosing && 'is-closing')} aria-hidden={bodyClosing || undefined} inert={bodyClosing}>
+          <div className="diff__body" role="table" aria-label={`Diff for ${file.path}`}>
+            {file.binary ? <p className="muted small pane-pad">Binary file changed.</p> : null}
+            {shown.map((l, i) => (
+              <div key={i} role="row" className={cx('dl', `dl--${l.kind}`)}>
+                <span className="dl__no" aria-hidden="true">{l.oldNo ?? ''}</span>
+                <span className="dl__no" aria-hidden="true">{l.newNo ?? ''}</span>
+                <span className="dl__sign" aria-hidden="true">{l.kind === 'add' ? '+' : l.kind === 'del' ? '−' : ''}</span>
+                <code className="dl__text">{l.text || ' '}</code>
+              </div>
+            ))}
+            {!all && file.lines.length > LINE_CAP ? <button type="button" className="link-btn pane-pad" onClick={() => setAll(true)}>Show {file.lines.length - LINE_CAP} more lines</button> : null}
+          </div>
         </div>
       ) : null}
     </section>

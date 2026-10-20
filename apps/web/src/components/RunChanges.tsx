@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronDown, ChevronRight, FileDiff, FolderOpen, X } from 'lucide-react';
 import type { RunChangedFile, RunChanges as RunChangesData, RunChangesSummary } from '@mingle/contracts';
 import { api, errorMessage } from '../lib/api';
 import { parseDiff } from '../lib/diff';
+import { usePresence, useRetainedPresence } from '../lib/motion';
 
 type Tree = { name: string; path: string; file?: RunChangedFile; children: Map<string, Tree> };
 
@@ -65,12 +66,13 @@ function DiffView({ data }: { data: RunChangesData }) {
   </div>;
 }
 
-function SavedDiffDialog({ runId, initialPath, onClose }: { runId: string; initialPath?: string; onClose: () => void }) {
+function SavedDiffDialog({ runId, initialPath, onClose, open, closing }: { runId: string; initialPath?: string; onClose: () => void; open: boolean; closing: boolean }) {
   const [data, setData] = useState<RunChangesData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const dialog = useRef<HTMLDivElement>(null);
   const opener = useRef<HTMLElement | null>(document.activeElement instanceof HTMLElement ? document.activeElement : null);
+  const focusReturned = useRef(false);
   const controller = useRef<AbortController | null>(null);
   const load = () => {
     controller.current?.abort();
@@ -80,8 +82,23 @@ function SavedDiffDialog({ runId, initialPath, onClose }: { runId: string; initi
       if (!abort.signal.aborted) setError(errorMessage(reason));
     }).finally(() => { if (!abort.signal.aborted) setLoading(false); });
   };
-  useEffect(() => { load(); return () => { controller.current?.abort(); if (opener.current?.isConnected) opener.current.focus({ preventScroll: true }); }; }, [runId]);
+  const restoreFocus = () => {
+    if (focusReturned.current) return;
+    focusReturned.current = true;
+    if (opener.current?.isConnected) opener.current.focus({ preventScroll: true });
+  };
+  useLayoutEffect(() => {
+    if (!open) { restoreFocus(); return; }
+    focusReturned.current = false;
+    return restoreFocus;
+  }, [open]);
   useEffect(() => {
+    if (!open) { controller.current?.abort(); return; }
+    load();
+    return () => controller.current?.abort();
+  }, [runId, open]);
+  useLayoutEffect(() => {
+    if (!open) return;
     const element = dialog.current;
     if (!element) return;
     const focusables = () => [...element.querySelectorAll<HTMLElement>('button:not(:disabled), [href], [tabindex]:not([tabindex="-1"])')];
@@ -97,9 +114,9 @@ function SavedDiffDialog({ runId, initialPath, onClose }: { runId: string; initi
     };
     document.addEventListener('keydown', onKey, true);
     return () => document.removeEventListener('keydown', onKey, true);
-  }, [onClose]);
+  }, [onClose, open]);
   const visible = initialPath && data ? { ...data, summary: { ...data.summary, files: data.summary.files.filter(file => file.path === initialPath) } } : data;
-  return createPortal(<div className="run-diff-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
+  return createPortal(<div className={`run-diff-backdrop${closing ? ' is-closing' : ''}`} aria-hidden={closing || undefined} inert={closing} onMouseDown={event => { if (!closing && event.target === event.currentTarget) onClose(); }}>
     <section ref={dialog} className="run-diff-dialog" role="dialog" aria-modal="true" aria-labelledby="run-diff-title">
       <header className="run-diff-dialog__head"><div><span className="run-changes__eyebrow">Saved run changes</span><h2 id="run-diff-title">{initialPath ?? 'Run diff'}</h2></div><button className="run-changes__icon" type="button" onClick={onClose} aria-label="Close saved diff"><X size={17} /></button></header>
       <div className="run-diff-dialog__body">
@@ -117,18 +134,21 @@ function FileRows({ nodes, onOpen }: { nodes: Tree[]; onOpen: (path: string) => 
 
 export function RunChanges({ runId, summary }: { runId: string; summary?: RunChangesSummary | null }) {
   const [expanded, setExpanded] = useState(true);
+  const { present: bodyPresent, closing: bodyClosing } = usePresence(expanded);
   const [dialog, setDialog] = useState<{ path?: string } | null>(null);
   const nodes = useMemo(() => fileTree(summary?.files ?? []), [summary?.files]);
   const onClose = useCallback(() => setDialog(null), []);
+  const dialogValue = useMemo(() => dialog ? { runId, ...dialog } : null, [runId, dialog]);
+  const { value: retainedDialog, present: dialogPresent, closing: dialogClosing, key: dialogKey } = useRetainedPresence(dialogValue, 160);
   if (!summary || (summary.status === 'available' && summary.fileCount === 0)) return null;
   const open = (path?: string) => setDialog({ path });
   return <>
     <section className="run-changes" aria-label="Changes saved for this run">
       {summary.status === 'unavailable' ? <><div className="run-changes__head"><span>Changes unavailable</span><span className="run-changes__quiet">This run’s change summary could not be captured.</span></div>{summary.notices.map((notice, index) => <p className="run-changes__notice" key={index}>{notice}</p>)}</> : <>
         <header className="run-changes__head"><button type="button" className="run-changes__expand" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}><ChevronDown size={14} className={expanded ? '' : 'is-collapsed'} /><span>{summary.fileCount} changed {summary.fileCount === 1 ? 'file' : 'files'}</span><span className="run-changes__counts"><b className="add">+{summary.additions}</b><b className="del">−{summary.deletions}</b></span></button><button type="button" className="run-changes__open" onClick={() => open()}><FileDiff size={14} />Open diff</button></header>
-        {expanded ? <div className="run-changes__body"><FileRows nodes={nodes} onOpen={open} />{summary.truncated ? <p className="run-changes__notice">The file list is truncated. Some changed files are not shown.</p> : null}{summary.notices.map((notice, index) => <p className="run-changes__notice" key={index}>{notice}</p>)}</div> : null}
+        {bodyPresent ? <div className={`run-changes__body-frame${bodyClosing ? ' is-closing' : ''}`} aria-hidden={bodyClosing || undefined} inert={bodyClosing}><div className="run-changes__body"><FileRows nodes={nodes} onOpen={open} />{summary.truncated ? <p className="run-changes__notice">The file list is truncated. Some changed files are not shown.</p> : null}{summary.notices.map((notice, index) => <p className="run-changes__notice" key={index}>{notice}</p>)}</div></div> : null}
       </>}
     </section>
-    {dialog ? <SavedDiffDialog runId={runId} initialPath={dialog.path} onClose={onClose} /> : null}
+    {dialogPresent && retainedDialog ? <SavedDiffDialog key={dialogKey} runId={retainedDialog.runId} initialPath={retainedDialog.path} open={Boolean(dialog)} closing={dialogClosing} onClose={onClose} /> : null}
   </>;
 }

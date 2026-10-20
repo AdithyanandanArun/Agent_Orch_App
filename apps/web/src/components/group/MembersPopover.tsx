@@ -10,6 +10,8 @@ import {
 import { Button, IconButton, StatusDot } from '../ui';
 import { Popover } from '../git/Popover';
 import { AgentIdentity } from './AgentIdentity';
+import { usePresence } from '../../lib/motion';
+import { cx } from '../../lib/format';
 
 function removalBlock(snapshot: GroupSnapshot, member: GroupMember, session: Session | undefined, online: boolean): string | null {
   if (!online) return 'Reconnect to the server first.';
@@ -26,8 +28,13 @@ export function MembersPopover({ snapshot, anchor, open, onClose }: { snapshot: 
   const connection = useMingle((s) => s.connection);
   const project = useMingle((s) => s.boot?.projects.find((item) => item.id === snapshot.group.projectId));
   const [confirming, setConfirming] = useState<string | null>(null);
+  const { present: confirmPresent, closing: confirmClosing } = usePresence(Boolean(confirming));
+  const retainedConfirm = useRef<string | null>(null);
+  if (confirming) retainedConfirm.current = confirming;
   const [busy, setBusy] = useState<string | null>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const confirmOpener = useRef<HTMLButtonElement | null>(null);
+  const previousConfirm = useRef<string | null>(null);
   const members = activeMembers(snapshot);
   const online = connection === 'online';
   const { group } = snapshot;
@@ -38,6 +45,14 @@ export function MembersPopover({ snapshot, anchor, open, onClose }: { snapshot: 
 
   useEffect(() => { if (!open) setConfirming(null); }, [open]);
   useEffect(() => { if (confirming) cancelRef.current?.focus(); }, [confirming]);
+  useEffect(() => {
+    if (!open) { previousConfirm.current = confirming; return; }
+    if (!confirming && previousConfirm.current) {
+      const target = confirmOpener.current?.isConnected ? confirmOpener.current : anchor.current;
+      target?.focus({ preventScroll: true });
+    }
+    previousConfirm.current = confirming;
+  }, [confirming, open, anchor]);
   const dialog = (action: () => void) => () => { onClose(); action(); };
 
   return (
@@ -75,10 +90,10 @@ export function MembersPopover({ snapshot, anchor, open, onClose }: { snapshot: 
                 {member.held ? <IconButton label={`Resume @${member.handle}`} disabled={!online || busy === member.id} why="Reconnect to the server first" onClick={() => { setBusy(member.id); void resumeMember(group.id, member.id).finally(() => setBusy(null)); }}><Play size={14} /></IconButton> : null}
                 <IconButton label={`Stop @${member.handle}`} disabled={!online || (!busyMember && active.length === 0) || busy === member.id} why={busyMember || active.length ? 'Reconnect to the server first' : 'No active or queued work'}
                   onClick={() => { setBusy(member.id); void interruptMember(group.id, member.id).finally(() => setBusy(null)); }}><Square size={12} fill="currentColor" /></IconButton>
-                <IconButton label={`Remove @${member.handle}`} disabled={Boolean(removeWhy)} why={removeWhy ?? undefined} onClick={() => setConfirming(member.id)}><UserMinus size={14} /></IconButton>
+                <IconButton label={`Remove @${member.handle}`} disabled={Boolean(removeWhy)} why={removeWhy ?? undefined} onClick={(event) => { confirmOpener.current = event.currentTarget; setConfirming(member.id); }}><UserMinus size={14} /></IconButton>
               </div>
-              {confirming === member.id ? (
-                <div className="member__confirm" role="group" aria-label={`Remove @${member.handle}`}>
+              {confirmPresent && (confirming ?? retainedConfirm.current) === member.id ? (
+                <div className={cx('member__confirm', confirmClosing && 'is-closing')} role="group" aria-label={`Remove @${member.handle}`} aria-hidden={confirmClosing || undefined} inert={confirmClosing}>
                   <p>Remove @{member.handle} from this conversation? It stops receiving group messages. Its earlier messages stay in the timeline and its worktree is not deleted.</p>
                   <div>
                     <button ref={cancelRef} type="button" className="btn btn--ghost btn--sm" onClick={() => setConfirming(null)}>Cancel</button>

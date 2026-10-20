@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowUp, AtSign, Square, UserPlus, X } from 'lucide-react';
 import type { AttachmentRef, GroupSnapshot, NativeActionCatalog, Provider, Session } from '@mingle/contracts';
 import { useMingle } from '../../store/store';
@@ -13,6 +13,7 @@ import { Popover } from '../git/Popover';
 import { UsagePanel } from '../UsagePanel';
 import { AgentIdentity } from './AgentIdentity';
 import { AttachmentDrafts, AttachmentTray, useAttachmentDraft } from '../AttachmentDrafts';
+import { usePresence } from '../../lib/motion';
 
 const COMMANDS = [
   { name: 'new', description: 'Create a new session' },
@@ -58,11 +59,31 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
   const [active, setActive] = useState(0);
   const [dismissed, setDismissed] = useState<string | null>(null);
   const [usageSession, setUsageSession] = useState<Session | null>(null);
+  const usageSessionRef = useRef(usageSession);
+  usageSessionRef.current = usageSession;
+  const usageCloseVersion = useRef(0);
+  const usageFocusFrame = useRef<number | null>(null);
   const [nativeCatalog, setNativeCatalog] = useState<NativeActionCatalog | null>(null);
   const [nativeCatalogError, setNativeCatalogError] = useState<string | null>(null);
   const [catalogRevision, setCatalogRevision] = useState(0);
   const [selectedNativeAction, setSelectedNativeAction] = useState<{ kind: 'command' | 'skill'; id: string; name: string } | null>(null);
   const attachmentDraft = useAttachmentDraft({ kind: 'group', id: snapshot.group.id }, attachments, setAttachments, setError);
+  const openUsage = useCallback((session: Session) => {
+    usageCloseVersion.current++;
+    if (usageFocusFrame.current !== null) window.cancelAnimationFrame(usageFocusFrame.current);
+    usageFocusFrame.current = null;
+    setUsageSession(session);
+  }, []);
+  const closeUsage = useCallback(() => {
+    setUsageSession(null);
+    const version = ++usageCloseVersion.current;
+    if (usageFocusFrame.current !== null) window.cancelAnimationFrame(usageFocusFrame.current);
+    usageFocusFrame.current = window.requestAnimationFrame(() => {
+      usageFocusFrame.current = null;
+      if (version === usageCloseVersion.current && !usageSessionRef.current) ref.current?.focus();
+    });
+  }, []);
+  useEffect(() => () => { if (usageFocusFrame.current !== null) window.cancelAnimationFrame(usageFocusFrame.current); }, []);
 
   const members = useMemo(() => activeMembers(snapshot), [snapshot]);
   const retired = useMemo(() => retiredHandles(snapshot), [snapshot]);
@@ -166,6 +187,10 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
     return [];
   })();
   const open = focused && suggestions.length > 0 && trigger !== dismissed;
+  const { present: pickerPresent, closing: pickerClosing } = usePresence(open);
+  const pickerSnapshot = useRef<{ suggestions: Suggestion[]; active: number; command: boolean } | null>(null);
+  if (open) pickerSnapshot.current = { suggestions, active, command: Boolean(commandMatch) };
+  const displayedPicker = open ? { suggestions, active, command: Boolean(commandMatch) } : pickerSnapshot.current;
   useEffect(() => { setDismissed((current) => (current === trigger ? current : null)); setActive(0); }, [trigger]);
   useEffect(() => { document.getElementById(`${pickerId}-option-${active}`)?.scrollIntoView({ block: 'nearest' }); }, [active, pickerId, open]);
 
@@ -207,7 +232,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
         if (targets.length > 1) throw new Error('Choose one @handle for /usage.');
         const target = targets.length === 1 ? members.find((member) => member.id === targets[0]) : null;
         const session = sessionOf(target?.sessionId ?? anchor.id) ?? anchor;
-        setUsageSession(session);
+        openUsage(session);
         return;
       }
       default: return;
@@ -341,12 +366,12 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
             if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void submit(); }
           }}
         />
-        {open ? (
-          <div className="composer-picker" id={pickerId} role="listbox" aria-label={commandMatch ? 'Commands' : 'Agents'}>
-            {suggestions.map((item, index) => (
+        {pickerPresent && displayedPicker ? (
+          <div className={cx('composer-picker', pickerClosing && 'is-closing')} id={pickerId} role="listbox" aria-label={displayedPicker.command ? 'Commands' : 'Agents'} aria-hidden={pickerClosing || undefined} inert={pickerClosing}>
+            {displayedPicker.suggestions.map((item, index) => (
               <div key={item.key}>
-                {index === 0 || suggestions[index - 1]?.group !== item.group ? <div className="composer-picker__group" role="presentation">{item.group}</div> : null}
-                <div role="option" id={`${pickerId}-option-${index}`} aria-selected={index === active} className={cx('composer-picker__item', index === active && 'is-active')}
+                {index === 0 || displayedPicker.suggestions[index - 1]?.group !== item.group ? <div className="composer-picker__group" role="presentation">{item.group}</div> : null}
+                <div role="option" id={`${pickerId}-option-${index}`} aria-selected={index === displayedPicker.active} className={cx('composer-picker__item', index === displayedPicker.active && 'is-active')}
                   onMouseDown={(event) => event.preventDefault()} onMouseMove={() => setActive(index)} onClick={() => choose(index)}>
                   <span className="composer-picker__name">{item.identityKey ? <AgentIdentity handle={item.token.slice(1)} identityKey={item.identityKey} provider={item.provider} /> : item.token}</span><span className="composer-picker__description">{item.description}</span>
                 </div>
@@ -406,7 +431,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
           {!noteIsError && blocker && unavailable ? <> <button type="button" className="link-btn" onClick={() => useMingle.getState().openDialog({ kind: 'settings' })}>Open Settings</button></> : null}
         </p>
       ) : null}
-      {usageSession ? <UsagePanel key={usageSession.id} session={usageSession} onClose={() => { setUsageSession(null); window.requestAnimationFrame(() => ref.current?.focus()); }} /> : null}
+      <UsagePanel session={usageSession} onClose={closeUsage} />
     </div>
   );
 }

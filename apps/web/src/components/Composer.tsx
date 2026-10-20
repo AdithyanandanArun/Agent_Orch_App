@@ -10,6 +10,7 @@ import { UsagePanel } from './UsagePanel';
 import { GitBar } from './git/GitBar';
 import { providerModelChoices } from '../lib/providers';
 import { AttachmentDrafts, AttachmentTray, useAttachmentDraft } from './AttachmentDrafts';
+import { usePresence } from '../lib/motion';
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const hasSkillMarker = (text: string, name: string) => new RegExp(`(?:^|\\s)\\$${escapeRegExp(name)}(?=\\s|$)`).test(text);
@@ -36,6 +37,10 @@ export function Composer({ session }: { session: Session }) {
   const [attachments, setAttachments] = useState<AttachmentRef[]>([]);
   useEffect(() => { setAttachments([]); }, [session.id]);
   const [usageOpen, setUsageOpen] = useState(false);
+  const usageOpenRef = useRef(usageOpen);
+  usageOpenRef.current = usageOpen;
+  const usageCloseVersion = useRef(0);
+  const usageFocusFrame = useRef<number | null>(null);
   const [focused, setFocused] = useState(false);
   const [caretPosition, setCaretPosition] = useState(0);
   const dismissedSuggestion = useRef<string | null>(null);
@@ -72,8 +77,20 @@ export function Composer({ session }: { session: Session }) {
   useEffect(() => { setUsageOpen(false); }, [session.id, session.provider, session.model]);
   const closeUsage = useCallback(() => {
     setUsageOpen(false);
-    window.requestAnimationFrame(() => ref.current?.focus());
+    const version = ++usageCloseVersion.current;
+    if (usageFocusFrame.current !== null) window.cancelAnimationFrame(usageFocusFrame.current);
+    usageFocusFrame.current = window.requestAnimationFrame(() => {
+      usageFocusFrame.current = null;
+      if (version === usageCloseVersion.current && !usageOpenRef.current) ref.current?.focus();
+    });
   }, []);
+  const openUsage = useCallback(() => {
+    usageCloseVersion.current++;
+    if (usageFocusFrame.current !== null) window.cancelAnimationFrame(usageFocusFrame.current);
+    usageFocusFrame.current = null;
+    setUsageOpen(true);
+  }, []);
+  useEffect(() => () => { if (usageFocusFrame.current !== null) window.cancelAnimationFrame(usageFocusFrame.current); }, []);
   const attachmentDraft = useAttachmentDraft({ kind: 'session', id: session.id }, attachments, setAttachments, setError);
 
   const running = session.status === 'running' || session.status === 'waiting';
@@ -106,7 +123,7 @@ export function Composer({ session }: { session: Session }) {
           caret.current = 1; setCaretPosition(1);
           useMingle.getState().setDraft(session.id, '$');
         }
-        if (action === 'usage') { focusComposerAfter = false; setUsageOpen(true); }
+        if (action === 'usage') { focusComposerAfter = false; openUsage(); }
         if (action === 'import') { focusComposerAfter = false; useMingle.getState().openDialog({ kind: 'import' }); }
         if (action === 'diff') useMingle.getState().setContextTab('changes');
         if (action === 'status') {
@@ -257,9 +274,14 @@ export function Composer({ session }: { session: Session }) {
       ].filter((item) => item.name.startsWith(trigger.slice(1).toLowerCase())),
       ...(catalog?.commands ?? []).filter((item) => !reservedCommands.has(item.name.toLowerCase()) && item.name.toLowerCase().startsWith(trigger.slice(1).toLowerCase())).map((item) => ({ id: item.id, name: item.name, description: item.description, group: item.source[0]!.toUpperCase() + item.source.slice(1), kind: 'provider' as const, argumentHint: item.argumentHint })),
     ].map((item) => ({ ...item, key: `${item.kind}:${'id' in item ? item.id : item.name}`, token: `/${item.name}` }))
-    : trigger.startsWith('$') && catalog
-      ? catalog.skills.filter((item) => item.enabled && item.name.toLowerCase().startsWith(trigger.slice(1).toLowerCase())).map((item) => ({ name: item.name, description: item.description, group: item.source[0]!.toUpperCase() + item.source.slice(1), kind: 'skill' as const, token: `$${item.name}`, id: item.id, key: `skill:${item.id}` }))
+      : trigger.startsWith('$') && catalog
+        ? catalog.skills.filter((item) => item.enabled && item.name.toLowerCase().startsWith(trigger.slice(1).toLowerCase())).map((item) => ({ name: item.name, description: item.description, group: item.source[0]!.toUpperCase() + item.source.slice(1), kind: 'skill' as const, token: `$${item.name}`, id: item.id, key: `skill:${item.id}` }))
       : [];
+  const pickerOpen = Boolean(suggestion && suggestions.length);
+  const { present: pickerPresent, closing: pickerClosing } = usePresence(pickerOpen);
+  const pickerSnapshot = useRef<{ suggestion: NonNullable<typeof suggestion>; suggestions: typeof suggestions; active: number } | null>(null);
+  if (pickerOpen && suggestion) pickerSnapshot.current = { suggestion, suggestions, active: activeSuggestion };
+  const displayedPicker = pickerOpen && suggestion ? { suggestion, suggestions, active: activeSuggestion } : pickerSnapshot.current;
   useEffect(() => {
     if (trigger !== dismissedSuggestion.current) dismissedSuggestion.current = null;
     if (focused && suggestions.length && trigger && trigger !== dismissedSuggestion.current) {
@@ -336,10 +358,10 @@ export function Composer({ session }: { session: Session }) {
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void submit(); }
           }}
         />
-        {suggestion && suggestions.length ? <div className="composer-picker" id={pickerId} role="listbox" aria-label={suggestion.kind === 'skill' ? 'Skills' : 'Commands'}>
-          {suggestions.map((item, index) => <div key={item.key}>
-            {index === 0 || suggestions[index - 1]?.group !== item.group ? <div className="composer-picker__group" role="presentation">{item.group}</div> : null}
-            <div role="option" id={`${pickerId}-option-${index}`} aria-selected={index === activeSuggestion} className={cx('composer-picker__item', index === activeSuggestion && 'is-active')} onMouseDown={(event) => event.preventDefault()} onMouseMove={() => setActiveSuggestion(index)} onClick={() => chooseSuggestion(index)}>
+        {pickerPresent && displayedPicker ? <div className={cx('composer-picker', pickerClosing && 'is-closing')} id={pickerId} role="listbox" aria-label={displayedPicker.suggestion.kind === 'skill' ? 'Skills' : 'Commands'} aria-hidden={pickerClosing || undefined} inert={pickerClosing}>
+          {displayedPicker.suggestions.map((item, index) => <div key={item.key}>
+            {index === 0 || displayedPicker.suggestions[index - 1]?.group !== item.group ? <div className="composer-picker__group" role="presentation">{item.group}</div> : null}
+            <div role="option" id={`${pickerId}-option-${index}`} aria-selected={index === displayedPicker.active} className={cx('composer-picker__item', index === displayedPicker.active && 'is-active')} onMouseDown={(event) => event.preventDefault()} onMouseMove={() => setActiveSuggestion(index)} onClick={() => chooseSuggestion(index)}>
               <span className="composer-picker__name">{item.token}{item.kind === 'provider' && item.argumentHint ? <small> {item.argumentHint}</small> : null}</span><span className="composer-picker__description">{item.description}</span>
             </div>
           </div>)}
@@ -380,7 +402,7 @@ export function Composer({ session }: { session: Session }) {
       ) : null}
       {catalogError && (trigger.startsWith('/') || trigger.startsWith('$')) ? <p className="composer__note" role="status">Command and skill suggestions unavailable: {catalogError} <button type="button" className="link-btn" onClick={() => setCatalogRevision((value) => value + 1)}>Retry</button></p> : null}
       {catalog?.warnings.length && (suggestion || trigger.startsWith('/') || trigger.startsWith('$')) ? <details className="composer__catalog-note"><summary>Command and skill details · {catalog.warnings.length} notice{catalog.warnings.length === 1 ? '' : 's'}</summary><ul>{catalog.warnings.map((warning, index) => <li key={`${index}:${warning}`}>{warning}</li>)}</ul><button type="button" className="link-btn" onClick={() => setCatalogRevision((value) => value + 1)}>Refresh</button></details> : null}
-      {usageOpen ? <UsagePanel key={`${session.id}:${session.provider}:${session.model}`} session={session} onClose={closeUsage} /> : null}
+      <UsagePanel session={usageOpen ? session : null} onClose={closeUsage} />
     </div>
   );
 }

@@ -22,7 +22,10 @@
 .run-changes__counts .del, .run-diff-file .del { color: var(--err); font-weight: 500; }
 .run-changes__open { flex: none; padding: 3px 7px; color: var(--fg-2); }
 .run-changes__open svg { color: var(--fg-3); }
-.run-changes__body { border-top: 1px solid var(--line-soft); padding: 4px 8px 7px; }
+.run-changes__body-frame { display: grid; grid-template-rows: 1fr; min-height: 0; overflow: hidden; transition: grid-template-rows var(--motion-overlay) var(--ease-out); }
+.run-changes__body-frame.is-closing { grid-template-rows: 0fr; pointer-events: none; }
+.run-changes__body { min-height: 0; overflow: hidden; border-top: 1px solid var(--line-soft); padding: 4px 8px 7px; animation: fade-up var(--motion-ui) var(--ease-out) both; }
+.run-changes__body-frame.is-closing > .run-changes__body { animation: fade-out var(--motion-overlay) var(--ease-standard) both; }
 .run-changes__tree { margin: 0; padding: 0; list-style: none; }
 .run-changes__tree .run-changes__tree { margin-left: 19px; border-left: 1px solid var(--line-soft); }
 .run-changes__folder > summary { display: flex; min-height: 28px; align-items: center; gap: 7px; padding: 2px 5px; list-style: none; color: var(--fg-2); cursor: pointer; }
@@ -44,8 +47,10 @@
 .run-changes__quiet { color: var(--fg-3); font-size: 11px; }
 .run-changes__eyebrow { color: var(--fg-3); font-size: 10px; letter-spacing: .04em; text-transform: uppercase; }
 .run-changes__icon { width: 32px; justify-content: center; }
-.run-diff-backdrop { position: fixed; z-index: 300; inset: 0; display: grid; place-items: center; padding: 24px; background: var(--bg-overlay); backdrop-filter: blur(5px); }
-.run-diff-dialog { display: flex; width: min(980px, 100%); max-height: min(780px, 90vh); flex-direction: column; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 13px; background: var(--bg-raised); box-shadow: 0 24px 80px rgba(0, 0, 0, .46); }
+.run-diff-backdrop { position: fixed; z-index: 300; inset: 0; display: grid; place-items: center; padding: 24px; background: var(--bg-overlay); backdrop-filter: blur(5px); animation: fade var(--motion-overlay) var(--ease-standard) both; }
+.run-diff-backdrop.is-closing { pointer-events: none; animation: fade-out var(--motion-overlay) var(--ease-standard) both; }
+.run-diff-dialog { display: flex; width: min(980px, 100%); max-height: min(780px, 90vh); flex-direction: column; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 13px; background: var(--bg-raised); box-shadow: 0 24px 80px rgba(0, 0, 0, .46); animation: pop-in var(--motion-overlay) var(--ease-out) both; }
+.run-diff-backdrop.is-closing .run-diff-dialog { animation: pop-out var(--motion-overlay) var(--ease-out) both; }
 .run-diff-dialog__head { display: flex; min-height: 68px; align-items: center; justify-content: space-between; gap: 14px; padding: 13px 17px; border-bottom: 1px solid var(--line-soft); }
 .run-diff-dialog__head h2 { max-width: 80vw; margin: 3px 0 0; overflow: hidden; color: var(--fg-0); font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .run-diff-dialog__body { min-height: 120px; overflow: auto; }

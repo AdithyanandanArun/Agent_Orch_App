@@ -133,6 +133,7 @@
 .composer__select {
   display: inline-flex;
   align-items: center;
+  height: 30px;
   min-height: 30px;
   max-width: 180px;
   padding: 0 9px;
@@ -191,12 +192,13 @@
 .composer-picker {
   position: absolute; z-index: 30; left: 12px; bottom: calc(100% + 8px); width: min(420px, calc(100% - 24px));
   max-height: 280px; overflow: auto; padding: 5px; border: 1px solid var(--line-strong); border-radius: 10px;
-  background: var(--bg-raised); box-shadow: var(--shadow-pop);
+  background: var(--bg-raised); box-shadow: var(--shadow-pop); animation: pop-in var(--motion-overlay) var(--ease-out) both; transform-origin: bottom left;
 }
+.composer-picker.is-closing { pointer-events: none; animation: pop-out var(--motion-overlay) var(--ease-out) both; }
 .composer-picker__item { display: flex; width: 100%; min-height: 40px; align-items: center; justify-content: space-between; gap: 14px; padding: 7px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--fg-1); text-align: left; cursor: pointer; }
 .composer-picker__item.is-active, .composer-picker__item:hover { background: var(--bg-active); color: var(--fg-0); }
 .composer-picker__group { padding: 6px 9px 3px; color: var(--fg-2); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
-.composer-picker-empty { position: absolute; z-index: 30; left: 12px; bottom: calc(100% + 8px); width: min(420px, calc(100% - 24px)); padding: 13px 14px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--bg-raised); box-shadow: var(--shadow-pop); color: var(--fg-2); font-size: 12px; }
+.composer-picker-empty { position: absolute; z-index: 30; left: 12px; bottom: calc(100% + 8px); width: min(420px, calc(100% - 24px)); padding: 13px 14px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--bg-raised); box-shadow: var(--shadow-pop); color: var(--fg-2); font-size: 12px; animation: fade-up var(--motion-ui) var(--ease-out) both; }
 .composer-picker__name { flex: none; max-width: 45%; overflow: hidden; color: var(--fg-0); text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .composer-picker__name small { color: var(--fg-3); font-size: 11px; }
 .composer-picker__description { overflow: hidden; color: var(--fg-2); text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }

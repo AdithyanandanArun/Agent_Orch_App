@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useRetainedPresence } from '../lib/motion';
 import { Clock3, Coins, RefreshCw, RotateCcw, X } from 'lucide-react';
 import type { Session, SessionUsage, UsageResetGrant, UsageWindow } from '@mingle/contracts';
 import { api, errorMessage } from '../lib/api';
@@ -103,7 +104,7 @@ function SessionFacts({ usage }: { usage: SessionUsage }) {
   </section>;
 }
 
-function Dialog({ session, onClose }: { session: Session; onClose: () => void }) {
+function Dialog({ session, onClose, open, closing }: { session: Session; onClose: () => void; open: boolean; closing: boolean }) {
   const [usage, setUsage] = useState<SessionUsage | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -113,6 +114,8 @@ function Dialog({ session, onClose }: { session: Session; onClose: () => void })
   const hasUsage = useRef(false);
   const closeRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   const key = session.provider;
   const lastRequest = lastUsageRequestAt.get(key) ?? 0;
   const refreshWait = Math.max(0, REFRESH_COOLDOWN_MS - (now - lastRequest));
@@ -141,19 +144,22 @@ function Dialog({ session, onClose }: { session: Session; onClose: () => void })
   }, [key, session.id]);
 
   useEffect(() => {
+    if (!open) { request.current?.abort(); return; }
     void load(false);
     return () => request.current?.abort();
-  }, [load]);
+  }, [load, open]);
 
   useEffect(() => {
+    if (!open) return;
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
+    if (!open) return;
     closeRef.current?.focus();
     const keyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { event.preventDefault(); onClose(); return; }
+      if (event.key === 'Escape') { event.preventDefault(); onCloseRef.current(); return; }
       if (event.key !== 'Tab' || !dialogRef.current) return;
       const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>('button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'));
       if (!focusable.length) return;
@@ -166,7 +172,7 @@ function Dialog({ session, onClose }: { session: Session; onClose: () => void })
     return () => {
       document.removeEventListener('keydown', keyDown);
     };
-  }, [onClose]);
+  }, [open]);
 
   const cooldownLabel = Math.ceil(refreshWait / 1000);
   const canRefresh = refreshWait <= 0 && !refreshing && !loading;
@@ -176,7 +182,7 @@ function Dialog({ session, onClose }: { session: Session; onClose: () => void })
   const requestRefresh = () => void load(true);
 
   return createPortal(
-    <div className="usage-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <div className={`usage-backdrop${closing ? ' is-closing' : ''}`} role="presentation" aria-hidden={closing || undefined} inert={closing} onMouseDown={(event) => { if (!closing && event.target === event.currentTarget) onCloseRef.current(); }}>
       <section ref={dialogRef} className="usage-dialog" role="dialog" aria-modal="true" aria-labelledby="usage-title" aria-describedby="usage-subtitle">
         <header className="usage-dialog__head">
           <div><h1 id="usage-title">Usage</h1><p id="usage-subtitle">Account limits and this session’s conversation totals.</p></div>
@@ -216,6 +222,11 @@ function Dialog({ session, onClose }: { session: Session; onClose: () => void })
   );
 }
 
-export function UsagePanel({ session, onClose }: { session: Session; onClose: () => void }) {
-  return <Dialog key={`${session.id}:${session.provider}:${session.model}`} session={session} onClose={onClose} />;
+export function UsagePanel({ session, onClose }: { session: Session | null; onClose: () => void }) {
+  const identity = session ? `${session.id}:${session.provider}:${session.model}` : null;
+  const { present, closing, key } = useRetainedPresence(identity);
+  const retainedSession = useRef(session);
+  if (session) retainedSession.current = session;
+  const displayedSession = session ?? retainedSession.current;
+  return present && displayedSession ? <Dialog key={key} session={displayedSession} open={Boolean(session)} closing={closing} onClose={onClose} /> : null;
 }

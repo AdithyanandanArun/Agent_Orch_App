@@ -3,6 +3,7 @@ import { ArrowLeft, ArrowRight, Globe, Maximize2, Minimize2, Plus, RefreshCw, Sc
 import type { BrowserAction, BrowserSessionState, BrowserTab, Session } from '@mingle/contracts';
 import { api, errorMessage } from '../../lib/api';
 import { cx } from '../../lib/format';
+import { usePresence, useRetainedPresence } from '../../lib/motion';
 import { resolveTab, useBrowserStore } from '../../store/browser';
 import { useMingle } from '../../store/store';
 import { Button, EmptyState, IconButton, InlineError, Spinner } from '../ui';
@@ -69,6 +70,10 @@ export function BrowserPane({ session, active }: { session: Session; active: boo
   const [busy, setBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmClose, setConfirmClose] = useState<string | null>(null);
+  const { present: confirmPresent, closing: confirmClosing } = usePresence(Boolean(confirmClose));
+  const confirmedTab = useRef<BrowserTab | null>(null);
+  const confirmOpener = useRef<HTMLElement | null>(null);
+  const previousConfirmClose = useRef<string | null>(null);
   const run = async (key: string, work: () => Promise<void>) => {
     setBusy(key); setActionError(null);
     try { await work(); } catch (cause) { setActionError(errorMessage(cause)); }
@@ -82,6 +87,13 @@ export function BrowserPane({ session, active }: { session: Session; active: boo
   });
   // The server only lets the viewer that owns a tab close it, so closing is limited to the tab being controlled.
   useEffect(() => { if (confirmClose && (!canInput || confirmClose !== tab?.id)) setConfirmClose(null); }, [confirmClose, canInput, tab?.id]);
+  useEffect(() => {
+    if (!confirmClose && previousConfirmClose.current) {
+      const target = confirmOpener.current?.isConnected ? confirmOpener.current : document.getElementById('browser-address');
+      target?.focus({ preventScroll: true });
+    }
+    previousConfirmClose.current = confirmClose;
+  }, [confirmClose]);
   const closeTab = (tabId: string) => run('close', async () => {
     setConfirmClose(null);
     if (!canInput || tabId !== tab?.id || !stream.clientId) throw new Error('Take control of this tab before closing it.');
@@ -98,6 +110,12 @@ export function BrowserPane({ session, active }: { session: Session; active: boo
     if (!canInput) { toast('info', 'Take control of this tab first.'); return; }
     if (!stream.sendInput(action)) setActionError('The browser stream is not connected. Reconnect and try again.');
   };
+  const pageDialogIdentity = tab?.dialog ? `${tab.id}:${tab.dialog.type}:${tab.dialog.message}` : null;
+  const { present: pageDialogPresent, closing: pageDialogClosing, key: pageDialogKey } = useRetainedPresence(pageDialogIdentity);
+  const pageDialogSnapshot = useRef<{ tab: BrowserTab; canInput: boolean; act: (action: BrowserAction) => void } | null>(null);
+  if (tab?.dialog) pageDialogSnapshot.current = { tab, canInput, act };
+  const confirmedTarget = confirmClose ? state?.tabs.find((item) => item.id === confirmClose) : undefined;
+  if (confirmedTarget) confirmedTab.current = confirmedTarget;
 
   const [draft, setDraft] = useState<string | null>(null);
   const [addressError, setAddressError] = useState<string | null>(null);
@@ -131,21 +149,21 @@ export function BrowserPane({ session, active }: { session: Session; active: boo
               <button type="button" role="tab" aria-selected={t.id === tab?.id} title={`${tabLabel(t)}\n${t.url}`} onClick={() => useBrowserStore.getState().select(session.id, t.id)}>{tabLabel(t)}</button>
               <button type="button" className="browser-tab__close" aria-label={`Close tab ${tabLabel(t)}`} disabled={busy === 'close' || !(canInput && t.id === tab?.id)}
                 title={t.id !== tab?.id ? 'Select this tab and take control to close it' : !canInput ? 'Take control to close this tab' : t.managed ? 'Close tab' : 'Close this tab in your own browser'}
-                onClick={() => (t.managed ? void closeTab(t.id) : setConfirmClose(t.id))}><X size={11} aria-hidden="true" /></button>
+                onClick={(event) => {
+                  if (t.managed) void closeTab(t.id);
+                  else { confirmOpener.current = event.currentTarget; setConfirmClose(t.id); }
+                }}><X size={11} aria-hidden="true" /></button>
             </div>
           ))}
           <IconButton label="New tab" className="browser-tabs__new" onClick={() => void openTab()} disabled={busy === 'tab'}><Plus size={14} /></IconButton>
         </div>
-        {confirmClose ? (() => {
-          const target = state.tabs.find((t) => t.id === confirmClose);
-          return target ? (
-            <div className="browser-confirm" role="alert">
-              <span>Close “{tabLabel(target)}” in your own browser? It will close there too.</span>
-              <Button size="sm" variant="danger" onClick={() => void closeTab(target.id)}>Close tab</Button>
-              <Button size="sm" variant="ghost" onClick={() => setConfirmClose(null)}>Keep</Button>
-            </div>
-          ) : null;
-        })() : null}
+        {confirmPresent && confirmedTab.current ? (
+          <div className={cx('browser-confirm', confirmClosing && 'is-closing')} role="alert" aria-hidden={confirmClosing || undefined} inert={confirmClosing}>
+            <span>Close “{tabLabel(confirmedTab.current)}” in your own browser? It will close there too.</span>
+            <Button size="sm" variant="danger" onClick={() => void closeTab(confirmedTab.current!.id)}>Close tab</Button>
+            <Button size="sm" variant="ghost" onClick={() => setConfirmClose(null)}>Keep</Button>
+          </div>
+        ) : null}
         {tab ? (
           <>
             <form className="browser-bar" onSubmit={submitAddress}>
@@ -163,7 +181,7 @@ export function BrowserPane({ session, active }: { session: Session; active: boo
               <IconButton label="Disconnect browser" title={state.mode === 'existing' ? 'Disconnect (your browser stays open)' : 'Disconnect and close the Mingle browser'} disabled={busy === 'disconnect'} onClick={() => void disconnect()}><Unplug size={14} /></IconButton>
             </form>
             {addressError ? <p className="browser-addr-error" role="alert">{addressError}</p> : null}
-            {tab.dialog ? <PageDialog tab={tab} canInput={canInput} act={act} /> : null}
+            {pageDialogPresent && pageDialogSnapshot.current ? <PageDialog key={pageDialogKey} tab={pageDialogSnapshot.current.tab} canInput={pageDialogSnapshot.current.canInput} act={pageDialogSnapshot.current.act} closing={pageDialogClosing} /> : null}
             <div className="browser-viewport"><BrowserSurface stream={stream} tab={tab} canvasRef={canvasRef} canInput={canInput} /></div>
             <div className="browser-status">
               <span className={cx('browser-status__who', canInput && 'is-you')} role="status">{stream.status === 'live' ? controlLabel(tab, stream.clientId) : stream.status === 'closed' ? 'Stream disconnected.' : 'Connecting…'}</span>
@@ -212,11 +230,11 @@ function ConnectingView({ state }: { state: BrowserSessionState }) {
 }
 
 /** A JavaScript dialog (alert, confirm, prompt) the page opened; it blocks the page until answered. */
-function PageDialog({ tab, canInput, act }: { tab: BrowserTab; canInput: boolean; act: (action: BrowserAction) => void }) {
+function PageDialog({ tab, canInput, act, closing }: { tab: BrowserTab; canInput: boolean; act: (action: BrowserAction) => void; closing: boolean }) {
   const dialog = tab.dialog!;
   const [text, setText] = useState('');
   return (
-    <div className="browser-dialog" role="alertdialog" aria-label={`Page ${dialog.type}`}>
+    <div className={cx('browser-dialog', closing && 'is-closing')} role="alertdialog" aria-label={`Page ${dialog.type}`} aria-hidden={closing || undefined} inert={closing}>
       <p><strong>This page shows a {dialog.type}:</strong> {dialog.message}</p>
       {dialog.type === 'prompt' ? <input className="input" aria-label="Prompt response" value={text} disabled={!canInput} onChange={(e) => setText(e.target.value)} /> : null}
       <div>

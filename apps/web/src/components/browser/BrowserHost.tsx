@@ -1,5 +1,7 @@
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { cx } from '../../lib/format';
+import { usePresence } from '../../lib/motion';
 
 /**
  * Renders `children` once, into a detached element that is moved between the in-pane slot and a full-window
@@ -15,6 +17,7 @@ export function BrowserHost({ expanded, onDismiss, children }: { expanded: boole
   const inline = useRef<HTMLDivElement>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
   const [overlaySlot, setOverlaySlot] = useState<HTMLDivElement | null>(null);
+  const { present: overlayPresent, closing: overlayClosing } = usePresence(expanded);
 
   useLayoutEffect(() => {
     const target = expanded ? overlaySlot : inline.current;
@@ -55,8 +58,8 @@ export function BrowserHost({ expanded, onDismiss, children }: { expanded: boole
   return (
     <>
       <div className="browser-slot" ref={inline} />
-      {expanded ? createPortal(
-        <div className="browser-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onDismiss(); }}>
+      {overlayPresent ? createPortal(
+        <div className={cx('browser-overlay', overlayClosing && 'is-closing')} aria-hidden={overlayClosing || undefined} inert={overlayClosing} onMouseDown={(e) => { if (!overlayClosing && e.target === e.currentTarget) onDismiss(); }}>
           <div className="browser-overlay__panel" role="dialog" aria-modal="true" aria-label="Shared browser" tabIndex={-1} ref={setOverlaySlot} />
         </div>,
         document.body,
