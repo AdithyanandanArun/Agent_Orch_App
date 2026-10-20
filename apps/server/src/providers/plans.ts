@@ -9,13 +9,14 @@ export function nativePlanSteps(raw: unknown, titleKey: string): ProviderTaskPla
   const steps: ProviderTaskPlan['steps'] = [];
   for (const value of raw) {
     if (!isRecord(value) || typeof value[titleKey] !== 'string') return null;
-    const title = (value[titleKey] as string).trim();
+    const fullTitle = (value[titleKey] as string).trim();
+    const title = fullTitle.replace(/\s+/g, ' ').slice(0, 200);
     const status = value.status === 'inProgress' ? 'in_progress' : value.status;
-    if (!title || title.length > 200 || !['pending', 'in_progress', 'completed', 'blocked'].includes(String(status))) return null;
-    const digest = createHash('sha256').update(title.toLowerCase().replace(/\s+/g, ' ')).digest('hex').slice(0, 24);
+    if (!title || !['pending', 'in_progress', 'completed', 'blocked'].includes(String(status))) return null;
+    const digest = createHash('sha256').update(fullTitle.toLowerCase().replace(/\s+/g, ' ')).digest('hex').slice(0, 24);
     const occurrence = (seen.get(digest) ?? 0) + 1;
     seen.set(digest, occurrence);
-    steps.push({ id: `${digest}:${occurrence}`, title, status: status as ProviderTaskPlan['steps'][number]['status'] });
+    steps.push({ id: `${digest}:${occurrence}`, title, ...(fullTitle.length > 200 ? { description: fullTitle.slice(0, 4000) } : {}), status: status as ProviderTaskPlan['steps'][number]['status'] });
   }
   return steps;
 }

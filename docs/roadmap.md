@@ -27,3 +27,18 @@ The product has a multi-month horizon. Milestones are accepted by observed behav
 ## Product validation
 
 Use the same feature request, repository, acceptance criteria and quality bar to compare manual multi-session work with Relay. Measure total time until integrated acceptance, human coordination actions, total provider tokens and cost, conflicts, rework and blocked time. Adding agents is useful when the accepted result improves enough to justify their overhead. Record failures as well as successes.
+
+## Repository workflow progress — 2026-10-20
+
+These items record implemented work and previously requested capabilities still outside the current pass. They are also explicit sources for Relay's repository task tracking.
+
+- [x] Show the real checkout and branch, and commit selected eligible files while preserving other staged work.
+- [x] Add explicit push and pull request controls without automatic publishing.
+- [x] Show read-only GitHub checks and workflow history with each run's commit.
+- [x] Populate project components, languages and Git context from an existing repository or local folder.
+- [x] Track repository checklists, session work requests and native provider plans automatically, preserving manual edits.
+- [x] Populate Activity and Agent Map from actual repository, session, task and provider records.
+- [ ] Add composer attachments and file mentions.
+- [ ] Add native interactive questions and full planning controls.
+- [ ] Add personal Claude skill discovery and general MCP/plugin management.
+- [ ] Complete AUR publication and desktop update distribution after owner-approved release preparation.

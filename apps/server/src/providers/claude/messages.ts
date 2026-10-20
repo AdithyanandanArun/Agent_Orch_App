@@ -342,9 +342,9 @@ export class ClaudeMessageMapper {
     const validId = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 200;
     const note = (value: unknown, fallback?: Record<string, unknown>) => {
       if (!isRecord(value) || !validId(value.id)) return;
-      const title = str(value.subject) ?? str(fallback?.subject);
+      const title = (str(value.subject) ?? str(fallback?.subject))?.replace(/\s+/g, ' ').slice(0, 200);
       const status = value.status ?? fallback?.status ?? 'pending';
-      if (!title || title.length > 200 || !['pending', 'in_progress', 'completed', 'blocked'].includes(String(status))) return;
+      if (!title || !['pending', 'in_progress', 'completed', 'blocked'].includes(String(status))) return;
       const step: ProviderTaskPlan['steps'][number] = { id: value.id, title, status: status as ProviderTaskPlan['steps'][number]['status'], ...(typeof value.description === 'string' ? { description: value.description.slice(0, 4000) } : typeof fallback?.description === 'string' ? { description: fallback.description.slice(0, 4000) } : {}), ...(Array.isArray(value.blockedBy) ? { dependsOn: value.blockedBy.filter(validId).slice(0, 100) } : {}) };
       this.planTasks.set(JSON.stringify([scope, step.id]), step);
       return step;
