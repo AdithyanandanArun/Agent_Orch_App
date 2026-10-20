@@ -1,15 +1,20 @@
-import type { AdapterEvent, AgentAdapter, AppSettings, RunOptions } from '@relay/contracts';
-import type { Options, PermissionResult, Query } from '@anthropic-ai/claude-agent-sdk';
+import path from 'node:path';
+import { ATTACHMENT_LIMITS, type AdapterEvent, type AgentAdapter, type AppSettings, type RunOptions } from '@relay/contracts';
+import type { Options, PermissionResult, Query, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { ProviderError, TextTail, abortError, errorMessage, isAbortError, isRecord, redactSecrets } from '../common.js';
 import { bundledClaudeCandidates, resolveExecutableCached, type ResolveResult } from '../discovery.js';
 import { ClaudeMessageMapper, claudePermissionMode, describeToolUse, previewInput } from './messages.js';
 import { claudeEnvironment } from './auth.js';
 import { autoCompactPercent, claudeCompactEnv, describeClaudeCompaction } from '../compaction.js';
+import { base64Of, fileNote, filesOf, imageMime, imagesOf, invocationText, NO_TEXT_PROMPT } from '../attachments.js';
 
 export type QueryFn = (params: { prompt: string; options: Options }) => Query | AsyncGenerator<unknown, void>;
+export type ContentQueryFn = (params: { prompt: string | AsyncIterable<SDKUserMessage>; options: Options }) => Query | AsyncGenerator<unknown, void>;
 
 export interface ClaudeAdapterDeps {
   query?: QueryFn;
+  /** Structured native input, also injectable without launching a real provider. The legacy text-only query hook remains supported. */
+  queryWithContent?: ContentQueryFn;
   env?: NodeJS.ProcessEnv;
   resolveExecutable?: (settings: AppSettings, env: NodeJS.ProcessEnv) => Promise<ResolveResult>;
 }
@@ -29,9 +34,9 @@ function promptWithSelectedClaudeSkill(prompt: string, skillName: string): strin
   return `/${skillName} ${body}`;
 }
 
-async function loadSdkQuery(): Promise<QueryFn> {
+async function loadSdkQuery(): Promise<ContentQueryFn> {
   const sdk = await import('@anthropic-ai/claude-agent-sdk');
-  return sdk.query as QueryFn;
+  return sdk.query;
 }
 
 export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): AgentAdapter {
@@ -41,7 +46,9 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): AgentAdapter 
     async run(run: RunOptions): Promise<void> {
       const { session, signal, onEvent, requestApproval, settings } = run;
       if (signal.aborted) throw abortError();
-      const selectedSkills = run.skills ?? [];
+      const selectedSkills = run.invocation?.kind === 'skill' && run.invocation.skill ? [run.invocation.skill] : run.skills ?? [];
+      if (run.invocation?.kind === 'skill' && !run.invocation.skill) throw new ProviderError('The selected Claude skill was not resolved. Refresh its catalog.', { code: 'invalid_skill' });
+      if (run.invocation?.kind === 'command' && selectedSkills.length) throw new ProviderError('Choose one Claude command or skill per message.', { code: 'multiple_skills_unsupported' });
       if (selectedSkills.length > 1) {
         throw new ProviderError('Claude sessions can dispatch one selected skill per run. Choose a single skill or clear the selection.', { code: 'multiple_skills_unsupported' });
       }
@@ -50,7 +57,12 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): AgentAdapter 
       if (selectedSkill && (!selectedSkill.enabled || selectedSkill.source === 'user' || !selectedSkillName || !/^[A-Za-z0-9_.:-]+$/.test(selectedSkillName))) {
         throw new ProviderError('The selected Claude skill is unavailable or has an invalid name. Refresh the provider catalog and select a listed project skill.', { code: 'invalid_skill' });
       }
-      const prompt = selectedSkillName ? promptWithSelectedClaudeSkill(run.prompt, selectedSkillName) : run.prompt;
+      if (run.invocation?.kind === 'skill' && selectedSkillName !== run.invocation.name) throw new ProviderError('The selected skill changed. Refresh its catalog.', { code: 'invalid_skill' });
+      const userText = run.invocation ? invocationText(run.invocation) : selectedSkillName ? promptWithSelectedClaudeSkill(run.prompt, selectedSkillName) : run.prompt;
+      const note = fileNote(filesOf(run.attachments));
+      const prompt = [userText || NO_TEXT_PROMPT, note].filter(Boolean).join('\n\n');
+      const images = imagesOf(run.attachments);
+      for (const image of images) imageMime(image, ATTACHMENT_LIMITS.claudeImageBytes);
       if (session.effort !== 'none' && !['low', 'medium', 'high', 'xhigh', 'max'].includes(session.effort)) {
         throw new ProviderError(`Claude does not support reasoning effort "${session.effort}". Refresh the model capabilities and choose a listed effort.`, { code: 'unsupported_effort' });
       }
@@ -114,7 +126,8 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): AgentAdapter 
         includePartialMessages: true,
         abortController: controller,
         pathToClaudeCodeExecutable: resolved.executable.path,
-        systemPrompt: { type: 'preset', preset: 'claude_code' },
+        systemPrompt: { type: 'preset', preset: 'claude_code', ...(run.context ? { append: run.context, snapshot: false } : {}) },
+        ...(run.attachments?.length ? { additionalDirectories: [...new Set(run.attachments.map((item) => path.dirname(item.path)))] } : {}),
         settingSources: ['project'],
         settings: { disableAllHooks: true, fastMode: session.serviceTier === 'fast' },
         ...(selectedSkillName ? { skills: [selectedSkillName] } : {}),
@@ -130,8 +143,20 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): AgentAdapter 
       const mapper = new ClaudeMessageMapper(session.model, emit, run.providerTaskState);
       let stream: Query | AsyncGenerator<unknown, void> | undefined;
       try {
-        const query = deps.query ?? (await loadSdkQuery());
-        stream = query({ prompt, options });
+        if (images.length) {
+          if (deps.query && !deps.queryWithContent) throw new ProviderError('The injected Claude query supports text only; structured image input requires queryWithContent.', { code: 'unsupported_attachment' });
+          const content: Exclude<SDKUserMessage['message']['content'], string> = [{ type: 'text', text: prompt }];
+          for (const image of images) content.push({ type: 'image', source: { type: 'base64', media_type: imageMime(image, ATTACHMENT_LIMITS.claudeImageBytes), data: await base64Of(image) } });
+          if (signal.aborted) throw abortError();
+          const input = (async function* (): AsyncGenerator<SDKUserMessage> {
+            yield { type: 'user', message: { role: 'user', content }, parent_tool_use_id: null, ...(session.providerSessionId ? { session_id: session.providerSessionId } : {}) };
+          })();
+          const query = deps.queryWithContent ?? await loadSdkQuery();
+          stream = query({ prompt: input, options });
+        } else {
+          const query = deps.query ?? deps.queryWithContent ?? await loadSdkQuery();
+          stream = query({ prompt, options });
+        }
         if (session.serviceTier === 'fast' && typeof (stream as Query).initializationResult === 'function') {
           const initialized = await (stream as Query).initializationResult();
           if (initialized.fast_mode_state !== 'on') {

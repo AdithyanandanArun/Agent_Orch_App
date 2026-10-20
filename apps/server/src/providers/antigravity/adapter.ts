@@ -7,6 +7,7 @@ import {
 } from './runtime.js';
 import { AcpRpcError, ACP_INVALID_PARAMS, ACP_METHOD_NOT_FOUND } from './rpc.js';
 import { choices, configuration, mergeAntigravityMetadata, nativeModelValue, nativeModes, object, parseAntigravityMetadata } from './metadata.js';
+import { acpPrompt, acpPromptCapabilities, invocationText } from '../attachments.js';
 
 export interface AntigravityAdapterDeps { env?: NodeJS.ProcessEnv; spawn?: AntigravitySpawn; timeoutMs?: number }
 const MODE: Record<string, string> = { supervised: 'default', balanced: 'auto_edit', 'full-access': 'yolo' };
@@ -20,7 +21,7 @@ export function createAntigravityAdapter(deps: AntigravityAdapterDeps = {}): Age
   return { async run(options) {
     if (options.signal.aborted) throw abortError();
     if (options.session.serviceTier && options.session.serviceTier !== 'standard') throw new ProviderError('Antigravity ACP does not expose Relay service tiers. Choose Standard.', { code: 'unsupported_service_tier' });
-    if ((options.skills ?? []).length) throw new ProviderError('Relay-selected Antigravity skills are unavailable. Native provider skills remain provider-owned.', { code: 'unsupported_skills' });
+    if ((options.skills ?? []).length || options.invocation?.kind === 'skill') throw new ProviderError('Relay-selected Antigravity skills are unavailable. Native provider skills remain provider-owned.', { code: 'unsupported_skills' });
     if (!MODE[options.session.policy]) throw new ProviderError('Antigravity supports Supervised, Auto-accept edits and Full access. Auto is unavailable.', { code: 'unsupported_policy' });
     const env = deps.env ?? process.env;
     const resolved = await resolveAntigravity(options.settings, env);
@@ -105,8 +106,11 @@ class AntigravityRun {
       markAntigravityAuthenticated(this.executable, this.env);
       if (this.options.session.model === 'default') this.info(`Antigravity selected its native default model: ${this.expectedModel}.`);
       if (this.options.settings.autoCompactPercent != null) this.info('Relay’s automatic compaction threshold is not exposed by Antigravity ACP. Its native context management remains in effect.');
+      const prompt = await acpPrompt({ text: this.options.invocation ? invocationText(this.options.invocation) : this.options.prompt,
+        attachments: this.options.attachments, capabilities: acpPromptCapabilities(capabilities), agent: 'Antigravity', context: this.options.context });
+      if (this.signal.aborted) throw abortError();
       this.phase = 'prompt';
-      const response: unknown = await this.race(conn.request('session/prompt', { sessionId: this.sessionId, prompt: [{ type: 'text', text: this.options.prompt }] }, PROMPT_TIMEOUT));
+      const response: unknown = await this.race(conn.request('session/prompt', { sessionId: this.sessionId, prompt }, PROMPT_TIMEOUT));
       if (this.violation) throw this.violation;
       if (this.signal.aborted) throw abortError();
       const reason = object(response).stopReason;

@@ -9,6 +9,7 @@ import {
   SESSION_ID, closeOpencode, environmentSecrets, opencodeEnvironment, resolveOpencode, safeOpencodeError, safeOpencodeText, startOpencode,
   type OpencodeRuntime, type OpencodeSpawn,
 } from './runtime.js';
+import { acpPrompt, acpPromptCapabilities, invocationText } from '../attachments.js';
 
 export interface OpencodeAdapterDeps { env?: NodeJS.ProcessEnv; spawn?: OpencodeSpawn; timeoutMs?: number }
 const SESSION_TIMEOUT = 90_000;
@@ -47,7 +48,10 @@ export function createOpencodeAdapter(deps: OpencodeAdapterDeps = {}): AgentAdap
   return { async run(options) {
     if (options.signal.aborted) throw abortError();
     if (options.session.serviceTier && options.session.serviceTier !== 'standard') throw new ProviderError('OpenCode does not expose Relay service tiers. Choose Standard.', { code: 'unsupported_service_tier' });
-    if ((options.skills ?? []).length) throw new ProviderError('Relay-selected skills are unavailable for OpenCode. Its native skills appear as slash commands.', { code: 'unsupported_skills' });
+    if ((options.skills ?? []).length || options.invocation?.kind === 'skill') throw new ProviderError('Relay-selected skills are unavailable for OpenCode. Its native skills appear as slash commands.', { code: 'unsupported_skills' });
+    if (options.attachments?.length && (options.invocation || /^\s*\/[A-Za-z0-9][A-Za-z0-9_.:-]*(?:\s|$)/.test(options.prompt))) {
+      throw new ProviderError('OpenCode native slash commands accept text arguments only. Remove the attachments or send a regular message; no prompt was sent.', { code: 'unsupported_attachment' });
+    }
     if (!OPENCODE_POLICIES.includes(options.session.policy)) throw new ProviderError('OpenCode supports Supervised, Auto-accept edits and Full access. Auto is unavailable.', { code: 'unsupported_policy' });
     const env = deps.env ?? process.env;
     const resolved = await resolveOpencode(options.settings, env);
@@ -150,8 +154,11 @@ class OpencodeRun {
       if (mode && mode !== 'build') this.info(`OpenCode is using its "${mode}" agent mode from your OpenCode configuration.`);
       if (this.options.settings.autoCompactPercent != null) this.info('Relay’s automatic compaction threshold is not exposed by OpenCode ACP. OpenCode’s native compaction remains in effect.');
       this.announceSlashCommand();
+      const content = await acpPrompt({ text: this.options.invocation ? invocationText(this.options.invocation) : this.options.prompt,
+        attachments: this.options.attachments, capabilities: acpPromptCapabilities(capabilities), agent: 'OpenCode', context: this.options.context });
+      if (this.signal.aborted) throw abortError();
       this.phase = 'prompt';
-      const prompt = conn.request('session/prompt', { sessionId: this.sessionId, prompt: [{ type: 'text', text: this.options.prompt }] }, PROMPT_TIMEOUT);
+      const prompt = conn.request('session/prompt', { sessionId: this.sessionId, prompt: content }, PROMPT_TIMEOUT);
       prompt.catch(() => undefined);
       this.promptPromise = prompt;
       const response: unknown = await this.race(prompt);
@@ -226,9 +233,11 @@ class OpencodeRun {
   }
 
   private announceSlashCommand(): void {
-    const match = /^\/([A-Za-z0-9][A-Za-z0-9_.:-]*)(?:\s|$)/.exec(this.options.prompt.trimStart());
+    const prompt = this.options.invocation ? invocationText(this.options.invocation) : this.options.prompt;
+    const match = /^\/([A-Za-z0-9][A-Za-z0-9_.:-]*)(?:\s|$)/.exec(prompt.trimStart());
     if (!match) return;
     if (this.commands.some((command) => command.name === match[1])) this.info(`Running OpenCode command /${match[1]}.`);
+    else if (this.options.invocation && this.commands.length) throw new ProviderError('OpenCode no longer advertises the selected command. Refresh its catalog and select it again. No prompt was sent.', { code: 'unsupported_command' });
     else if (this.commands.length) this.info(`/${match[1]} is not a command OpenCode advertises over ACP, so it is sent to the model as ordinary text.`);
   }
 

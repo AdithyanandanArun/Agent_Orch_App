@@ -1,5 +1,6 @@
 import { nativePlanSteps } from '../plans.js';
 import { spawn, type SpawnOptions } from 'node:child_process';
+import path from 'node:path';
 import type { AdapterEvent, AgentAdapter, AppSettings, RunOptions } from '@relay/contracts';
 import { ProviderError, TextTail, abortError, cleanEnv, isRecord, truncate } from '../common.js';
 import { resolveExecutableCached, type ResolveResult } from '../discovery.js';
@@ -15,6 +16,7 @@ import {
 } from '../compaction.js';
 import { parseCodexModels, validateCodexEffort } from './capabilities.js';
 import { JsonRpcConnection, RPC_METHOD_NOT_FOUND, RpcError, type CloseInfo } from './rpc.js';
+import { fileNote, filesOf, imageMime, imagesOf, invocationText, NO_TEXT_PROMPT } from '../attachments.js';
 
 export interface CodexTimeouts {
   initializeMs: number;
@@ -72,6 +74,7 @@ export function createCodexAdapter(deps: CodexAdapterDeps = {}): AgentAdapter {
   return {
     async run(options: RunOptions): Promise<void> {
       if (options.signal.aborted) throw abortError();
+      if (options.invocation?.kind === 'command') throw new ProviderError('Codex app-server does not expose prompt-style slash commands. Choose a native skill instead.', { code: 'unsupported_command' });
       const resolved = await resolveBinary(options.settings, env);
       if (!resolved.ok) throw new ProviderError(resolved.reason, { code: 'executable_unavailable' });
       if (options.signal.aborted) throw abortError();
@@ -280,12 +283,26 @@ class CodexRun {
     const policy = codexPolicy(session.policy, session.worktreePath);
     const serviceTier = session.serviceTier && session.serviceTier !== 'standard' ? session.serviceTier : null;
     const serviceTierForTurn = serviceTier ?? 'default';
-    const skillInputs = (this.options.skills ?? []).filter((skill) => skill.enabled && skill.path && skill.path.startsWith('/') && skill.path.length <= 4096 && skill.name.trim().length > 0).slice(0, 20)
+    const selected = this.options.invocation?.kind === 'skill' ? [this.options.invocation.skill] : this.options.skills ?? [];
+    if (this.options.invocation?.kind === 'skill' && this.options.invocation.skill?.name !== this.options.invocation.name) {
+      throw new ProviderError('The selected Codex skill changed. Refresh its catalog.', { code: 'invalid_skill' });
+    }
+    if (selected.some((skill) => !skill || !skill.enabled || !skill.path || !path.isAbsolute(skill.path) || skill.path.length > 4096 || !skill.name.trim())) {
+      throw new ProviderError('A selected Codex skill is no longer available. Refresh the catalog and select it again.', { code: 'invalid_skill' });
+    }
+    const skillInputs = selected.filter((skill): skill is NonNullable<typeof skill> => Boolean(skill)).slice(0, 20)
       .map((skill) => ({ type: 'skill', name: truncate(skill.name, 150), path: skill.path as string }));
+    const images = imagesOf(this.options.attachments);
+    for (const image of images) imageMime(image);
+    const userText = this.options.invocation ? invocationText(this.options.invocation, '$') : prompt;
+    const text = [userText || NO_TEXT_PROMPT, fileNote(filesOf(this.options.attachments))].filter(Boolean).join('\n\n');
+    // Skills are explicit native input items, so context can be a separate text input without changing skill dispatch or thread configuration.
+    const input = [...(this.options.context ? [{ type: 'text', text: this.options.context, text_elements: [] }] : []),
+      { type: 'text', text, text_elements: [] }, ...skillInputs, ...images.map((image) => ({ type: 'localImage', path: image.path }))];
     this.phase = 'turn';
     if (this.abortRequested) throw abortError();
     const request = this.conn.request('turn/start', {
-      threadId: this.threadId, input: [{ type: 'text', text: prompt, text_elements: [] }, ...skillInputs], cwd: session.worktreePath,
+      threadId: this.threadId, input, cwd: session.worktreePath,
       model: session.model, ...(!this.omitEffort ? { effort: session.effort } : {}), serviceTier, serviceTierForTurn, approvalPolicy: policy.approvalPolicy, approvalsReviewer: policy.approvalsReviewer, sandboxPolicy: policy.sandboxPolicy,
     }, this.ctx.timeouts.turnStartMs);
     request.then((result) => {
