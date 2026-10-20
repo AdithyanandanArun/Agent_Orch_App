@@ -43,6 +43,7 @@ const INSTRUCTIONS = [
   'Call team_members first to see each member’s handle, role and actual status, including your own. Call team_inbox to read what Relay has queued for you.',
   'Who may assign work is enforced by the host on every call. In Orchestrated and Current agent leads groups only the designated orchestrator assigns work. In Cowork only the peer holding this request’s temporary planning lease may assign, and only within that lease; any member may message or report on its own work. A refusal is final: do not try to work around it.',
   'team_assign, team_message and team_artifact confirm acceptance or queueing, never completion. team_status reports progress on a task you own. Recipients are handles such as claude1; Relay never dispatches work by scanning your prose for @mentions, so use these tools to reach someone.',
+  'Completion is a single report, not a conversation: a worker offers each committed file revision with team_artifact (one revision per call, only when a real commit exists), records team_status review, then gives its final summary. Do not send team_message completion acknowledgments or wake peers just to repeat completion. A coordinator answers the human once, with the outcome first, each member’s contribution, where work was integrated, which checks it ran versus peers reported, and what still needs review. Review is not Done.',
   'Keep payloads compact: scoped objectives, exact paths and revisions, and concise questions. Limits, edit-scope ownership and delegation budgets are enforced by the host.',
 ].join(' ');
 
@@ -107,11 +108,11 @@ export class TeamMcpBridge {
     register('team_inbox', 'Read the messages, assignments and artifact references Relay has queued for you.', {}, { readOnly: false, idempotent: true }, () => this.groups.inbox(ctx));
     register('team_assign', 'Assign a scoped task to another member. Allowed only when your role or planning lease permits it. A success means the assignment was accepted and queued, not completed.',
       TeamAssignSchema.shape, { readOnly: false, idempotent: false }, (args) => this.groups.assign(ctx, TeamAssignSchema.parse(args)));
-    register('team_message', 'Send a targeted question, reply or note to one member. Set expectsReply only when you need an answer; success means the message was queued.',
+    register('team_message', 'Send a targeted question, reply or note to one member. Set expectsReply only when you need an answer; success means the message was queued. Do not use it for completion acknowledgments; completion goes through team_artifact, team_status and your final answer.',
       TeamMessageSchema.shape, { readOnly: false, idempotent: false }, (args) => this.groups.message(ctx, TeamMessageSchema.parse(args)));
-    register('team_artifact', 'Offer another member a committed file revision. The host verifies the path and revision before delivery; unverified references are rejected.',
+    register('team_artifact', 'Offer another member one committed file revision per call. The host verifies the path and revision before delivery; unverified references are rejected. Use it only for a revision that actually exists; call it once per committed file, and never invent one when nothing is committed.',
       TeamArtifactSchema.shape, { readOnly: false, idempotent: false }, (args) => this.groups.artifact(ctx, TeamArtifactSchema.parse(args)));
-    register('team_status', 'Report running, blocked or review status for a task you own. This records an event and does not itself start a model run.',
+    register('team_status', 'Report running, blocked or review status for a task you own. Use review once when your work is ready for human review; it is not Done. This records an event and does not itself start a model run.',
       TeamStatusSchema.shape, { readOnly: false, idempotent: true }, (args) => this.groups.status(ctx, TeamStatusSchema.parse(args)));
     return server;
   }

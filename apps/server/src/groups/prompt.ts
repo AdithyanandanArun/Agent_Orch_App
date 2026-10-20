@@ -24,6 +24,9 @@ const ROLE_RULE: Record<GroupMember['role'], string> = {
   worker: 'You are a worker: do the assigned scope, report with team_status/team_artifact, and ask the orchestrator through team_message when blocked. You cannot assign work.',
 };
 
+const WORKER_COMPLETION = 'Completion: send one concise completion, not repeats. For each committed file revision you actually produced, call team_artifact (one revision per call; never invent an artifact when nothing is committed), then team_status review, then your final summary of changes, checks you ran and caveats. Do not send team_message completion acknowledgments or wake peers just to repeat completion.';
+const COORDINATOR_COMPLETION = 'Final answer to the human: begin with the outcome, Implemented, Partially complete or Blocked, plus material caveats. Then state each @agent\'s contribution; where the work is actually integrated (worktree, branch or commit; the selected checkout only if that was authorized and done); which checks you ran yourself versus which a peer reported; and what still needs review or user action. If any worker is still running, say Pending instead of claiming it is done. Review tasks are not Done until a human accepts them.';
+
 /** Bounded per-run guidance. Native history, roster and request excerpt only; never other members' transcripts. */
 export function buildInstructions(d: InstructionData): string {
   const lines = [
@@ -35,13 +38,13 @@ export function buildInstructions(d: InstructionData): string {
       ? 'You hold this request\'s temporary planning lease: propose a split, do your own share, and use team_assign for each other peer\'s concrete scope. Peers wait for your assignment before editing.'
       : 'Cowork request receipt is not execution. Edit only after you receive an assignment with a concrete scope, or when the human addresses you directly.');
   }
-  lines.push('', 'Team:');
-  for (const row of d.roster.slice(0, 12)) lines.push(`- @${row.handle} · ${row.role} · ${row.provider}/${clean(row.model, 60)} · ${row.state}${row.you ? ' (you)' : ''}`);
-  lines.push('', `Request: ${clean(d.requestExcerpt, LIMITS.request)}`);
-  lines.push(`This turn: ${d.deliveryKind} delivery, message hop ${d.hop}/${d.maxHops}, request turns used ${d.turnsUsed}/${d.maxTurns}.`);
-  if (d.assignment) lines.push(`Assignment ${d.assignment.id} (task ${d.assignment.taskId}). Edit only within: ${d.assignment.scope.join(', ')}.`);
-  if (d.unread > 0) lines.push(`${d.unread} unread team message(s) are waiting; call team_inbox.`);
-  lines.push(
+  const context = ['', 'Team:'];
+  for (const row of d.roster.slice(0, 12)) context.push(`- @${row.handle} · ${row.role} · ${row.provider}/${clean(row.model, 60)} · ${row.state}${row.you ? ' (you)' : ''}`);
+  context.push('', `Request: ${clean(d.requestExcerpt, LIMITS.request)}`);
+  context.push(`This turn: ${d.deliveryKind} delivery, message hop ${d.hop}/${d.maxHops}, request turns used ${d.turnsUsed}/${d.maxTurns}.`);
+  if (d.assignment) context.push(`Assignment ${d.assignment.id} (task ${d.assignment.taskId}). Edit only within: ${d.assignment.scope.join(', ')}.`);
+  if (d.unread > 0) context.push(`${d.unread} unread team message(s) are waiting; call team_inbox.`);
+  const rules = [
     '',
     'Rules: your own earlier conversation is in your native history; other members\' transcripts are not shared, so ask with team_message or read team_inbox.',
     'Use the team_* tools to reach teammates. Writing @handle in prose never dispatches anything. Tool success means queued or recorded, not completed.',
@@ -50,8 +53,13 @@ export function buildInstructions(d: InstructionData): string {
     d.canAssign
       ? 'You may prepare integration in your own scoped worktree under the selected permission policy. Never push or publish, or modify the human-selected checkout, without explicit human authorization.'
       : 'Keep edits inside your assignment and own worktree. Ask the coordinator or human before integration; never push or publish without explicit human authorization.',
-  );
-  return truncate(lines.join('\n'), LIMITS.instructions);
+    d.canAssign ? COORDINATOR_COMPLETION : WORKER_COMPLETION,
+  ];
+  // Completion guidance is kept whole: only the roster and request context yield when the bound is reached.
+  const fixed = [...lines, ...rules].join('\n');
+  const room = Math.max(0, LIMITS.instructions - fixed.length - 1);
+  const body = truncate(context.join('\n'), room);
+  return truncate([...lines, body, ...rules].join('\n'), LIMITS.instructions);
 }
 
 export function describeSender(handle: string | null): string { return handle ? `@${handle}` : 'Relay'; }
@@ -81,7 +89,7 @@ export function assignmentText(d: {
   if (d.inputs.length) {
     lines.push('', 'Expected input artifacts (verified handoff messages appear in your session when published):', ...d.inputs.map((input) => `- task ${input.taskId}: ${input.path}${input.reference ? ` · ${input.reference}` : ''}`));
   }
-  lines.push('', 'Report progress with team_status; finish with a summary of changes and verification. The task goes to Review, not Done.');
+  lines.push('', 'Report progress with team_status; finish with one completion (team_artifact per committed file revision, team_status review, then a summary of changes and verification). The task goes to Review, not Done.');
   return truncate(lines.join('\n'), LIMITS.message);
 }
 
@@ -94,6 +102,6 @@ export function resultText(lines: ResultLine[]): string {
   const rows = lines.flatMap((row) => [`- @${row.handle} · ${clean(row.title, 120)} · ${row.outcome}`, row.summary ? `  ${clean(row.summary, LIMITS.summary).replaceAll('\n', '\n  ')}` : '']).filter(Boolean);
   return truncate([
     'Delegated work from your latest batch has finished. Native results below are bounded excerpts; inspect worker worktrees or artifacts for detail.',
-    ...rows, '', 'Review the results, integrate or follow up if needed, and report to the human. Reassign with team_assign only if work remains.',
+    ...rows, '', 'Inspect the actual artifacts and worktrees, integrate authorized work within your own scope or location, then send one self-contained final summary for the human (outcome first, each agent\'s contribution, where it landed, checks run versus peer-reported, remaining review or action). Do not claim Done for tasks in Review. Use team_assign only if specific work remains.',
   ].join('\n'), LIMITS.message);
 }
