@@ -1,12 +1,13 @@
 import { create } from 'zustand';
 import { mergeTextDelta } from '@relay/contracts/stream';
-import type { Approval, Bootstrap, Message, Project, ServerEvent, ClientEvent, Session, Task, WorkspaceEvent } from '@relay/contracts';
+import type { Approval, Bootstrap, GroupSnapshot, Message, Project, ServerEvent, ClientEvent, Session, Task, WorkspaceEvent } from '@relay/contracts';
 import { api, errorMessage } from '../lib/api';
 import { terminalBus } from './terminalBus';
 import { resolveTab, useBrowserStore } from './browser';
+import { activeMembers, findGroupForSession, groupChildSessionIds } from '../lib/groups';
 
 export type View = 'workspace' | 'tasks' | 'activity' | 'map' | 'settings';
-export type SettingsSection = 'general' | 'project' | 'providers' | 'browser' | 'appearance';
+export type SettingsSection = 'general' | 'project' | 'agents' | 'providers' | 'browser' | 'appearance';
 export type ContextTab = 'overview' | 'files' | 'changes' | 'browser';
 export type Scope = 'session' | 'project';
 export type Connection = 'connecting' | 'online' | 'offline';
@@ -21,7 +22,10 @@ export type Dialog =
   | { kind: 'rename'; sessionId: string }
   | { kind: 'archive'; sessionId: string }
   | { kind: 'import' }
-  | { kind: 'shortcuts' };
+  | { kind: 'shortcuts' }
+  | { kind: 'add-agent'; sessionId: string }
+  | { kind: 'group-mode'; groupId: string }
+  | { kind: 'member-settings'; groupId: string; memberId: string };
 
 export interface Toast { id: number; tone: 'info' | 'success' | 'error'; text: string }
 export interface StreamEntry { sessionId: string; base: string; text: string }
@@ -108,6 +112,8 @@ interface RelayState {
   selectSession(id: string): void;
   createSession(): Promise<void>;
   organizeSession(id: string, changes: Partial<Pick<Session, 'pinned' | 'unread'>>): Promise<void>;
+  /** Merge a group snapshot returned by a group mutation without waiting for the next bootstrap. */
+  applyGroup(snapshot: GroupSnapshot): void;
   selectTask(id: string | null): void;
   setCenterTab(key: string): void;
   setMapSelection(id: string | null): void;
@@ -126,6 +132,23 @@ const sameItem = <T extends object>(a: T, b: T): boolean => {
   if (ka.length !== Object.keys(b).length) return false;
   return ka.every((k) => sameValue(a[k], b[k]));
 };
+
+/** Group snapshots have no top-level id; keep the previous reference for any that did not change. */
+function reconcileGroups(prev: GroupSnapshot[] | undefined, next: GroupSnapshot[]): GroupSnapshot[] {
+  if (!prev) return next;
+  const old = new Map(prev.map((p) => [p.group.id, p]));
+  let changed = prev.length !== next.length;
+  const out = next.map((n, i) => {
+    const o = old.get(n.group.id);
+    if (o && sameValue(o, n)) {
+      if (prev[i] !== o) changed = true;
+      return o;
+    }
+    changed = true;
+    return n;
+  });
+  return changed ? out : prev;
+}
 
 /** Reuses previous object references for unchanged items so unrelated components do not re-render. */
 function reconcile<T extends { id: string | number }>(prev: T[] | undefined, next: T[]): T[] {
@@ -158,6 +181,7 @@ function reconcileBootstrap(prev: Bootstrap | null, next: Bootstrap): Bootstrap 
     approvals: reconcile<Approval>(prev.approvals, next.approvals),
     providers: reconcile(prev.providers, next.providers),
     settings: sameItem(prev.settings, next.settings) ? prev.settings : next.settings,
+    ...(next.groups ? { groups: reconcileGroups(prev.groups, next.groups) } : {}),
   };
 }
 
@@ -169,10 +193,15 @@ function resolveSelection(s: Pick<RelayState, 'activeProjectId' | 'sessionByProj
   }
   const map = { ...s.sessionByProject };
   let changed = false;
+  const children = groupChildSessionIds(boot.groups);
   for (const p of boot.projects) {
-    const sessions = boot.sessions.filter((x) => x.projectId === p.id);
+    // Member sessions are reached through their group's anchor, so they are never a selection of their own.
+    const sessions = boot.sessions.filter((x) => x.projectId === p.id && !children.has(x.id));
     const cur = map[p.id];
     if (cur && sessions.some((x) => x.id === cur)) continue;
+    const group = findGroupForSession(boot.groups, cur);
+    const anchor = group && sessions.find((x) => x.id === group.group.anchorSessionId);
+    if (anchor) { map[p.id] = anchor.id; changed = true; continue; }
     if (!cur && p.id !== projectId) continue;
     const pick = sessions.find(session => boot.providers.some(provider => provider.id === session.provider && provider.available)) ?? sessions[0];
     if (pick) map[p.id] = pick.id;
@@ -496,7 +525,8 @@ export const useRelay = create<RelayState>((set, get) => {
     selectProject(id) {
       const { boot, sessionByProject } = get();
       if (!boot?.projects.some((p) => p.id === id)) return;
-      const sessions = boot.sessions.filter((s) => s.projectId === id);
+      const children = groupChildSessionIds(boot.groups);
+      const sessions = boot.sessions.filter((s) => s.projectId === id && !children.has(s.id));
       const remembered = sessionByProject[id];
       const pick = sessions.find((s) => s.id === remembered) ?? sessions[0];
       patch({
@@ -506,13 +536,25 @@ export const useRelay = create<RelayState>((set, get) => {
       if (pick?.unread && get().view === 'workspace') void get().organizeSession(pick.id, { unread: false }).catch(() => {});
     },
     selectSession(id) {
-      const s = get().boot?.sessions.find((x) => x.id === id);
-      if (!s) return;
+      const boot = get().boot;
+      // Choosing any member of a group opens the group through its anchor session.
+      const group = findGroupForSession(boot?.groups, id);
+      const s = boot?.sessions.find((x) => x.id === (group?.group.anchorSessionId ?? id));
+      if (!boot || !s) return;
       patch({
-        activeProjectId: s.projectId, sessionByProject: { ...get().sessionByProject, [s.projectId]: id },
+        activeProjectId: s.projectId, sessionByProject: { ...get().sessionByProject, [s.projectId]: s.id },
         view: 'workspace', centerTab: 'session', sidebarOpen: false,
       });
-      if (s.unread) void get().organizeSession(id, { unread: false }).catch(() => {});
+      const toRead = group ? activeMembers(group).map((member) => boot.sessions.find((x) => x.id === member.sessionId)).filter((x): x is Session => Boolean(x?.unread)) : s.unread ? [s] : [];
+      for (const session of toRead) void get().organizeSession(session.id, { unread: false }).catch(() => {});
+    },
+    applyGroup(snapshot) {
+      set((s) => {
+        if (!s.boot) return {};
+        const groups = s.boot.groups ?? [];
+        const next = groups.some((g) => g.group.id === snapshot.group.id) ? groups.map((g) => (g.group.id === snapshot.group.id ? snapshot : g)) : [...groups, snapshot];
+        return { boot: { ...s.boot, groups: next } };
+      });
     },
     async organizeSession(id, changes) {
       try {
@@ -618,3 +660,11 @@ export const useActiveSession = (): Session | undefined =>
     const id = s.activeProjectId ? s.sessionByProject[s.activeProjectId] : undefined;
     return id ? s.boot?.sessions.find((x) => x.id === id) : undefined;
   });
+/** The group the active session anchors, when it has been converted. */
+export const useActiveGroup = (): GroupSnapshot | undefined =>
+  useRelay((s) => {
+    const id = s.activeProjectId ? s.sessionByProject[s.activeProjectId] : undefined;
+    return findGroupForSession(s.boot?.groups, id);
+  });
+export const useGroupById = (groupId: string): GroupSnapshot | undefined =>
+  useRelay((s) => s.boot?.groups?.find((g) => g.group.id === groupId));

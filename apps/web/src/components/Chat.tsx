@@ -1,17 +1,16 @@
-import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDown, ChevronRight, ShieldAlert, Terminal, Info, FolderPlus } from 'lucide-react';
-import type { Approval, Session, SessionRun, ToolCall } from '@relay/contracts';
-import { useRelay, useProject, useActiveSession } from '../store/store';
-import { api, errorMessage } from '../lib/api';
-import { clockTime, cx } from '../lib/format';
-import { Markdown } from './Markdown';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { ArrowDown, FolderPlus } from 'lucide-react';
+import type { Session, SessionRun, ToolCall } from '@relay/contracts';
+import { useRelay, useProject, useActiveSession, useActiveGroup } from '../store/store';
+import type { DisplayMessage } from '../lib/conversation';
 import { Button, EmptyState, PROVIDER_NAME } from './ui';
+import { ApprovalCard, LegacyToolGroup, MessageRow } from './ConversationParts';
+import { GroupConversation } from './group/GroupConversation';
 import { Composer } from './Composer';
 import { RunActivity } from './RunActivity';
 import { RunChanges } from './RunChanges';
 import { GitBar } from './git/GitBar';
 
-interface DisplayMessage { id: string; role: 'user' | 'assistant' | 'system' | 'tool'; content: string; createdAt: string; kind?: string; runId?: string; live: boolean }
 const EMPTY_RUNS: SessionRun[] = [];
 const EMPTY_TOOL_CALLS: ToolCall[] = [];
 
@@ -38,121 +37,13 @@ function useSessionMessages(session: Session | undefined): DisplayMessage[] {
   }, [all, streams, session]);
 }
 
-function legacyToolTitle(m: DisplayMessage): string {
-  const candidates = [m.kind, ...m.content.split('\n')];
-  for (const value of candidates) {
-    const text = value?.trim();
-    if (!text || /^(?:tool(?:\s+.*)?|shell|command|tool output)$/i.test(text)) continue;
-    return text.slice(0, 120);
-  }
-  return 'Tool output';
-}
-
-function normalizedCommand(value: string): string {
-  return value.trim().replace(/^(?:\$|❯)\s*/, '');
-}
-
-const LegacyToolGroup = memo(function LegacyToolGroup({ messages }: { messages: DisplayMessage[] }) {
-  const previews = messages.map(legacyToolTitle);
-  return (
-    <details className="conversation-detail conversation-detail--tool legacy-tool-group">
-      <summary className="conversation-detail__summary">
-        <ChevronRight size={12} className="conversation-detail__chevron" aria-hidden="true" />
-        <Terminal size={13} aria-hidden="true" />
-        <span className="conversation-detail__label">Tool activity · {messages.length} output {messages.length === 1 ? 'record' : 'records'}</span>
-        <span className="conversation-detail__preview">{previews.slice(0, 2).join(' · ')}</span>
-      </summary>
-      <div className="legacy-tool-group__items">
-        {messages.map((m, index) => {
-          const first = m.content.split('\n').find(line => line.trim() && !/^(?:tool(?:\s+.*)?|shell|command|tool output)$/i.test(line.trim())) ?? '';
-          const title = previews[index] ?? 'Tool output';
-          const showPreview = first && normalizedCommand(first) !== normalizedCommand(title);
-          return (
-            <details key={m.id} className="legacy-tool-item">
-              <summary><ChevronRight size={12} aria-hidden="true" /><span>{title}</span>{showPreview ? <code>{first.slice(0, 160)}</code> : null}</summary>
-              <pre>{m.content}</pre>
-            </details>
-          );
-        })}
-      </div>
-    </details>
-  );
-});
-
-const MessageRow = memo(function MessageRow({ m, session }: { m: DisplayMessage; session: Session }) {
-  if (m.role === 'tool') return null;
-  if (m.role === 'system') {
-    const preview = m.content.split('\n').find((line) => line.trim()) ?? '';
-    return (
-      <details className="conversation-detail conversation-detail--system">
-        <summary className="conversation-detail__summary">
-          <ChevronRight size={12} className="conversation-detail__chevron" aria-hidden="true" />
-          <Info size={13} aria-hidden="true" />
-          <span className="conversation-detail__label">{m.kind ?? 'Session update'}</span>
-          <span className="conversation-detail__preview">{preview.slice(0, 180)}</span>
-        </summary>
-        <div className="conversation-detail__body"><Markdown text={m.content} /></div>
-      </details>
-    );
-  }
-  if (m.role === 'user') {
-    return (
-      <article className="msg msg--user" aria-label="Your message">
-        <div className="msg__bubble"><Markdown text={m.content} /></div>
-        {m.createdAt ? <time className="msg__time" dateTime={m.createdAt} title={clockTime(m.createdAt)}>{clockTime(m.createdAt)}</time> : null}
-      </article>
-    );
-  }
-  return (
-    <article className="msg msg--assistant" aria-label={`Assistant response from ${PROVIDER_NAME[session.provider]}`}>
-      <div className="msg__main">
-        <span className="sr-only">Assistant</span>
-        <div className={cx('msg__content', m.live && 'is-live')}><Markdown text={m.content || '…'} /></div>
-        {m.createdAt ? <time className="msg__time" dateTime={m.createdAt} title={clockTime(m.createdAt)}>{clockTime(m.createdAt)}</time> : null}
-      </div>
-    </article>
-  );
-});
-
-function ApprovalCard({ approval }: { approval: Approval }) {
-  const [busy, setBusy] = useState<'approved' | 'denied' | null>(null);
-  const [showInput, setShowInput] = useState(false);
-  const decide = async (decision: 'approved' | 'denied') => {
-    setBusy(decision);
-    try {
-      await api.decideApproval(approval.id, decision);
-      await useRelay.getState().refreshNow();
-    } catch (e) {
-      useRelay.getState().toast('error', `Approval failed: ${errorMessage(e)}`);
-      void useRelay.getState().refreshNow();
-    } finally {
-      setBusy(null);
-    }
-  };
-  return (
-    <section className="approval" aria-label={`Approval requested for ${approval.tool}`}>
-      <div className="approval__head">
-        <ShieldAlert size={15} aria-hidden="true" />
-        <strong>Approval needed</strong>
-        <code>{approval.tool}</code>
-      </div>
-      <p className="approval__desc">{approval.description}</p>
-      {Object.keys(approval.input).length > 0 ? (
-        <>
-          <button type="button" className="link-btn approval__toggle" onClick={() => setShowInput((v) => !v)} aria-expanded={showInput}>{showInput ? 'Hide input' : 'Show tool input'}</button>
-          {showInput ? <pre className="approval__input">{JSON.stringify(approval.input, null, 2)}</pre> : null}
-        </>
-      ) : null}
-      <div className="approval__actions">
-        <Button variant="primary" size="sm" busy={busy === 'approved'} disabled={busy !== null} onClick={() => decide('approved')}>Approve</Button>
-        <Button size="sm" busy={busy === 'denied'} disabled={busy !== null} onClick={() => decide('denied')}>Deny</Button>
-        <span className="approval__note">Applies to this action only.</span>
-      </div>
-    </section>
-  );
-}
-
+/** A converted session opens as its group's shared conversation; everything else stays a single session. */
 export function SessionPane() {
+  const group = useActiveGroup();
+  return group ? <GroupConversation key={group.group.id} snapshot={group} /> : <SingleSessionPane />;
+}
+
+function SingleSessionPane() {
   const project = useProject();
   const session = useActiveSession();
   const hasSessions = useRelay((s) => (s.boot?.sessions ?? []).some((x) => x.projectId === s.activeProjectId));
@@ -260,7 +151,7 @@ export function SessionPane() {
             }
             return (
               <Fragment key={m.id}>
-                <MessageRow m={m} session={session} />
+                <MessageRow m={m} provider={session.provider} />
                 {m.role === 'user' ? (runsByUserMessage.get(m.id) ?? []).map(run => <RunActivity key={run.id} run={run} initialCalls={toolCallsByRun.get(run.id) ?? EMPTY_TOOL_CALLS} />) : null}
                 {(changesAfterMessage.get(index) ?? []).filter(run => run.status !== 'running').map(run => <RunChanges key={run.id} runId={run.id} summary={run.changes} />)}
               </Fragment>
@@ -268,7 +159,7 @@ export function SessionPane() {
           })}
           {unplacedRuns.map(run => <Fragment key={run.id}><RunActivity run={run} initialCalls={toolCallsByRun.get(run.id) ?? EMPTY_TOOL_CALLS} />{run.status !== 'running' ? <RunChanges runId={run.id} summary={run.changes} /> : null}</Fragment>)}
           {session.status === 'running' && !runs.some(run => run.status === 'running') ? (
-            <div className="working" role="status"><span className="dots" aria-hidden="true"><i /><i /><i /></span> {PROVIDER_NAME[session.provider]} is working…</div>
+            <div className="working" role="status"><span className="activity-shimmer">{PROVIDER_NAME[session.provider]} is working…</span></div>
           ) : null}
           {session.error && session.status === 'error' ? <div className="chat__error" role="alert"><strong>Session error</strong><span>{session.error}</span></div> : null}
           {pending.map((a) => <ApprovalCard key={a.id} approval={a} />)}

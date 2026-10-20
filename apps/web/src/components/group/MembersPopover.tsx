@@ -1,0 +1,109 @@
+import { useEffect, useRef, useState, type RefObject } from 'react';
+import { Play, Settings2, Square, UserMinus, UserPlus } from 'lucide-react';
+import type { GroupMember, GroupSnapshot, Session } from '@relay/contracts';
+import { useRelay } from '../../store/store';
+import { shortPath } from '../../lib/format';
+import { interruptMember, removeMember, resumeMember } from '../../lib/groupActions';
+import {
+  MODE_LABEL, ROLE_LABEL, activeMembers, configSummary, isActiveDelivery, isBusy, memberHasActiveWork, providerAvailability, providerName,
+} from '../../lib/groups';
+import { Button, IconButton, StatusDot } from '../ui';
+import { Popover } from '../git/Popover';
+
+function removalBlock(snapshot: GroupSnapshot, member: GroupMember, session: Session | undefined, online: boolean): string | null {
+  if (!online) return 'Reconnect to the server first.';
+  if (member.sessionId === snapshot.group.anchorSessionId) return 'The anchor session cannot be removed from its group.';
+  if (member.id === snapshot.group.orchestratorMemberId) return 'Change the orchestrator before removing it.';
+  if (memberHasActiveWork(snapshot, member, session)) return 'Wait for this member’s run and queued work to finish, or stop it first.';
+  return null;
+}
+
+/** Compact participant list: live status, per-member stop/settings/remove, and the group's queue and bounds. */
+export function MembersPopover({ snapshot, anchor, open, onClose }: { snapshot: GroupSnapshot; anchor: RefObject<HTMLElement | null>; open: boolean; onClose: () => void }) {
+  const sessions = useRelay((s) => s.boot?.sessions);
+  const providers = useRelay((s) => s.boot?.providers);
+  const connection = useRelay((s) => s.connection);
+  const project = useRelay((s) => s.boot?.projects.find((item) => item.id === snapshot.group.projectId));
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const members = activeMembers(snapshot);
+  const online = connection === 'online';
+  const { group } = snapshot;
+  const queued = snapshot.deliveries.filter((delivery) => delivery.status === 'queued');
+  const running = snapshot.deliveries.filter((delivery) => delivery.status === 'running');
+  const request = [...snapshot.requests].reverse().find((item) => item.status === 'active' || item.status === 'paused');
+  const handleOf = (memberId: string) => snapshot.members.find((member) => member.id === memberId)?.handle ?? 'unknown';
+
+  useEffect(() => { if (!open) setConfirming(null); }, [open]);
+  useEffect(() => { if (confirming) cancelRef.current?.focus(); }, [confirming]);
+  const dialog = (action: () => void) => () => { onClose(); action(); };
+
+  return (
+    <Popover anchor={anchor} open={open} onClose={onClose} label="Group participants" width={420} className="members">
+      <div className="members__head">
+        <div><strong>Participants</strong><small>{MODE_LABEL[group.mode]} · {members.length} active</small></div>
+        <Button size="sm" disabled={!online} why="Reconnect to the server first." onClick={dialog(() => useRelay.getState().openDialog({ kind: 'add-agent', sessionId: group.anchorSessionId }))}><UserPlus size={13} aria-hidden="true" /> Add agent</Button>
+      </div>
+      <ul className="members__list">
+        {members.map((member) => {
+          const session = sessions?.find((item) => item.id === member.sessionId);
+          const busyMember = isBusy(session);
+          const active = snapshot.deliveries.filter((delivery) => delivery.memberId === member.id && isActiveDelivery(delivery));
+          const availability = session && providers ? providerAvailability(providers, session.provider) : null;
+          const summary = session && providers ? configSummary({ model: session.model, effort: session.effort, policy: session.policy, serviceTier: session.serviceTier ?? 'standard' }, providers, session.provider) : null;
+          const removeWhy = removalBlock(snapshot, member, session, online);
+          const locked = memberHasActiveWork(snapshot, member, session);
+          return (
+            <li key={member.id} className="member">
+              <div className="member__main">
+                <div className="member__title">
+                  <strong>@{member.handle}</strong><span className="roster__role">{ROLE_LABEL[member.role]}</span>
+                  {member.held ? <span className="roster__role">Paused by you</span> : null}
+                  {session ? <StatusDot status={session.status} /> : null}
+                </div>
+                {session && summary ? <small>{providerName(session.provider)} · {summary.model} · {summary.detail}</small> : <small>Session unavailable</small>}
+                {session ? <small>{session.isolated ? `Worktree${session.branch ? ` · ${session.branch}` : ''}` : `Project folder${project ? ` · ${shortPath(project.path)}` : ''}`}</small> : null}
+                {availability && !availability.available ? <small className="roster__warn">{providerName(session!.provider)} unavailable: {availability.reason}</small> : null}
+                {active.length ? <small>{active.filter((delivery) => delivery.status === 'queued').length} queued · {active.filter((delivery) => delivery.status === 'running').length} running</small> : null}
+                {session?.status === 'error' && session.error ? <small className="roster__warn">{session.error}</small> : null}
+              </div>
+              <div className="member__actions">
+                <IconButton label={`Settings for @${member.handle}`} disabled={!online || locked} why={locked ? 'Only idle members can change settings' : 'Reconnect to the server first'}
+                  onClick={dialog(() => useRelay.getState().openDialog({ kind: 'member-settings', groupId: group.id, memberId: member.id }))}><Settings2 size={14} /></IconButton>
+                {member.held ? <IconButton label={`Resume @${member.handle}`} disabled={!online || busy === member.id} why="Reconnect to the server first" onClick={() => { setBusy(member.id); void resumeMember(group.id, member.id).finally(() => setBusy(null)); }}><Play size={14} /></IconButton> : null}
+                <IconButton label={`Stop @${member.handle}`} disabled={!online || (!busyMember && active.length === 0) || busy === member.id} why={busyMember || active.length ? 'Reconnect to the server first' : 'No active or queued work'}
+                  onClick={() => { setBusy(member.id); void interruptMember(group.id, member.id).finally(() => setBusy(null)); }}><Square size={12} fill="currentColor" /></IconButton>
+                <IconButton label={`Remove @${member.handle}`} disabled={Boolean(removeWhy)} why={removeWhy ?? undefined} onClick={() => setConfirming(member.id)}><UserMinus size={14} /></IconButton>
+              </div>
+              {confirming === member.id ? (
+                <div className="member__confirm" role="group" aria-label={`Remove @${member.handle}`}>
+                  <p>Remove @{member.handle} from this conversation? It stops receiving group messages. Its earlier messages stay in the timeline and its worktree is not deleted.</p>
+                  <div>
+                    <button ref={cancelRef} type="button" className="btn btn--ghost btn--sm" onClick={() => setConfirming(null)}>Cancel</button>
+                    <Button size="sm" variant="danger" busy={busy === member.id} onClick={() => { setBusy(member.id); void removeMember(group.id, member.id).then((ok) => { if (ok) setConfirming(null); }).finally(() => setBusy(null)); }}>Remove</Button>
+                  </div>
+                </div>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+      <div className="members__coord" aria-label="Coordination">
+        <div className="members__limits">
+          <span>Parallel runs ≤ {group.maxParallel}</span><span>Turns ≤ {group.maxTurns}</span><span>Message hops ≤ {group.maxHops}</span>
+          {request ? <span>Current request {request.turnsUsed}/{group.maxTurns} turns</span> : null}
+        </div>
+        {group.paused ? <p className="members__paused" role="status"><strong>Paused.</strong> {group.pauseReason ?? 'New work is not starting. Resume to continue queued work.'}</p> : null}
+        {queued.length || running.length ? (
+          <ul className="members__queue" aria-label="Deliveries">
+            {[...running, ...queued].map((delivery) => <li key={delivery.id}><span>@{handleOf(delivery.memberId)}</span><span>{delivery.status === 'queued' ? 'Queued' : 'Running'}{delivery.hop ? ` · hop ${delivery.hop}` : ''}</span></li>)}
+          </ul>
+        ) : <p className="field__hint">No queued deliveries.</p>}
+      </div>
+      <div className="members__foot">
+        <Button size="sm" variant="ghost" disabled={!online} why="Reconnect to the server first." onClick={dialog(() => useRelay.getState().openDialog({ kind: 'group-mode', groupId: group.id }))}>Group settings…</Button>
+      </div>
+    </Popover>
+  );
+}

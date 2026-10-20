@@ -8,9 +8,10 @@ import { copyText } from '../lib/clipboard';
 import { SelectMenu } from './SelectMenu';
 import { SettingRow } from './SettingRow';
 import { BrowserSettings } from './browser/BrowserSettings';
+import { AgentsSettings } from './AgentsSettings';
 
 const CATEGORIES: { id: SettingsSection; name: string }[] = [
-  { id: 'general', name: 'General' }, { id: 'project', name: 'Project' }, { id: 'providers', name: 'Providers' }, { id: 'browser', name: 'Browser' }, { id: 'appearance', name: 'Appearance' },
+  { id: 'general', name: 'General' }, { id: 'project', name: 'Project' }, { id: 'agents', name: 'Agents' }, { id: 'providers', name: 'Providers' }, { id: 'browser', name: 'Browser' }, { id: 'appearance', name: 'Appearance' },
 ];
 const effortName = (id: string, label: string) => ({ low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra High', 'extra-high': 'Extra High', max: 'Max', ultra: 'Ultra' } as Record<string, string>)[id.toLowerCase()] ?? label;
 
@@ -109,6 +110,7 @@ export function SettingsPage() {
           <SelectMenu id="st-policy" label="Default approval policy" value={settings.defaultPolicy} disabled={disabled || policies.length === 0} options={policies.map((value) => ({ value, label: value === 'balanced' ? 'Auto-accept edits' : value === 'full-access' ? 'Full access' : value[0]!.toUpperCase() + value.slice(1), description: value === 'supervised' ? 'Ask before taking actions that change files or run commands.' : value === 'balanced' ? 'Allow file edits while keeping command approvals.' : value === 'auto' ? 'Allow common actions automatically with safety checks.' : 'Allow all actions without approval prompts.' }))} onChange={(value) => void update({ defaultPolicy: value as AppSettings['defaultPolicy'] }, 'policy')} />
         </SettingRow>
       </div> : null}
+      {category === 'agents' ? <AgentsSettings settings={settings} providers={boot.providers} disabled={disabled} update={update} /> : null}
       {category === 'browser' ? <BrowserSettings settings={settings} disabled={disabled} update={update} /> : null}
       {category === 'project' && project ? <ProjectSettings key={`${project.id}:${project.name}`} project={project} /> : null}
       {category === 'providers' ? <div className="settings-page__section">

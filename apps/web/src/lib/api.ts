@@ -1,6 +1,6 @@
 import type {
-  Approval, AppSettings, Bootstrap, BrowserAction, BrowserConnect, BrowserDiscovery, BrowserSessionState, BrowserTab, DirectoryListing, ExternalConversationDetails, ExternalConversationList, FileEntry, GitHubState, GitStatus, ImportConversationResult, Project, ProjectContext, ProviderCatalog, ProviderInfo,
-  RepositoryBranch, RepositoryCommit, RepositoryMutationResult, RepositoryPullRequest, RepositoryPush, RepositoryState, RunChanges, Session, SessionUsage, ToolCall, Task, TaskStatus, WorkspaceEvent,
+  AddGroupAgent, Approval, AppSettings, Bootstrap, BrowserAction, BrowserConnect, BrowserDiscovery, BrowserSessionState, BrowserTab, CreateGroup, DirectoryListing, ExternalConversationDetails, ExternalConversationList, FileEntry, GitHubState, GitStatus, GroupMode, GroupSnapshot, ImportConversationResult, Project, ProjectContext, ProviderCatalog, ProviderInfo,
+  RepositoryBranch, RepositoryCommit, RepositoryMutationResult, RepositoryPullRequest, RepositoryPush, RepositoryState, RunChanges, SendGroupMessage, Session, SessionUsage, ToolCall, Task, TaskStatus, WorkspaceEvent,
 } from '@relay/contracts';
 export type { ProviderCatalog } from '@relay/contracts';
 
@@ -66,6 +66,8 @@ export interface NewSessionInput {
   effort?: Session['effort']; policy?: Session['policy']; serviceTier?: string; isolated?: boolean;
 }
 export type SessionPatch = Partial<Pick<Session, 'name' | 'provider' | 'model' | 'effort' | 'policy' | 'serviceTier' | 'pinned' | 'unread'>>;
+/** Matches UpdateGroupSchema; the web package does not depend on zod directly. */
+export interface GroupPatch { mode?: GroupMode; orchestratorMemberId?: string; maxParallel?: number; maxTurns?: number; maxHops?: number }
 export interface NewTaskInput {
   projectId: string; title: string; description: string; acceptanceCriteria: string; sessionId: string | null; dependsOn: string[];
 }
@@ -99,6 +101,7 @@ const projectBase = (projectId: string): string => `/api/projects/${encodeURICom
 /** Mutation bodies never carry a session id the caller left unset; the server resolves the project folder instead. */
 const withSession = <T extends object>(body: T, sessionId: string | null): T & { sessionId?: string } => (sessionId ? { ...body, sessionId } : body);
 
+const groupBase = (groupId: string): string => `/api/groups/${encodeURIComponent(groupId)}`;
 const browserBase = (sessionId: string): string => `/api/sessions/${encodeURIComponent(sessionId)}/browser`;
 
 export const api = {
@@ -133,6 +136,17 @@ export const api = {
   refreshProjectContext: (projectId: string) => json<ProjectContext>(`${projectBase(projectId)}/context/refresh`, 'POST', {}),
   createSession: (input: NewSessionInput) => json<Session>('/api/sessions', 'POST', input),
   updateSession: (id: string, patch: SessionPatch) => json<Session>(`/api/sessions/${encodeURIComponent(id)}`, 'PATCH', patch),
+  createGroup: (input: CreateGroup) => json<GroupSnapshot>('/api/groups', 'POST', input),
+  group: (id: string, signal?: AbortSignal) => json<GroupSnapshot>(groupBase(id), 'GET', undefined, signal),
+  updateGroup: (id: string, patch: GroupPatch) => json<GroupSnapshot>(groupBase(id), 'PATCH', patch),
+  addGroupAgent: (id: string, input: AddGroupAgent) => json<GroupSnapshot>(`${groupBase(id)}/agents`, 'POST', input),
+  removeGroupMember: (id: string, memberId: string) => json<GroupSnapshot>(`${groupBase(id)}/members/${encodeURIComponent(memberId)}`, 'DELETE'),
+  sendGroupMessage: (id: string, input: SendGroupMessage) => json<GroupSnapshot>(`${groupBase(id)}/messages`, 'POST', input),
+  stopGroup: (id: string) => json<GroupSnapshot>(`${groupBase(id)}/stop`, 'POST', {}),
+  resumeGroupMember: (id: string, memberId: string) => json<GroupSnapshot>(`${groupBase(id)}/members/${encodeURIComponent(memberId)}/resume`, 'POST', {}),
+  pauseGroup: (id: string) => json<GroupSnapshot>(`${groupBase(id)}/pause`, 'POST', {}),
+  resumeGroup: (id: string) => json<GroupSnapshot>(`${groupBase(id)}/resume`, 'POST', {}),
+  interruptGroupMember: (id: string, memberId: string) => json<GroupSnapshot>(`${groupBase(id)}/members/${encodeURIComponent(memberId)}/interrupt`, 'POST', {}),
   runTools: (id: string) => json<ToolCall[]>(`/api/runs/${encodeURIComponent(id)}/tools`),
   runChanges: (id: string, signal?: AbortSignal) => json<RunChanges>(`/api/runs/${encodeURIComponent(id)}/changes`, 'GET', undefined, signal),
   toolCall: (id: string) => json<ToolCall>(`/api/tool-calls/${encodeURIComponent(id)}`),
