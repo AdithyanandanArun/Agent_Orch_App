@@ -25,6 +25,15 @@ const NO_RUNS: SessionRun[] = [];
 const NO_CALLS: ToolCall[] = [];
 const NO_TASKS: Task[] = [];
 
+/** Start a long final report at its outcome, rather than hiding it above the viewport. */
+function latestPosition(scroller: HTMLDivElement): number {
+  const result = scroller.querySelector<HTMLElement>('.group-result');
+  if (result?.querySelector('.group-result__agents') && result.offsetHeight > scroller.clientHeight - 24) {
+    return Math.max(0, scroller.scrollTop + result.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 12);
+  }
+  return Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+}
+
 function DeliveryChips({ deliveries, snapshot, sessions }: { deliveries: GroupDelivery[]; snapshot: GroupSnapshot; sessions: readonly Session[] }) {
   if (!deliveries.length) return null;
   const members = new Map(snapshot.members.map((member) => [member.id, member]));
@@ -160,7 +169,7 @@ export function GroupConversation({ snapshot }: { snapshot: GroupSnapshot }) {
   useEffect(() => { stick.current = true; setAway(false); }, [snapshot.group.id]);
   useLayoutEffect(() => {
     const el = scroller.current;
-    if (el && stick.current) el.scrollTop = el.scrollHeight;
+    if (el && stick.current) el.scrollTop = latestPosition(el);
   }, [sig]);
 
   if (!project || !anchor) {
@@ -236,7 +245,7 @@ export function GroupConversation({ snapshot }: { snapshot: GroupSnapshot }) {
         className="chat__scroll" ref={scroller} role="log" aria-live="polite" aria-label={`Group conversation: ${snapshot.group.title || anchor.name}`}
         onScroll={(event) => {
           const el = event.currentTarget;
-          const near = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+          const near = el.scrollHeight - el.scrollTop - el.clientHeight < 80 || Math.abs(el.scrollTop - latestPosition(el)) < 40;
           stick.current = near;
           setAway(!near);
         }}
@@ -275,7 +284,7 @@ export function GroupConversation({ snapshot }: { snapshot: GroupSnapshot }) {
         </div>
       </div>
       {away ? (
-        <button type="button" className="jump" onClick={() => { const el = scroller.current; if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' }); }}>
+        <button type="button" className="jump" onClick={() => { const el = scroller.current; if (el) el.scrollTo({ top: latestPosition(el), behavior: 'smooth' }); }}>
           <ArrowDown size={13} /> Latest
         </button>
       ) : null}
