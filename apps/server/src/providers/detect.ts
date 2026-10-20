@@ -11,6 +11,7 @@ import { TextTail, cleanEnv, errorMessage, isRecord, redactSecrets, truncate } f
 import { bundledClaudeCandidates, resolveExecutable, type ResolvedExecutable } from './discovery.js';
 import { runProbe, shutdownChild, settlesWithin, type ChildLike, type ProbeFn } from './process.js';
 import { detectOpencode } from './opencode/detect.js';
+import { acpPromptCapabilities } from './attachments.js';
 import { antigravityInfo, ANTIGRAVITY_DEFAULT, cachedAntigravityMetadata, isAntigravityAuthenticated, closeAntigravity, resolveAntigravity, startAntigravity } from './antigravity/runtime.js';
 
 export const CODEX_DEFAULT_MODEL = 'gpt-6.1-sol';
@@ -47,7 +48,7 @@ export async function detectAntigravity(settings: AppSettings, deps: DetectDeps 
       ? ANTIGRAVITY_AUTH_CHECKED
       : ANTIGRAVITY_AUTH_UNVERIFIED;
     const note = `${isRecord(mcp) && mcp.http === true ? '' : 'ACP did not advertise HTTP MCP; browser/team connections are unavailable. '}${authNote}`;
-    return antigravityInfo(found.executable.path, runtime.version, cached?.models ?? [ANTIGRAVITY_DEFAULT], true, note);
+    return { ...antigravityInfo(found.executable.path, runtime.version, cached?.models ?? [ANTIGRAVITY_DEFAULT], true, note), promptCapabilities: acpPromptCapabilities(runtime.capabilities) };
   } catch (error) {
     return antigravityInfo(found.executable.path, null, [ANTIGRAVITY_DEFAULT], false, `Antigravity ACP could not initialize: ${truncate(redactSecrets(errorMessage(error)), 350)}`);
   } finally {
@@ -67,6 +68,8 @@ export async function detectClaude(settings: AppSettings, deps: DetectDeps = {})
   const env = deps.env ?? process.env;
   const baselinePolicies = CLAUDE_POLICIES.filter((policy) => policy !== 'auto');
   const base: ProviderInfo = { id: 'claude', name: 'Claude', available: false, version: null, executable: null, reason: null,
+    // These describe the official SDK input transport. Model-specific input modalities are not reported by ModelInfo.
+    promptCapabilities: { image: true, embeddedContext: true },
     models: CLAUDE_MODELS.map((model) => ({ ...model, policies: baselinePolicies })), policies: baselinePolicies };
   const withModels = async (info: ProviderInfo): Promise<ProviderInfo> => {
     // Injected probes own their entire environment; never escape them by launching a real SDK process.

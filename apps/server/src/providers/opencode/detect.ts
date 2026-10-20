@@ -3,6 +3,7 @@ import { ProviderError, errorMessage } from '../common.js';
 import type { ProbeFn } from '../process.js';
 import { OPENCODE_DEFAULT_MODEL, OPENCODE_POLICIES, defaultModelEntry, parseNativeCommands, providerIds, readModels, object, type OpencodeMetadata } from './metadata.js';
 import { resolveOpencode, safeOpencodeError, withProbeSession, type OpencodeSpawn } from './runtime.js';
+import { acpPromptCapabilities } from '../attachments.js';
 
 export interface OpencodeDetectDeps { env?: NodeJS.ProcessEnv; home?: string; probe?: ProbeFn; spawn?: OpencodeSpawn }
 
@@ -32,11 +33,11 @@ export async function detectOpencode(settings: AppSettings, deps: OpencodeDetect
         version: session.runtime.version || version, ...models, commands, providers: providerIds(models.models),
         http: mcp.http === true,
       };
-      return result;
+      return { ...result, promptCapabilities: acpPromptCapabilities(session.runtime.capabilities) };
     });
     const count = metadata.models.filter((model) => model.id !== OPENCODE_DEFAULT_MODEL).length;
     if (count === 0) {
-      return info({ ...base, version: metadata.version || version, reason: `OpenCode ${metadata.version || version} started but reported no models. Run \`"${path}" providers login\` in a terminal, or configure a provider in OpenCode, then Re-check.` });
+      return info({ ...base, version: metadata.version || version, promptCapabilities: metadata.promptCapabilities, reason: `OpenCode ${metadata.version || version} started but reported no models. Run \`"${path}" providers login\` in a terminal, or configure a provider in OpenCode, then Re-check.` });
     }
     const notes = [
       `OpenCode ${metadata.version || version} reported ${count} model${count === 1 ? '' : 's'} from ${metadata.providers.join(', ') || 'its configured providers'}.`,
@@ -45,7 +46,7 @@ export async function detectOpencode(settings: AppSettings, deps: OpencodeDetect
       metadata.unmeasured ? `${metadata.unmeasured} model${metadata.unmeasured === 1 ? '' : 's'} could not be inspected for reasoning variants within the probe budget; those show Native default only.` : null,
       metadata.failures ? `${metadata.failures} model${metadata.failures === 1 ? '' : 's'} did not confirm selection during inspection and show Native default only.` : null,
     ].filter(Boolean).join(' ');
-    return info({ ...base, version: metadata.version || version, available: true, models: metadata.models, reason: notes });
+    return info({ ...base, version: metadata.version || version, available: true, models: metadata.models, promptCapabilities: metadata.promptCapabilities, reason: notes });
   } catch (error) {
     const detail = error instanceof ProviderError ? error.message : errorMessage(error);
     return info({ ...base, reason: `OpenCode ${version} is installed at ${path}, but \`opencode acp\` could not report metadata: ${safeOpencodeError(detail, [], 450)}` });

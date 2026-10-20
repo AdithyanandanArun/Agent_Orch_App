@@ -227,6 +227,9 @@ class CodexRun {
     const common = { model: session.model, cwd: session.worktreePath, approvalPolicy: policy.approvalPolicy, approvalsReviewer: policy.approvalsReviewer, sandbox: policy.sandbox, serviceTier };
     const catalog = parseCodexModels(await this.conn.request('model/list', { limit: 200, includeHidden: false }, this.ctx.timeouts.threadMs));
     const model = catalog.find((candidate) => candidate.id === session.model);
+    if (imagesOf(this.options.attachments).length && model?.inputModalities && !model.inputModalities.includes('image')) {
+      throw new ProviderError('The selected Codex model does not advertise image input. Choose an image-capable model or remove the image; no prompt was sent.', { code: 'unsupported_attachment' });
+    }
     this.omitEffort = model?.reasoningEfforts?.length === 0;
     const effortError = validateCodexEffort(model, session.effort);
     if (effortError) throw new ProviderError(effortError, { code: 'unsupported_effort' });

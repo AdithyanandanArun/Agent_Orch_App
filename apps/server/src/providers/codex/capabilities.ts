@@ -37,6 +37,7 @@ export function parseCodexModel(value: unknown): ProviderModel | null {
     ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
     ...(tiers.length ? { serviceTiers: tiers } : {}),
     ...(defaultServiceTier ? { defaultServiceTier } : {}),
+    ...(Array.isArray(value.inputModalities) ? { inputModalities: [...new Set(value.inputModalities.filter((item): item is string => typeof item === 'string' && /^[a-z][a-z0-9_-]{0,39}$/.test(item)))].slice(0, 20) } : {}),
   };
 }
 
