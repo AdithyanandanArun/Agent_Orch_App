@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import path from 'node:path';
 import type { AppSettings, ProviderCatalog, ProviderSkill, Session } from '@relay/contracts';
 import { cleanEnv, isRecord, redactSecrets, truncate } from '../common.js';
 import { resolveExecutableCached } from '../discovery.js';
@@ -24,7 +25,7 @@ function parseCodexSkills(value: unknown): ProviderSkill[] {
   for (const entry of value.data.slice(0, 20)) {
     if (!isRecord(entry) || !Array.isArray(entry.skills)) continue;
     for (const skill of entry.skills.slice(0, 500)) {
-      if (!isRecord(skill) || typeof skill.path !== 'string' || !skill.path.startsWith('/') || skill.path.length > 4096) continue;
+      if (!isRecord(skill) || typeof skill.path !== 'string' || !path.isAbsolute(skill.path) || skill.path.length > 4096) continue;
       if (typeof skill.name !== 'string' || !skill.name.trim()) continue;
       const scope = skill.scope;
       const source: ProviderSkill['source'] = scope === 'repo' ? 'project' : scope === 'user' ? 'user' : 'provider';
