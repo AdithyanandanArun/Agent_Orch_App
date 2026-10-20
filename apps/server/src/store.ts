@@ -2,6 +2,7 @@ import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import type { TaskSource, ProjectContext, AppSettings, Approval, Message, Policy, Project, Provider, RunChanges, RunChangesSummary, Session, SessionStatus, SessionRun, ToolCall, ToolCategory, RunStatus, Task, TaskStatus, WorkspaceEvent } from '@relay/contracts';
 import { SCHEMA_VERSION } from './db.ts';
 import { newId, nowIso } from './util.ts';
+import { AttachmentRepo } from './attachments/repo.ts';
 
 type Row = Record<string, unknown>;
 const RUN_FIELDS = 'id, session_id, user_message_id, provider, model, status, started_at, finished_at, duration_ms, changes_summary';
@@ -257,7 +258,15 @@ export class Store {
   }
   getMessage(id: string): Message | undefined {
     const row = this.get('SELECT * FROM messages WHERE id = ?', id);
-    return row ? mapMessage(row) : undefined;
+    return row ? this.withAttachments([mapMessage(row)])[0] : undefined;
+  }
+  /** Adds attachment metadata (never bytes or paths) to human messages that have linked files. */
+  private withAttachments(messages: Message[]): Message[] {
+    const ids = messages.filter((message) => message.role === 'user').map((message) => message.id);
+    if (!ids.length) return messages;
+    const refs = new AttachmentRepo(this.db).refsForOwners('message', ids);
+    if (!refs.size) return messages;
+    return messages.map((message) => refs.has(message.id) ? { ...message, attachments: refs.get(message.id)! } : message);
   }
   updateMessage(id: string, patch: { content?: string; kind?: string | null }): void {
     if (patch.content !== undefined) this.run('UPDATE messages SET content = ? WHERE id = ?', patch.content, id);
@@ -269,7 +278,7 @@ export class Store {
     const rows = before !== undefined
       ? this.all('SELECT * FROM messages WHERE session_id = ? AND seq < ? ORDER BY seq DESC LIMIT ?', sessionId, before, limit)
       : this.all('SELECT * FROM messages WHERE session_id = ? ORDER BY seq DESC LIMIT ?', sessionId, limit);
-    return rows.reverse().map(mapMessage);
+    return this.withAttachments(rows.reverse().map(mapMessage));
   }
   /** Most recent `perSession` messages of every active session, oldest first within each session. */
   bootstrapMessages(perSession: number): Message[] {
@@ -278,7 +287,7 @@ export class Store {
        WHERE m.seq IN (SELECT seq FROM messages m2 WHERE m2.session_id = m.session_id ORDER BY seq DESC LIMIT ?) ORDER BY m.seq ASC`,
       perSession,
     );
-    return rows.map(mapMessage);
+    return this.withAttachments(rows.map(mapMessage));
   }
   unconsumedHandoffs(sessionId: string): Array<Message & { seq: number }> {
     return this.all("SELECT * FROM messages WHERE session_id = ? AND kind = 'handoff' AND consumed_at IS NULL ORDER BY seq ASC", sessionId).map((r) => ({ ...mapMessage(r), seq: r.seq as number }));

@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { ProviderSchema, PolicySchema, EffortSchema, ServiceTierSchema } from './provider-config';
+import { AttachmentIdsSchema, NativeInvocationInputSchema } from './attachments';
+import type { AttachmentRef, GroupInvocation } from './attachments';
 
 export const GroupModeSchema = z.enum(['cowork', 'orchestrated', 'current-leads']);
 export type GroupMode = z.infer<typeof GroupModeSchema>;
@@ -32,9 +34,12 @@ export const UpdateGroupSchema = z.object({
   maxHops: z.number().int().min(1).max(12).optional(),
 }).strict().refine((patch) => Object.keys(patch).length > 0, 'Supply a group setting to update');
 export const SendGroupMessageSchema = z.object({
-  content: z.string().trim().min(1).max(100_000), recipients: z.array(z.string().min(1).max(100)).min(1).max(8).optional(),
+  content: z.string().trim().max(100_000).default(''), recipients: z.array(z.string().min(1).max(100)).min(1).max(8).optional(),
   clientMessageId: z.string().min(1).max(100).optional(),
-}).strict();
+  attachmentIds: AttachmentIdsSchema.optional(),
+  /** An explicit provider-native command or skill for exactly one member; revalidated against a fresh catalog at dispatch. */
+  invocation: NativeInvocationInputSchema.optional(),
+}).strict().refine((body) => body.content.length > 0 || (body.attachmentIds?.length ?? 0) > 0, { message: 'Write a message or attach a file', path: ['content'] });
 export type SendGroupMessage = z.infer<typeof SendGroupMessageSchema>;
 export interface ConversationGroup {
   id: string; projectId: string; title: string; anchorSessionId: string; mode: GroupMode;
@@ -50,6 +55,10 @@ export interface GroupMessage {
   kind: 'user' | 'agent' | 'assignment' | 'status' | 'artifact'; content: string;
   requestId: string | null; replyToId: string | null; sourceMessageId: string | null;
   sourceRunId: string | null; createdAt: string;
+  /** Files the human attached to this message; metadata only. */
+  attachments?: AttachmentRef[];
+  /** The validated native command or skill this message addresses to one member. */
+  invocation?: Pick<GroupInvocation, 'kind' | 'name' | 'arguments' | 'memberId'>;
 }
 export interface GroupRequest {
   id: string; groupId: string; messageId: string; plannerMemberId: string;

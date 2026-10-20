@@ -31,6 +31,8 @@ import { GroupService } from './groups/service.ts';
 import { TeamMcpBridge } from './team-mcp.ts';
 import { closeAntigravityInstall } from './antigravity-install.ts';
 import { closeAntigravityAuth } from './antigravity-auth.ts';
+import { AttachmentService } from './attachments/service.ts';
+import { handleAttachmentRequest } from './attachments/router.ts';
 
 export interface ApplicationOptions extends ConfigOptions {
   /** Provider adapters and detection. Inject a fake in tests; the CLI entry passes ./providers/index.ts. */
@@ -57,6 +59,7 @@ export interface RelayApplication {
   readonly browser: BrowserService;
   readonly intelligence: ProjectIntelligenceService;
   readonly repository: RepositoryService;
+  readonly attachments: AttachmentService;
   /** Runs recovery-independent async setup (example workspace). Called by listen(); safe to call repeatedly. */
   initialize(): Promise<void>;
   listen(): Promise<{ host: string; port: number; url: string }>;
@@ -126,12 +129,14 @@ export function createApplication(options: ApplicationOptions): RelayApplication
   const workspace = new WorkspaceService(store, config.dataDir, runtime, () => providers.cached());
   const repository = new RepositoryService({ store, workspace, runtime, log });
   const handoffs = new HandoffService(store);
-  const groups = new GroupService({ store, workspace, tasks, handoffs, runtime, log, providers: () => providers.cached() ?? [] });
+  const attachments = new AttachmentService(store, config.dataDir, log);
+  runtime.setAttachments(attachments);
+  const groups = new GroupService({ store, workspace, tasks, handoffs, runtime, log, attachments, providers: () => providers.cached() ?? [], catalog: (session, refresh) => providers.catalog(session, refresh) });
   const teamMcp = new TeamMcpBridge(groups, store, () => boundPort, () => config.host);
   runtime.setGroupServices(groups, teamMcp);
   groups.recover();
   const services: Services = {
-    config, store, hub, runtime, tasks, terminals, providers, browser, intelligence, repository, groups, handoffs, workspace, setupSignal: setupLifecycle.signal,
+    config, store, hub, runtime, tasks, terminals, providers, browser, intelligence, repository, groups, handoffs, workspace, attachments, setupSignal: setupLifecycle.signal,
     imports: new ImportService(store, options.providers, providers, runtime), directories: new DirectoryService(), projectSources: new ProjectSources(workspace), startedAt: Date.now(), getPort: () => boundPort,
   };
   hub.bind({ onMessage: (socket, raw) => terminals.handleMessage(socket, raw), onClose: (socket) => terminals.releaseSocket(socket) });
@@ -165,6 +170,7 @@ export function createApplication(options: ApplicationOptions): RelayApplication
       if (url.pathname === '/api/team/mcp') return await teamMcp.handle(req, res);
       if (url.pathname === '/api/browser/mcp') return await browserMcp.handle(req, res);
       if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
+        if (await handleAttachmentRequest(attachments, req, res, url)) return;
         const reply = await dispatch(req, res, url);
         return send(res, reply.status, reply.body);
       }
@@ -201,11 +207,12 @@ export function createApplication(options: ApplicationOptions): RelayApplication
   const address = () => ({ host: config.host, port: boundPort, url: `http://${config.host.includes(':') ? `[${config.host}]` : config.host}:${boundPort}` });
 
   const app: RelayApplication = {
-    config, store, server, runtime, groups, terminals, hub, providers, browser, intelligence, repository,
+    config, store, server, runtime, groups, terminals, hub, providers, browser, intelligence, repository, attachments,
     initialize() {
       initialized ??= (async () => {
         if (options.exampleWorkspace !== false) await seedExampleWorkspace(store, config.dataDir, log);
         intelligence.start();
+        attachments.start();
       })();
       return initialized;
     },
@@ -231,6 +238,7 @@ export function createApplication(options: ApplicationOptions): RelayApplication
         await Promise.all([closeAntigravityInstall(config.dataDir), closeAntigravityAuth(config.dataDir)]);
         groups.close();
         await runtime.shutdown();
+        await attachments.close();
         await options.providers.close?.().catch((error) => log('warn', 'Provider helper cleanup failed', error));
         teamMcp.close();
         await intelligence.close();

@@ -1,4 +1,7 @@
 import { createHash } from 'node:crypto';
+import {
+  nativeActionCommands, nativeActionSkills,
+} from '@relay/contracts';
 import type {
   AddGroupAgent, AgentConfiguration, ConversationGroup, CreateGroup, GroupAssignment, GroupDelivery, GroupMember, GroupMessage, GroupMode,
   GroupRunContext, GroupSnapshot, ProviderInfo, Session, Task, TeamArtifactSchema, TeamAssignSchema, TeamMessageSchema, TeamStatusSchema, UpdateGroupSchema,
@@ -11,6 +14,8 @@ import type { Store } from '../store.ts';
 import type { TaskService } from '../tasks.ts';
 import { HttpError, conflict, errorMessage, notFound, nowIso, redactSecrets, truncate, unprocessable } from '../util.ts';
 import type { WorkspaceService } from '../workspace.ts';
+import type { AttachmentService } from '../attachments/service.ts';
+import type { GroupInvocation, NativeInvocationInput, ProviderCatalog } from '@relay/contracts';
 import {
   GroupRepo, OPEN_DELIVERY, UNSETTLED_DELIVERY, artifactId, assignmentId, deliveryId, groupId as newGroupId, memberId as newMemberId, requestId as newRequestId,
   type ArtifactRow, type AssignmentRow, type DeliveryRow, type MemberRow,
@@ -25,12 +30,15 @@ export type GroupLog = (level: 'info' | 'warn' | 'error', message: string, detai
 export interface GroupRuntime {
   isActive(sessionId: string): boolean;
   isRunLive?(sessionId: string, runId: string): boolean;
-  start(sessionId: string, content: string, options?: { taskId?: string; groupDeliveryId?: string; userMessage?: { content: string; kind?: string } }): string;
+  start(sessionId: string, content: string, options?: { taskId?: string; groupDeliveryId?: string; userMessage?: { content: string; kind?: string }; attachmentOwnerKind?: 'message' | 'group_message'; attachmentOwnerId?: string; invocation?: import('@relay/contracts').NativeInvocation }): string;
   interrupt(sessionId: string): boolean;
 }
+export type GroupCatalog = (session: Session, refresh?: boolean) => Promise<ProviderCatalog>;
 export interface GroupServiceOptions {
   store: Store; workspace: WorkspaceService; tasks: TaskService; handoffs: HandoffService; runtime: GroupRuntime; log: GroupLog;
   providers?: () => ProviderInfo[];
+  attachments?: AttachmentService;
+  catalog?: GroupCatalog;
 }
 
 type Outcome = 'completed' | 'failed' | 'interrupted';
@@ -60,6 +68,8 @@ export class GroupService {
   private readonly runtime: GroupRuntime;
   private readonly log: GroupLog;
   private readonly providers?: () => ProviderInfo[];
+  private readonly attachments?: AttachmentService;
+  private readonly catalog?: GroupCatalog;
   private closed = false;
   private lock: Promise<unknown> = Promise.resolve();
   private readonly pending = new Set<string>();
@@ -77,6 +87,8 @@ export class GroupService {
     this.runtime = options.runtime;
     this.log = options.log;
     this.providers = options.providers;
+    this.attachments = options.attachments;
+    this.catalog = options.catalog;
     this.unsubscribe = this.store.subscribe((event) => {
       if (event?.type.startsWith('task.')) {
         for (const group of this.repo.listGroups()) if (group.projectId === event.projectId) this.schedule(group.id);
@@ -222,8 +234,8 @@ export class GroupService {
 
   update(groupId: string, patch: Update): GroupSnapshot {
     this.assertOpen();
-    const group = this.requireGroup(groupId);
-    const members = this.repo.members(group.id, false);
+    let group = this.requireGroup(groupId);
+    let members = this.repo.members(group.id, false);
     const structural = patch.mode !== undefined || patch.orchestratorMemberId !== undefined;
     const limits = (['maxParallel', 'maxTurns', 'maxHops'] as const).filter((key) => patch[key] !== undefined && patch[key] !== group[key]);
     const running = this.repo.deliveries(group.id, ['running']);
@@ -280,7 +292,7 @@ export class GroupService {
 
   removeMember(groupId: string, memberIdArg: string): GroupSnapshot {
     this.assertOpen();
-    const group = this.requireGroup(groupId);
+    let group = this.requireGroup(groupId);
     const member = this.requireMember(group, memberIdArg);
     const active = this.repo.members(group.id, false);
     if (member.sessionId === group.anchorSessionId) throw conflict('The original conversation is the group entry. Remove other agents instead.');
@@ -304,16 +316,59 @@ export class GroupService {
 
   // ---------------------------------------------------------------- user messages
 
-  send(groupId: string, input: { content: string; recipients?: string[]; clientMessageId?: string }): GroupSnapshot {
+  async send(groupId: string, input: { content: string; recipients?: string[]; clientMessageId?: string; attachmentIds?: string[]; invocation?: NativeInvocationInput }): Promise<GroupSnapshot> {
     this.assertOpen();
-    const group = this.requireGroup(groupId);
+    let group = this.requireGroup(groupId);
     if (input.clientMessageId && this.repo.messageByClientId(group.id, input.clientMessageId)) return this.snapshot(group);
-    const members = this.repo.members(group.id, false);
+    let members = this.repo.members(group.id, false);
     const content = clean(input.content, 100_000);
-    const route = this.route(group, members, input.recipients, content);
+    let invocation: GroupInvocation | undefined;
+    let requested = input.recipients;
+    let sendContent = content;
+    if (input.invocation) {
+      const member = members.find((m) => m.id === input.invocation!.recipient || m.handle === input.invocation!.recipient.replace(/^@/, '').toLowerCase());
+      if (!member) throw unprocessable('Choose one active group agent for this provider action.');
+      if (requested?.length && (requested.length !== 1 || requested[0] !== member.id)) throw unprocessable('A provider command or skill must address exactly one agent.');
+      const session = this.store.getSession(member.sessionId);
+      if (!session) throw conflict(`@${member.handle} is unavailable.`);
+      if (!this.catalog) throw conflict('Provider command discovery is unavailable. Refresh and try again.');
+      const catalog = await this.catalog(session, true);
+      const table = input.invocation.kind === 'command' ? nativeActionCommands(session.provider, catalog.commands) : nativeActionSkills(session.provider, catalog.skills);
+      const selected = table.find((item) => item.id === input.invocation!.id && item.name === input.invocation!.name && ('enabled' in item ? item.enabled : true));
+      if (!selected) throw unprocessable('That provider action changed or is no longer available. Refresh the menu and select it again.');
+      const freshGroup = this.requireGroup(groupId);
+      const freshMembers = this.repo.members(groupId, false);
+      const freshMember = freshMembers.find((row) => row.id === member.id);
+      const freshSession = freshMember ? this.store.getSession(freshMember.sessionId) : undefined;
+      if (!freshMember || !freshSession || freshGroup.projectId !== group.projectId || freshMember.sessionId !== session.id || freshSession.provider !== session.provider || freshSession.model !== session.model) {
+        throw conflict('The selected group agent or its settings changed while loading actions. Refresh and select the action again.');
+      }
+      group = freshGroup; members = freshMembers;
+      if (input.clientMessageId && this.repo.messageByClientId(group.id, input.clientMessageId)) return this.snapshot(group);
+      invocation = { kind: input.invocation.kind, id: selected.id, name: selected.name, arguments: input.invocation.arguments, memberId: member.id, sessionId: session.id, provider: session.provider, model: session.model };
+      requested = [member.id];
+      if (input.attachmentIds?.length && session.provider === 'opencode') throw unprocessable('OpenCode native slash commands cannot carry attachments. Remove the attachments or send a regular message.');
+    }
+    if (input.attachmentIds?.length && !this.attachments) throw conflict('Attachments are unavailable in this Relay session.');
+    const attachmentRows = this.attachments?.validate({ kind: 'group', id: groupId }, input.attachmentIds ?? []) ?? [];
+    const route = invocation
+      ? { recipients: [members.find((m) => m.id === invocation!.memberId)!], runners: [members.find((m) => m.id === invocation!.memberId)!], planner: members.find((m) => m.id === invocation!.memberId)! }
+      : this.route(group, members, requested, sendContent);
+    if (attachmentRows.some((row) => row.kind === 'image')) {
+      for (const member of route.recipients) {
+        const recipient = this.store.getSession(member.sessionId);
+        if (!recipient) throw conflict(`@${member.handle} is unavailable.`);
+        const info = this.providers?.().find((row) => row.id === recipient.provider);
+        const model = info?.models.find((candidate) => candidate.id === recipient.model || candidate.aliases?.includes(recipient.model));
+        const supports = model?.inputModalities ? model.inputModalities.includes('image') : info?.promptCapabilities?.image === true;
+        if (!supports) throw unprocessable(`${recipient.provider} has not reported image input for @${member.handle}, so no message was queued.`);
+        if (recipient.provider === 'claude' && attachmentRows.some((row) => row.kind === 'image' && row.size > 5 * 1024 * 1024)) throw unprocessable('Claude image attachments are limited to 5 MiB each. Remove the large image or resize it before sending.');
+      }
+    }
     for (const member of route.recipients) if (!this.store.getSession(member.sessionId)) throw conflict(`@${member.handle} is archived. Remove it from the group first.`);
     this.store.tx(() => {
-      const message = this.repo.insertMessage({ groupId: group.id, senderMemberId: null, recipients: route.recipients.map((m) => m.id), kind: 'user', content, clientMessageId: input.clientMessageId ?? null });
+      const message = this.repo.insertMessage({ groupId: group.id, senderMemberId: null, recipients: route.recipients.map((m) => m.id), kind: 'user', content: sendContent, clientMessageId: input.clientMessageId ?? null, invocation });
+      if (input.attachmentIds?.length) this.attachments?.claim({ kind: 'group', id: groupId }, input.attachmentIds, 'group_message', message.id);
       const requestId = newRequestId();
       this.repo.insertRequest({ id: requestId, groupId: group.id, messageId: message.id, plannerMemberId: route.planner.id });
       this.repo.updateMember(route.planner.id, {});
@@ -629,7 +684,7 @@ export class GroupService {
     });
   }
 
-  private pump(groupId: string): void {
+  private async pump(groupId: string): Promise<void> {
     try {
       const group = this.repo.getGroup(groupId);
       if (!group || group.paused) return;
@@ -664,7 +719,7 @@ export class GroupService {
           const verdict = this.readiness(group, member, d);
           if (verdict === 'defer') continue;
           if (verdict === 'cancel') continue;
-          if (this.startDelivery(group, member, session, d)) capacity--;
+          if (await this.startDelivery(group, member, session, d)) capacity--;
           break;
         }
         if (this.repo.getGroup(groupId)?.paused) return;
@@ -724,7 +779,7 @@ export class GroupService {
       && producerTask.sessionId !== null && this.repo.getMember(artifact!.fromMemberId)?.sessionId === producerTask.sessionId);
   }
 
-  private startDelivery(group: ConversationGroup, member: MemberRow, session: Session, d: DeliveryRow): boolean {
+  private async startDelivery(group: ConversationGroup, member: MemberRow, session: Session, d: DeliveryRow): Promise<boolean> {
     const request = this.repo.getRequest(d.requestId);
     if (!request) { this.cancel(d, 'The request no longer exists'); return false; }
     if (d.hop > group.maxHops) {
@@ -736,6 +791,41 @@ export class GroupService {
       return false;
     }
     const assignment = d.assignmentId ? this.repo.getAssignment(d.assignmentId) : undefined;
+    let nativeInvocation: import('@relay/contracts').NativeInvocation | undefined;
+    const sourceMessage = this.repo.getMessage(d.messageId);
+    if (sourceMessage?.invocation) {
+      const saved = sourceMessage.invocation as GroupInvocation;
+      if (saved.memberId !== member.id || saved.sessionId !== session.id || saved.provider !== session.provider || saved.model !== session.model) {
+        this.cancel(d, 'The selected agent or its settings changed while the native action was queued. Select it again.');
+        return false;
+      }
+      if (!this.catalog) { this.cancel(d, 'Provider command discovery is unavailable. Refresh the action catalog and retry.'); return false; }
+      const current = await this.catalog(session, true);
+      const items = saved.kind === 'command' ? nativeActionCommands(session.provider, current.commands) : nativeActionSkills(session.provider, current.skills);
+      const resolved = items.find((item) => item.id === saved.id && item.name === saved.name && ('enabled' in item ? item.enabled : true));
+      if (!resolved) { this.cancel(d, 'The provider action is no longer available. Refresh the catalog and select it again.'); return false; }
+      nativeInvocation = { kind: saved.kind, name: saved.name, arguments: saved.arguments, ...(saved.kind === 'skill' ? { skill: resolved as import('@relay/contracts').ProviderSkill } : {}) };
+      const latestGroup = this.repo.getGroup(group.id);
+      const latestMember = this.repo.members(group.id, false).find((row) => row.id === member.id);
+      const latestSession = latestMember ? this.store.getSession(latestMember.sessionId) : undefined;
+      const latestDelivery = this.repo.getDelivery(d.id);
+      const latestRequest = this.repo.getRequest(d.requestId);
+      if (!latestGroup || !latestMember || !latestSession) {
+        if (latestDelivery?.status === 'queued') this.cancel(d, 'The selected group agent is no longer available.');
+        return false;
+      }
+      if (latestMember.sessionId !== session.id || latestSession.provider !== saved.provider || latestSession.model !== saved.model) {
+        if (latestDelivery?.status === 'queued') this.cancel(d, 'The selected agent or its settings changed while the native action was queued. Select it again.');
+        return false;
+      }
+      if (latestDelivery?.status !== 'queued' || !latestRequest || latestRequest.status !== 'active') return false;
+      if (latestGroup.paused || latestMember.held || this.sessionBusy(latestSession)) return false;
+      if (latestRequest.turnsUsed >= latestGroup.maxTurns) { this.exhaustBudget(latestGroup, latestRequest.id); return false; }
+      if (d.hop > latestGroup.maxHops) {
+        this.holdBudget(latestGroup, latestRequest.id, `A queued delivery needs hop ${d.hop}, above the current ${latestGroup.maxHops} hop limit. Raise the hop limit and resume, or cancel the affected agent's pending work.`);
+        return false;
+      }
+    }
     const text = this.deliveryText(group, member, d, request.plannerMemberId);
     const reserved = this.store.tx(() => {
       if (!this.repo.transitionDelivery(d.id, 'queued', 'running', { runId: null, startedAt: nowIso(), attemptsDelta: 1 })) return false;
@@ -746,7 +836,7 @@ export class GroupService {
     this.reserved.set(session.id, d.id);
     let runId: string;
     try {
-      runId = this.runtime.start(session.id, text, { groupDeliveryId: d.id, taskId: assignment?.taskId ?? d.taskId ?? undefined, userMessage: { content: text, kind: 'group-delivery' } });
+      runId = this.runtime.start(session.id, text, { groupDeliveryId: d.id, taskId: assignment?.taskId ?? d.taskId ?? undefined, userMessage: { content: text, kind: 'group-delivery' }, attachmentOwnerKind: 'group_message', attachmentOwnerId: d.messageId, invocation: nativeInvocation });
     } catch (error) {
       this.reserved.delete(session.id);
       const message = clean(errorMessage(error), 500);
@@ -798,6 +888,11 @@ export class GroupService {
   private deliveryText(group: ConversationGroup, member: MemberRow, d: DeliveryRow, plannerId: string): string {
     const message = this.repo.getMessage(d.messageId);
     const content = message?.content ?? '';
+    if (message?.invocation) {
+      const action = message.invocation as GroupInvocation;
+      const prefix = action.kind === 'skill' && action.provider === 'codex' ? '$' : '/';
+      return `${prefix}${action.name}${action.arguments ? ` ${action.arguments}` : ''}`;
+    }
     let text: string;
     if (d.kind === 'request') {
       const requestDeliveries = this.repo.requestDeliveries(d.requestId).filter((row) => row.kind === 'request');

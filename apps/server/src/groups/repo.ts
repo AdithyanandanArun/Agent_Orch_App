@@ -1,7 +1,8 @@
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import type {
-  ConversationGroup, GroupAssignment, GroupDelivery, GroupMember, GroupMessage, GroupMode, GroupRequest,
+  ConversationGroup, GroupAssignment, GroupDelivery, GroupMember, GroupMessage, GroupMode, GroupRequest, GroupInvocation,
 } from '@relay/contracts';
+import { AttachmentRepo } from '../attachments/repo.ts';
 import { newId as baseId, nowIso } from '../util.ts';
 
 type Row = Record<string, unknown>;
@@ -47,6 +48,7 @@ const mapMessage = (r: Row): GroupMessage => ({
   recipientMemberIds: JSON.parse(r.recipient_member_ids as string) as string[], kind: r.kind as GroupMessage['kind'], content: r.content as string,
   requestId: (r.request_id as string | null) ?? null, replyToId: (r.reply_to_id as string | null) ?? null,
   sourceMessageId: (r.source_message_id as string | null) ?? null, sourceRunId: (r.source_run_id as string | null) ?? null, createdAt: r.created_at as string,
+  ...(r.invocation ? { invocation: JSON.parse(r.invocation as string) as GroupMessage['invocation'] } : {}),
 });
 const mapRequest = (r: Row): GroupRequest => ({
   id: r.id as string, groupId: r.group_id as string, messageId: r.message_id as string, plannerMemberId: r.planner_member_id as string,
@@ -87,10 +89,10 @@ export class GroupRepo {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, g.id, g.projectId, g.title, g.anchorSessionId, g.mode, g.maxParallel, g.maxTurns, g.maxHops, now, now);
   }
   getGroup(id: string): ConversationGroup | undefined {
-    const row = this.get('SELECT * FROM conversation_groups WHERE id = ?', id);
+    const row = this.get('SELECT g.* FROM conversation_groups g JOIN projects p ON p.id = g.project_id WHERE g.id = ? AND p.archived_at IS NULL', id);
     return row ? mapGroup(row) : undefined;
   }
-  listGroups(): ConversationGroup[] { return this.all('SELECT * FROM conversation_groups ORDER BY created_at ASC, rowid ASC').map(mapGroup); }
+  listGroups(): ConversationGroup[] { return this.all('SELECT g.* FROM conversation_groups g JOIN projects p ON p.id = g.project_id WHERE p.archived_at IS NULL ORDER BY g.created_at ASC, g.rowid ASC').map(mapGroup); }
   updateGroup(id: string, patch: { mode?: GroupMode; orchestratorMemberId?: string | null; paused?: boolean; pauseReason?: string | null; maxParallel?: number; maxTurns?: number; maxHops?: number }): void {
     const sets = ['updated_at = ?'];
     const params: SQLInputValue[] = [nowIso()];
@@ -118,7 +120,8 @@ export class GroupRepo {
     return this.all(`SELECT * FROM group_members WHERE group_id = ? ${includeRemoved ? '' : 'AND removed_at IS NULL'} ORDER BY joined_at ASC, rowid ASC`, groupId).map(mapMember);
   }
   activeMemberOfSession(sessionId: string): MemberRow | undefined {
-    const row = this.get('SELECT * FROM group_members WHERE session_id = ? AND removed_at IS NULL', sessionId);
+    const row = this.get(`SELECT m.* FROM group_members m JOIN conversation_groups g ON g.id = m.group_id JOIN projects p ON p.id = g.project_id JOIN sessions s ON s.id = m.session_id
+      WHERE m.session_id = ? AND m.removed_at IS NULL AND p.archived_at IS NULL AND s.archived_at IS NULL`, sessionId);
     return row ? mapMember(row) : undefined;
   }
   handleTaken(groupId: string, handle: string): boolean { return Boolean(this.get('SELECT 1 AS x FROM group_members WHERE group_id = ? AND handle = ?', groupId, handle)); }
@@ -134,40 +137,44 @@ export class GroupRepo {
   clearHolds(groupId: string): void { this.run('UPDATE group_members SET held = 0 WHERE group_id = ? AND held = 1', groupId); }
 
   // messages
+  private withAttachments(messages: GroupMessage[]): GroupMessage[] {
+    const refs = new AttachmentRepo(this.db).refsForOwners('group_message', messages.filter((message) => message.kind === 'user').map((message) => message.id));
+    return messages.map((message) => refs.has(message.id) ? { ...message, attachments: refs.get(message.id)! } : message);
+  }
   insertMessage(m: {
     groupId: string; senderMemberId: string | null; recipients: string[]; kind: GroupMessage['kind']; content: string; requestId?: string | null;
-    replyToId?: string | null; sourceMessageId?: string | null; sourceRunId?: string | null; clientMessageId?: string | null;
+    replyToId?: string | null; sourceMessageId?: string | null; sourceRunId?: string | null; clientMessageId?: string | null; invocation?: GroupInvocation | null;
   }): GroupMessage {
     const id = messageId();
-    this.run(`INSERT INTO group_messages(id, group_id, sender_member_id, recipient_member_ids, kind, content, request_id, reply_to_id, source_message_id, source_run_id, client_message_id, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, m.groupId, m.senderMemberId, JSON.stringify(m.recipients), m.kind, m.content, m.requestId ?? null,
-    m.replyToId ?? null, m.sourceMessageId ?? null, m.sourceRunId ?? null, m.clientMessageId ?? null, nowIso());
+    this.run(`INSERT INTO group_messages(id, group_id, sender_member_id, recipient_member_ids, kind, content, request_id, reply_to_id, source_message_id, source_run_id, client_message_id, created_at, invocation)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, m.groupId, m.senderMemberId, JSON.stringify(m.recipients), m.kind, m.content, m.requestId ?? null,
+    m.replyToId ?? null, m.sourceMessageId ?? null, m.sourceRunId ?? null, m.clientMessageId ?? null, nowIso(), m.invocation ? JSON.stringify(m.invocation) : null);
     return this.getMessage(id)!;
   }
   getMessage(id: string): GroupMessage | undefined {
     const row = this.get('SELECT * FROM group_messages WHERE id = ?', id);
-    return row ? mapMessage(row) : undefined;
+    return row ? this.withAttachments([mapMessage(row)])[0] : undefined;
   }
   messageByClientId(groupId: string, clientMessageId: string): GroupMessage | undefined {
     const row = this.get('SELECT * FROM group_messages WHERE group_id = ? AND client_message_id = ?', groupId, clientMessageId);
     return row ? mapMessage(row) : undefined;
   }
   recentMessages(groupId: string, limit: number): GroupMessage[] {
-    return this.all('SELECT * FROM group_messages WHERE group_id = ? ORDER BY seq DESC LIMIT ?', groupId, limit).reverse().map(mapMessage);
+    return this.withAttachments(this.all('SELECT * FROM group_messages WHERE group_id = ? ORDER BY seq DESC LIMIT ?', groupId, limit).reverse().map(mapMessage));
   }
   /** Messages a member sent or was addressed in, newest last. */
   messagesFor(groupId: string, member: string, limit: number): GroupMessage[] {
-    return this.all(
+    return this.withAttachments(this.all(
       `SELECT * FROM group_messages WHERE group_id = ? AND (sender_member_id = ? OR EXISTS (SELECT 1 FROM json_each(recipient_member_ids) WHERE value = ?))
        ORDER BY seq DESC LIMIT ?`, groupId, member, member, limit,
-    ).reverse().map(mapMessage);
+    ).reverse().map(mapMessage));
   }
   /** Oldest unread addressed messages first; never silently acknowledge messages omitted by the bound. */
   messagesAddressedAfter(groupId: string, member: string, afterSeq: number, limit: number): GroupMessage[] {
-    return this.all(
+    return this.withAttachments(this.all(
       `SELECT * FROM group_messages WHERE group_id = ? AND seq > ? AND sender_member_id IS NOT ?
        AND EXISTS (SELECT 1 FROM json_each(recipient_member_ids) WHERE value = ?) ORDER BY seq ASC LIMIT ?`, groupId, afterSeq, member, member, limit,
-    ).map(mapMessage);
+    ).map(mapMessage));
   }
   countAddressedAfter(groupId: string, member: string, seq: number): number {
     return Number(this.get(

@@ -152,6 +152,21 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
   },
   `ALTER TABLE projects ADD COLUMN archived_at TEXT;
    CREATE INDEX projects_visible ON projects(archived_at);`,
+  // Chat attachments: opaque private files plus the durable links from human messages, and one validated native invocation per group message.
+  `CREATE TABLE attachments (
+     id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
+     scope_kind TEXT NOT NULL CHECK (scope_kind IN ('session', 'group')), scope_id TEXT NOT NULL,
+     kind TEXT NOT NULL CHECK (kind IN ('image', 'file')), name TEXT NOT NULL, mime_type TEXT NOT NULL, size INTEGER NOT NULL, sha256 TEXT NOT NULL,
+     status TEXT NOT NULL CHECK (status IN ('draft', 'sent', 'deleted')), created_at TEXT NOT NULL, sent_at TEXT, deleted_at TEXT
+   );
+   CREATE INDEX attachments_scope ON attachments(scope_kind, scope_id, status);
+   CREATE INDEX attachments_status_age ON attachments(status, created_at);
+   CREATE TABLE attachment_links (
+     attachment_id TEXT NOT NULL UNIQUE REFERENCES attachments(id), owner_kind TEXT NOT NULL CHECK (owner_kind IN ('message', 'group_message')),
+     owner_id TEXT NOT NULL, position INTEGER NOT NULL, PRIMARY KEY (owner_kind, owner_id, attachment_id)
+   );
+   CREATE INDEX attachment_links_owner ON attachment_links(owner_kind, owner_id, position);
+   ALTER TABLE group_messages ADD COLUMN invocation TEXT;`,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

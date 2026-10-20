@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { GroupDefaultsSchema } from './groups';
+import { AttachmentIdsSchema } from './attachments';
 
 import { ProviderSchema, PolicySchema, EffortSchema, ServiceTierSchema } from './provider-config';
 import type { Provider, Policy, Effort } from './provider-config';
@@ -46,7 +47,7 @@ export interface ToolActivity {
   parentId?: string | null; summary?: string; command?: string | null; input?: string; output?: string;
   cwd?: string | null; exitCode?: number | null; processId?: string | null; durationMs?: number | null;
 }
-export interface Message { id: string; sessionId: string; role: 'user' | 'assistant' | 'system' | 'tool'; content: string; createdAt: string; kind?: string; runId?: string }
+export interface Message { id: string; sessionId: string; role: 'user' | 'assistant' | 'system' | 'tool'; content: string; createdAt: string; kind?: string; runId?: string; attachments?: import('./attachments').AttachmentRef[] }
 export interface Task { id: string; projectId: string; title: string; description: string; acceptanceCriteria: string; sessionId: string | null; dependsOn: string[]; status: TaskStatus; createdAt: string; updatedAt: string; source?: import('./project-context').TaskSource }
 export interface WorkspaceEvent { id: number; projectId: string | null; sessionId: string | null; type: string; summary: string; payload: Record<string, unknown>; createdAt: string }
 export interface Approval { id: string; sessionId: string; tool: string; description: string; input: Record<string, unknown>; status: 'pending' | 'approved' | 'denied'; createdAt: string }
@@ -58,8 +59,14 @@ export interface ProviderModel {
   serviceTiers?: { id: string; name: string; description?: string }[];
   defaultServiceTier?: string;
   policies?: Policy[];
+  /** Native input modalities when the provider reports them per model (for example `text`, `image`). Absent means unreported. */
+  inputModalities?: string[];
 }
-export interface ProviderInfo { id: Provider; name: string; available: boolean; version: string | null; executable: string | null; reason: string | null; models: ProviderModel[]; policies?: Policy[] }
+export interface ProviderInfo {
+  id: Provider; name: string; available: boolean; version: string | null; executable: string | null; reason: string | null; models: ProviderModel[]; policies?: Policy[];
+  /** Native input transport capabilities; ACP values are negotiated during discovery and SDK values describe its supported content API. A model modality, when reported, takes precedence. */
+  promptCapabilities?: { image: boolean; embeddedContext: boolean };
+}
 /** Installation is explicit and separate from provider authentication and model execution. */
 export interface AntigravityInstallState {
   supported: boolean; version: string;
@@ -169,7 +176,10 @@ export const UpdateSessionSchema = z.object({
   model: z.string().trim().min(1).max(150).optional(), effort: EffortSchema.optional(), policy: PolicySchema.optional(), serviceTier: ServiceTierSchema.optional(),
   pinned: z.boolean().optional(), unread: z.boolean().optional(),
 }).strict().refine((patch) => Object.keys(patch).length > 0, 'Supply a session setting to update');
-export const SendMessageSchema = z.object({ content: z.string().trim().min(1).max(100_000), skills: z.array(z.string().min(1).max(4096)).max(20).optional() }).strict();
+export const SendMessageSchema = z.object({
+  content: z.string().trim().max(100_000).default(''), skills: z.array(z.string().min(1).max(4096)).max(20).optional(),
+  attachmentIds: AttachmentIdsSchema.optional(),
+}).strict().refine((body) => body.content.length > 0 || (body.attachmentIds?.length ?? 0) > 0, { message: 'Write a message or attach a file', path: ['content'] });
 export const CreateTaskSchema = z.object({ projectId: z.string().min(1), title: z.string().trim().min(1).max(200), description: z.string().max(20_000).default(''), acceptanceCriteria: z.string().max(10_000).default(''), sessionId: z.string().nullable().default(null), dependsOn: z.array(z.string()).max(100).default([]) });
 export const UpdateTaskSchema = z.object({ title: z.string().trim().min(1).max(200).optional(), description: z.string().max(20_000).optional(), acceptanceCriteria: z.string().max(10_000).optional(), sessionId: z.string().nullable().optional(), dependsOn: z.array(z.string()).max(100).optional(), status: z.enum(['backlog', 'ready', 'running', 'blocked', 'review', 'done']).optional() });
 export const HandoffSchema = z.object({ fromSessionId: z.string().min(1), toSessionId: z.string().min(1), taskId: z.string().optional(), path: z.string().min(1).max(4096), revision: z.string().trim().min(1).max(100), note: z.string().max(10_000).default('') });
@@ -190,7 +200,16 @@ export const UpdateSettingsSchema = z.object({
 export const ApprovalDecisionSchema = z.object({ decision: z.enum(['approved', 'denied']) });
 
 // Provider boundary: implemented independently from persistence and transport.
-export interface RunOptions { teamMcp?: import('./groups').TeamMcpConnection; providerTaskState?: import('./project-context').ProviderTaskPlan['steps']; session: Session; prompt: string; skills?: ProviderSkill[]; browserMcp?: import('./browser').BrowserMcpConnection; signal: AbortSignal; onEvent: (event: AdapterEvent) => void; requestApproval: (request: { tool: string; description: string; input: Record<string, unknown> }) => Promise<boolean>; settings: AppSettings }
+export interface RunOptions {
+  /** Attachments staged privately for this run only. Adapters send images natively and reference other files by path. */
+  attachments?: import('./attachments').RunAttachment[];
+  /**
+   * An explicit native command or skill. `prompt` is then the exact provider-native user text (leading `/command` or `$skill`);
+   * `context` carries team instructions that must travel through the provider's own context mechanism instead of the text.
+   */
+  invocation?: import('./attachments').NativeInvocation;
+  context?: string;
+  teamMcp?: import('./groups').TeamMcpConnection; providerTaskState?: import('./project-context').ProviderTaskPlan['steps']; session: Session; prompt: string; skills?: ProviderSkill[]; browserMcp?: import('./browser').BrowserMcpConnection; signal: AbortSignal; onEvent: (event: AdapterEvent) => void; requestApproval: (request: { tool: string; description: string; input: Record<string, unknown> }) => Promise<boolean>; settings: AppSettings }
 export type AdapterEvent =
   | ({ type: 'task.plan' } & import('./project-context').ProviderTaskPlan)
   | { type: 'session'; providerSessionId: string }
@@ -213,3 +232,5 @@ export * from './repository';
 export * from './project-context';
 
 export * from './groups';
+export * from './attachments';
+export * from './native-actions';

@@ -11,6 +11,8 @@ import { captureRunTree, compareRunTrees, unavailableRunChanges, type RunTreeSna
 import type { GroupService } from './groups/service.ts';
 import type { TeamMcpBridge } from './team-mcp.ts';
 import type { BrowserMcpBridge } from './browser-mcp.ts';
+import type { AttachmentService } from './attachments/service.ts';
+import type { NativeInvocation, RunAttachment } from '@relay/contracts';
 
 export interface RuntimeOptions {
   /** Milliseconds to wait after an abort before declaring an unresponsive adapter interrupted. */
@@ -41,11 +43,15 @@ interface ActiveRun {
   baseCost: number | null;
   taskId: string | null;
   skills: ProviderSkill[];
+  invocation?: NativeInvocation;
+  context?: string;
+  attachmentOwnerKind?: 'message' | 'group_message';
+  attachmentOwnerId?: string;
   changeBaseline: RunTreeSnapshot | null;
   promise: Promise<void>;
 }
 
-export interface StartOptions { groupDeliveryId?: string; taskId?: string; userMessage?: { content: string; kind?: string }; skills?: ProviderSkill[] }
+export interface StartOptions { groupDeliveryId?: string; taskId?: string; userMessage?: { content: string; kind?: string }; skills?: ProviderSkill[]; attachmentIds?: string[]; attachmentOwnerKind?: 'message' | 'group_message'; attachmentOwnerId?: string; invocation?: NativeInvocation }
 
 const MAX_TOOL_CHARS = 20_000;
 const MAX_APPROVAL_INPUT_CHARS = 20_000;
@@ -54,6 +60,7 @@ export class SessionRuntime {
   private readonly active = new Map<string, ActiveRun>();
   private groups?: GroupService;
   private teamMcp?: TeamMcpBridge;
+  private attachmentService?: AttachmentService;
   private readonly abortGraceMs: number;
   private readonly flushIntervalMs: number;
 
@@ -70,6 +77,7 @@ export class SessionRuntime {
     this.groups = groups;
     this.teamMcp = teamMcp;
   }
+  setAttachments(service: AttachmentService): void { this.attachmentService = service; }
 
   activeCount(): number {
     return this.active.size;
@@ -96,14 +104,21 @@ export class SessionRuntime {
     this.validateSession?.(session);
 
     const handoffs = this.store.unconsumedHandoffs(sessionId);
-    const prompt = this.composePrompt(handoffs, content);
+    const runId = newId('run');
+    const invocation = options.invocation;
+    const prompt = invocation ? content : this.composePrompt(handoffs, content);
     const run: ActiveRun = {
-      id: newId('run'), startedAt: nowIso(), tick: performance.now(), tools: new Map(), activityTimer: null,
+      id: runId, startedAt: nowIso(), tick: performance.now(), tools: new Map(), activityTimer: null,
       sessionId, controller: new AbortController(), closed: false, cleanupPending: false, acceptingTools: false, approvals: new Map(), stream: null, flushTimer: null, consumedHandoffs: handoffs.map((h) => h.id), firstEvent: false,
-      baseInput: session.inputTokens, baseOutput: session.outputTokens, baseCost: session.costUsd, taskId: options.taskId ?? null, skills: options.skills ?? [], changeBaseline: null, promise: Promise.resolve(),
+      baseInput: session.inputTokens, baseOutput: session.outputTokens, baseCost: session.costUsd, taskId: options.taskId ?? null, skills: options.skills ?? [], invocation, context: invocation && handoffs.length ? this.composePrompt(handoffs, '') : undefined, attachmentOwnerKind: options.attachmentOwnerKind ?? 'message', attachmentOwnerId: options.attachmentOwnerId, changeBaseline: null, promise: Promise.resolve(),
     };
     this.store.tx(() => {
       const userMessage = this.store.insertMessage({ sessionId, role: 'user', content: options.userMessage?.content ?? content, kind: options.userMessage?.kind ?? null, runId: run.id });
+      run.attachmentOwnerId ??= userMessage.id;
+      if (options.attachmentIds?.length) {
+        if (!this.attachmentService) throw conflict('Attachments are unavailable in this Relay session.');
+        this.attachmentService.claim({ kind: 'session', id: sessionId }, options.attachmentIds, 'message', userMessage.id);
+      }
       this.store.insertRun({ id: run.id, sessionId, userMessageId: userMessage.id, provider: session.provider, model: session.model, startedAt: run.startedAt });
       this.store.updateSession(sessionId, { status: 'running', error: null });
       if (options.taskId) {
@@ -151,14 +166,22 @@ export class SessionRuntime {
       if (this.groups?.forSession(session.id) && !groupContext) throw conflict('Group runs must start through a recorded group delivery. Refresh and send through the group conversation.');
       const teamMcp = groupContext ? this.teamMcp?.create(run.id, session, run.controller.signal, groupContext) : undefined;
       if (teamMcp) capabilityTokens.push(teamMcp.token);
-      const effectivePrompt = groupContext ? `${groupContext.instructions}\n\n${prompt}` : prompt;
+      const explicit = run.invocation;
+      const effectivePrompt = explicit ? prompt : groupContext ? `${groupContext.instructions}\n\n${prompt}` : prompt;
+      if (explicit && groupContext) run.context = [run.context, groupContext.instructions].filter(Boolean).join('\n\n');
+      const stagedAttachments = this.attachmentService && run.attachmentOwnerId
+        ? await this.attachmentService.stage(run.id, run.attachmentOwnerKind ?? 'message', run.attachmentOwnerId)
+        : [];
+      if (run.controller.signal.aborted) throw conflict('The run was interrupted before the provider started.');
       const adapterRun = Promise.resolve().then(() => adapter.run({
-        session, prompt: effectivePrompt, teamMcp, providerTaskState: this.nativeTaskState(session), skills: run.skills, browserMcp, signal: run.controller.signal, settings,
+        session, prompt: effectivePrompt, ...(explicit ? { invocation: explicit, context: run.context } : {}), attachments: stagedAttachments, teamMcp, providerTaskState: this.nativeTaskState(session), skills: run.skills, browserMcp, signal: run.controller.signal, settings,
         onEvent: (event) => this.handleEvent(run, capabilityTokens.length ? JSON.parse(scrubCapabilities(JSON.stringify(event))) as AdapterEvent : event),
         requestApproval: (request) => this.requestApproval(run, JSON.parse(scrubCapabilities(JSON.stringify(request)))),
       }));
       const grace = new Promise<'grace'>((resolve) => {
-        run.controller.signal.addEventListener('abort', () => setTimeout(() => resolve('grace'), this.abortGraceMs).unref(), { once: true });
+        const onAbort = () => setTimeout(() => resolve('grace'), this.abortGraceMs).unref();
+        if (run.controller.signal.aborted) onAbort();
+        else run.controller.signal.addEventListener('abort', onAbort, { once: true });
       });
       adapterRun.catch(() => undefined); // an orphaned adapter promise must never become an unhandled rejection
       const result = await Promise.race([adapterRun.then(() => 'done' as const), grace]);
@@ -178,6 +201,7 @@ export class SessionRuntime {
       }
     }
     run.acceptingTools = false;
+    if (!run.cleanupPending) await this.attachmentService?.release(run.id);
     this.browserMcp?.revoke(run.id);
     this.teamMcp?.revoke(run.id);
     let changes: RunChanges;
@@ -205,6 +229,7 @@ export class SessionRuntime {
   }
 
   private releaseAfterCleanup(run: ActiveRun): void {
+    if (run.attachmentOwnerId) void this.attachmentService?.release(run.id);
     run.cleanupPending = false;
     if (run.closed && this.active.get(run.sessionId) === run) {
       this.active.delete(run.sessionId);

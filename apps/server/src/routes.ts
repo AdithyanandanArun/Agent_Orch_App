@@ -27,11 +27,13 @@ import type { GroupService } from './groups/service.ts';
 import type { BrowserService } from './browser/service.ts';
 import { antigravityInstallState, startAntigravityInstall } from './antigravity-install.ts';
 import { antigravityAuthState, cancelAntigravityAuth, startAntigravityAuth } from './antigravity-auth.ts';
+import type { AttachmentService } from './attachments/service.ts';
+import { nativeActionCommands, nativeActionSkills, unsupportedActionNotes } from '@relay/contracts';
 
 export interface Services {
   setupSignal: AbortSignal;
   config: ServerConfig; store: Store; hub: Hub; workspace: WorkspaceService; runtime: SessionRuntime; tasks: TaskService; handoffs: HandoffService;
-  groups: GroupService; intelligence: ProjectIntelligenceService; repository: RepositoryService; browser: BrowserService; providers: ProviderService; imports: ImportService; directories: DirectoryService; projectSources: ProjectSources; terminals: TerminalManager; startedAt: number; getPort: () => number;
+  groups: GroupService; attachments: AttachmentService; intelligence: ProjectIntelligenceService; repository: RepositoryService; browser: BrowserService; providers: ProviderService; imports: ImportService; directories: DirectoryService; projectSources: ProjectSources; terminals: TerminalManager; startedAt: number; getPort: () => number;
 }
 
 export class Reply {
@@ -235,11 +237,31 @@ export function buildRouter(s: Services) {
 
   const emptyGroupBody = z.object({}).strict();
   add('POST', '/api/groups', async (ctx) => new Reply(201, await s.groups.create(await ctx.body(CreateGroupSchema))));
+  add('GET', '/api/groups/:id/members/:memberId/catalog', async (ctx) => {
+    const group = s.groups.get(param(ctx, 'id'));
+    const memberId = param(ctx, 'memberId');
+    const member = group.members.find((row) => row.id === memberId && !row.removedAt);
+    if (!member) throw notFound('Active group agent not found');
+    const session = s.store.getSession(member.sessionId);
+    if (!session) throw notFound('Agent session not found');
+    const catalog = await s.providers.catalog(session, ctx.url.searchParams.get('refresh') === 'true');
+    const info = s.providers.cached()?.find((row) => row.id === session.provider);
+    return {
+      sessionId: session.id, provider: session.provider, model: session.model,
+      commands: nativeActionCommands(session.provider, catalog.commands), skills: nativeActionSkills(session.provider, catalog.skills),
+      warnings: catalog.warnings, unsupported: unsupportedActionNotes(session.provider),
+      attachments: { images: (() => {
+        const model = info?.models.find((candidate) => candidate.id === session.model || candidate.aliases?.includes(session.model));
+        return model?.inputModalities ? model.inputModalities.includes('image') : info?.promptCapabilities?.image === true;
+      })(), files: true, imageBytes: 10 * 1024 * 1024,
+        ...(session.provider === 'opencode' ? { note: 'OpenCode native commands cannot carry attachments.' } : {}) },
+    };
+  });
   add('GET', '/api/groups/:id', (ctx) => s.groups.get(param(ctx, 'id')));
   add('PATCH', '/api/groups/:id', async (ctx) => s.groups.update(param(ctx, 'id'), await ctx.body(UpdateGroupSchema)));
   add('POST', '/api/groups/:id/agents', async (ctx) => new Reply(201, await s.groups.addAgent(param(ctx, 'id'), await ctx.body(AddGroupAgentSchema))));
   add('DELETE', '/api/groups/:id/members/:memberId', (ctx) => s.groups.removeMember(param(ctx, 'id'), param(ctx, 'memberId')));
-  add('POST', '/api/groups/:id/messages', async (ctx) => new Reply(202, s.groups.send(param(ctx, 'id'), await ctx.body(SendGroupMessageSchema))));
+  add('POST', '/api/groups/:id/messages', async (ctx) => new Reply(202, await s.groups.send(param(ctx, 'id'), await ctx.body(SendGroupMessageSchema))));
   add('POST', '/api/groups/:id/pause', async (ctx) => { await ctx.body(emptyGroupBody); return s.groups.pause(param(ctx, 'id')); });
   add('POST', '/api/groups/:id/stop', async (ctx) => { await ctx.body(emptyGroupBody); return s.groups.stop(param(ctx, 'id')); });
   add('POST', '/api/groups/:id/resume', async (ctx) => { await ctx.body(emptyGroupBody); return s.groups.resume(param(ctx, 'id')); });
@@ -293,15 +315,15 @@ export function buildRouter(s: Services) {
   });
   add('POST', '/api/sessions/:id/messages', async (ctx) => {
     const id = param(ctx, 'id');
-    const { content, skills: selected } = await ctx.body(SendMessageSchema);
+    const { content, skills: selected, attachmentIds } = await ctx.body(SendMessageSchema);
     const session = s.store.getSession(id);
     if (!session) throw notFound('Session not found');
     const group = s.groups.forSession(id);
     if (group) {
-      if (selected?.length) throw badRequest('Select skills in an independent session. Group messages currently route through the team composer.');
+      if (selected?.length) throw badRequest('Select skills in an independent session. Address provider actions directly to one group agent.');
       const member = group.members.find((row) => row.sessionId === id && !row.removedAt);
       if (!member) throw conflict('This agent is no longer in the group. Refresh the conversation.');
-      return new Reply(202, s.groups.send(group.group.id, { content, ...(id === group.group.anchorSessionId ? {} : { recipients: [member.id] }) }));
+      return new Reply(202, await s.groups.send(group.group.id, { content, attachmentIds, ...(id === group.group.anchorSessionId ? {} : { recipients: [member.id] }) }));
     }
     if (s.runtime.isActive(id)) throw conflict('Session already has an active run or provider cleanup is still in progress');
     const catalog = selected?.length ? await s.providers.catalog(session, true) : null;
@@ -311,11 +333,20 @@ export function buildRouter(s: Services) {
       return skill;
     });
     if (session.provider === 'claude' && skills.length > 1) throw badRequest('Claude supports one explicitly selected skill per message.');
+    const attachmentRows = s.attachments.validate({ kind: 'session', id }, attachmentIds ?? []);
+    if (attachmentRows.some((row) => row.kind === 'image')) {
+      const info = s.providers.cached()?.find((row) => row.id === session.provider);
+      const model = info?.models.find((candidate) => candidate.id === session.model || candidate.aliases?.includes(session.model));
+      const imagesSupported = model?.inputModalities ? model.inputModalities.includes('image') : info?.promptCapabilities?.image === true;
+      if (!imagesSupported) throw badRequest(`${session.provider} has not reported image input for this session, so no message was sent.`);
+      if (session.provider === 'claude' && attachmentRows.some((row) => row.kind === 'image' && row.size > 5 * 1024 * 1024)) throw badRequest('Claude image attachments are limited to 5 MiB each. Remove the large image or resize it before sending.');
+    }
+    if (session.provider === 'opencode' && attachmentRows.length && /^\s*\/[A-Za-z0-9][A-Za-z0-9_.:-]*(?:\s|$)/.test(content)) throw badRequest('OpenCode native slash commands cannot carry attachments. Remove the attachments or send a regular message.');
     const latest = s.store.getSession(id);
     if (!latest) throw notFound('Session not found');
     if (s.groups.forSession(id)) throw conflict('This session joined a group while loading skills. Send through its group conversation.');
     if (latest.provider !== session.provider || latest.model !== session.model || latest.worktreePath !== session.worktreePath) throw conflict('Session settings changed while loading skills. Send the message again.');
-    s.runtime.start(id, content, { skills });
+    s.runtime.start(id, content, { skills, attachmentIds });
     return new Reply(202, { accepted: true });
   });
   add('POST', '/api/sessions/:id/interrupt', (ctx) => {
