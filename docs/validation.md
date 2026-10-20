@@ -1,6 +1,6 @@
 # Foundation validation — 2026-10-19
 
-> **Naming note:** Mingle was named Relay when these observations were recorded. Historical commands, paths, tool names and artifact receipts are retained. See [current naming and data compatibility](mingle-rename.md).
+> **Naming note:** Earlier entries were recorded under the former Relay name. Their commands, paths, tool names and artifact receipts are retained; the Mingle rename section records the later rebrand checks. See [current naming and data compatibility](mingle-rename.md).
 
 This records the first implementation's observed behavior. It is not evidence that the distributed product or the full two-provider feature-integration demo is complete.
 
@@ -215,3 +215,17 @@ OpenCode implemented the four-file UI change in `3ae3859`. Its native session me
 - Native T3 preview DOM inspection confirmed the installed full-width wrapping tray rule, one paperclip/file picker and no horizontal overflow at 1280×800. No attachment drafts were present during inspection; one/many-image runtime flows and narrow viewport behavior were not exercised. Existing conversation drafts were not modified for inspection.
 
 Nothing was pushed or published.
+
+
+## Mingle rename, logo and package — 2026-10-20
+
+OpenCode `openai/gpt-6-luna` at High effort implemented the rename in native session `ses_ea5fa5809ffecNJq6wciDlqfB1`. Interrupted CLI processes were resumed with their saved context and edits. Worker commits `4cfd02d` and `a76f2ed` contain the source changes; the primary orchestrator supplied the original M-shaped node logo and integrated the current guides while retaining historical receipts.
+
+- Workspace dependency relinking with `pnpm install --ignore-scripts`, workspace `pnpm typecheck`, and production `pnpm build` passed. Intermediate checks caught malformed JSX and mistyped identifiers; those were corrected before the successful checks. Node syntax checks for the desktop and packaging scripts, Bash syntax for the Arch recipe, and Git whitespace checks passed. No test suite was added or run.
+- Code review preserved `relay.sqlite`, existing database records, worktree paths, session identifiers, browser profiles and legacy UI storage keys. It also checked explicit `MINGLE_*` precedence, legacy `RELAY_*` fallback, both generations of MCP token cleanup, and both `.mingle`/`.relay` file-access exclusions. Electron creates the selected profile directory before setting both `userData` and `sessionData`, before readiness and the single-instance lock.
+- `pnpm package:arch` produced `release/mingle-0.1.0-linux-x64.tar.gz` and `release/mingle-bin-0.1.0-1-x86_64.pkg.tar.zst`. Both checksum files verified. The checked-in recipe and generated `.SRCINFO` now pin the actual archive checksum. Build warnings were limited to dependency annotation and legacy-deploy notices; the build completed.
+- Archive SHA-256: `551986c31b0ccdd72c1af903630ca78547040ab6f5cd25da530c3070e44b3ebb`. Arch package SHA-256: `ebee817425aef160b62087b23a6bb422b09a6ba7437eeea0020571e49cbd65a5`.
+- The staged desktop entry names Mingle, runs `mingle`, and selects the `mingle` icon/window class. Package metadata declares the old `relay-workspace-bin` package as provided, conflicting and replaced. The staged desktop main file matched its source hash `d4c92e85caf338d6f6f2dce8ac8983e5d92ed22a6de2ed5a9c9f6644422a254f`; the staged PNG matched its source hash `bb9108087277947ea64b309cdc21e50542af6934f5ff3ed1d87fc76a38957df0`.
+- Started the actual packaged Node/backend in a private preview data directory outside the repository and existing user workspace. Health reported schema 10, a clearly identified example project, zero active provider runs, zero terminals and no pending approvals. Native T3 preview DOM inspection at 1280×800 confirmed title and sidebar Mingle, a loaded 20×20 `/mingle.svg` logo, the same favicon, no visible Relay branding on the inspected page and no horizontal overflow. Screenshot capture was blurred; visual assessment is based on the directly rendered logo asset and DOM inspection, not that screenshot.
+
+The implementation worker was the only model task started for this rename. No provider conversation was submitted for validation. Existing user data was not migrated or opened for an upgrade trial; selection and profile continuity were reviewed in source. Full Electron upgrade launch, live provider execution under the renamed MCP namespaces, and Windows/macOS execution remain unverified. The package was built without installation, application restart, push or publication.

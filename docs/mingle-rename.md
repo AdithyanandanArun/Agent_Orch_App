@@ -30,3 +30,5 @@ The `docs/validation.md`, `docs/provider-research.md`, `docs/provider-opencode.m
 ## Packaging rollout
 
 Existing ignored `release/relay-workspace-*` files are pre-rename artifacts and are not renamed in place. A new Mingle archive and Arch package are produced after integration with `pnpm package:arch`; that step generates the archive checksum used for the package build. Do not install or replace an existing package as part of source integration. The first Mingle installation should open the existing Relay data root through the selection rules above. There is no database migration or data-copy step.
+
+The first Mingle archive and Arch package were built locally after logo integration; their checksums and packaged UI inspection are recorded in [validation](validation.md#mingle-rename-logo-and-package--2026-10-20). Building a package does not install it or exercise an existing desktop profile upgrade.
