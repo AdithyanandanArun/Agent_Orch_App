@@ -22,13 +22,19 @@ export function ContextPane() {
   const { setContextTab, toggleContext } = useMingle.getState();
   const [visited, setVisited] = useState<Set<ContextTab>>(() => new Set([tab]));
   const listRef = useRef<HTMLDivElement>(null);
+  const focusReturnFrame = useRef<number | null>(null);
   const session = useActiveSession();
   const browserLive = useBrowserStore((s) => (session ? s.states[session.id]?.status === 'connected' : false));
   useEffect(() => setVisited((v) => (v.has(tab) ? v : new Set(v).add(tab))), [tab]);
+  useEffect(() => () => { if (focusReturnFrame.current !== null) window.cancelAnimationFrame(focusReturnFrame.current); }, []);
 
   const close = () => {
     toggleContext(false);
-    window.requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('button[aria-label="Show context pane"]')?.focus({ preventScroll: true }));
+    if (focusReturnFrame.current !== null) window.cancelAnimationFrame(focusReturnFrame.current);
+    focusReturnFrame.current = window.requestAnimationFrame(() => {
+      focusReturnFrame.current = null;
+      if (!useMingle.getState().contextOpen) document.querySelector<HTMLButtonElement>('button[aria-label="Show context pane"]')?.focus({ preventScroll: true });
+    });
   };
 
   const onKey = (e: React.KeyboardEvent) => {

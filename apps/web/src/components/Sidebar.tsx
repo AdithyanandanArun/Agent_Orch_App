@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Activity, ArrowDownToLine, ChevronsUpDown, FolderOpen, FolderPlus, FolderMinus, Kanban, LayoutPanelLeft, MoreHorizontal, Network, Search, Settings, SquarePen, Loader2, Pin } from 'lucide-react';
 import type { Project, Session } from '@mingle/contracts';
 import { useMingle, useProject, type View } from '../store/store';
@@ -6,9 +6,10 @@ import { copyText } from '../lib/clipboard';
 import { errorMessage } from '../lib/api';
 import { ContextMenu, type ContextMenuEntry } from './ContextMenu';
 import { cx, relativeTime, useNow } from '../lib/format';
-import { IconButton, Menu, MenuItem, MenuLabel, MenuSeparator, StatusDot } from './ui';
+import { DialogMotionContext, IconButton, Menu, MenuItem, MenuLabel, MenuSeparator, StatusDot } from './ui';
 import { activeMembers, findGroupForSession, groupChildSessionIds, groupSessionStatus } from '../lib/groups';
 import { RemoveProjectDialog } from './RemoveProjectDialog';
+import { useRetainedPresence } from '../lib/motion';
 
 const VIEWS: { view: View; label: string; icon: typeof Kanban }[] = [
   { view: 'tasks', label: 'Tasks', icon: Kanban }, { view: 'activity', label: 'Activity', icon: Activity }, { view: 'map', label: 'Agent map', icon: Network },
@@ -30,8 +31,12 @@ export function Sidebar() {
   const creatingSession = useMingle((state) => state.creatingSession);
   const { setView, selectSession, selectProject, openDialog, createSession } = useMingle.getState();
   const [menu, setMenu] = useState<{ sessionId: string; x: number; y: number; returnFocus: HTMLElement } | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const { value: retainedMenu, present: menuPresent, closing: menuClosing, key: menuKey } = useRetainedPresence(menuOpen ? menu : null, 160);
+  const closeMenu = useCallback(() => setMenuOpen(false), []);
   const [organizing, setOrganizing] = useState<Set<string>>(() => new Set());
   const [removingProject, setRemovingProject] = useState<Project | null>(null);
+  const { value: retainedProject, present: removePresent, closing: removeClosing, key: removeKey } = useRetainedPresence(removingProject, 160);
   const now = useNow();
   const childSessions = groupChildSessionIds(boot?.groups);
   const sessions = (boot?.sessions ?? []).filter((session) => session.projectId === project?.id && !childSessions.has(session.id)).map((session) => {
@@ -44,8 +49,8 @@ export function Sidebar() {
   });
   const connectionLabel = connection === 'online' ? 'Connected' : connection === 'connecting' ? 'Connecting' : 'Disconnected';
 
-  const target = sessions.find((session) => session.id === menu?.sessionId);
-  useEffect(() => { if (menu && !target) setMenu(null); }, [menu, target]);
+  const target = sessions.find((session) => session.id === retainedMenu?.sessionId);
+  useEffect(() => { if (menuOpen && retainedMenu && !target) setMenuOpen(false); }, [menuOpen, retainedMenu, target]);
   const organize = async (session: Session, changes: Partial<Pick<Session, 'pinned' | 'unread'>>) => {
     setOrganizing((current) => new Set(current).add(session.id));
     const focused = document.activeElement;
@@ -115,28 +120,34 @@ export function Sidebar() {
             {items.map((session) => <div role="listitem" key={session.id} className="sitem-row" data-session-id={session.id} onContextMenu={(event) => {
               event.preventDefault();
               const row = event.currentTarget.querySelector<HTMLButtonElement>('.sitem')!;
+              setMenuOpen(true);
               setMenu({ sessionId: session.id, x: event.clientX, y: event.clientY, returnFocus: row });
             }} onKeyDown={(event) => {
               if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;
               event.preventDefault();
               const row = event.currentTarget.querySelector<HTMLButtonElement>('.sitem')!;
               const bounds = row.getBoundingClientRect();
+              setMenuOpen(true);
               setMenu({ sessionId: session.id, x: bounds.left + 24, y: bounds.bottom, returnFocus: event.target as HTMLElement });
             }}>
               <button type="button" className={cx('sitem', session.id === activeSessionId && view === 'workspace' && 'is-active', session.unread && 'is-unread')} onClick={() => selectSession(session.id)} aria-current={session.id === activeSessionId && view === 'workspace' ? 'true' : undefined} aria-label={`${session.name}${session.pinned ? ', pinned' : ''}${session.unread ? ', unread' : ''}`} title={`${session.name} · ${session.model}`}>
                 <span className="sitem__text"><span className="sitem__meta"><span>{project?.name}</span><span>{relativeTime(session.updatedAt, now)}</span></span><strong>{session.unread ? <i className="sitem__unread" aria-hidden="true" /> : null}<span>{session.name}</span></strong></span>
                 <span className="sitem__state">{session.pinned ? <Pin size={11} aria-hidden="true" /> : null}{session.status !== 'idle' ? <StatusDot status={session.status} label={false} /> : null}</span>
               </button>
-              <button type="button" className="sitem__actions" aria-label={`Actions for ${session.name}`} aria-haspopup="menu" aria-expanded={menu?.sessionId === session.id} onClick={(event) => {
+              <button type="button" className="sitem__actions" aria-label={`Actions for ${session.name}`} aria-haspopup="menu" aria-expanded={menuOpen && menu?.sessionId === session.id} onClick={(event) => {
                 const bounds = event.currentTarget.getBoundingClientRect();
-                setMenu(menu?.sessionId === session.id ? null : { sessionId: session.id, x: bounds.right, y: bounds.bottom + 4, returnFocus: event.currentTarget });
+                if (menuOpen && menu?.sessionId === session.id) setMenuOpen(false);
+                else {
+                  setMenu({ sessionId: session.id, x: bounds.right, y: bounds.bottom + 4, returnFocus: event.currentTarget });
+                  setMenuOpen(true);
+                }
               }}><MoreHorizontal size={14} /></button>
             </div>)}
           </div>;
         })}
       </div>
     </div>
-    {menu && target ? <ContextMenu key={`${menu.sessionId}:${menu.x}:${menu.y}`} x={menu.x} y={menu.y} items={menuItems} returnFocus={menu.returnFocus} onClose={() => setMenu(null)} /> : null}
+    {retainedMenu && menuPresent ? <ContextMenu key={menuKey} x={retainedMenu.x} y={retainedMenu.y} items={menuItems} returnFocus={retainedMenu.returnFocus} open={menuOpen} closing={menuClosing} onClose={closeMenu} /> : null}
     <footer className="sidebar__foot">
       <IconButton label="Settings" active={view === 'settings'} onClick={() => useMingle.getState().openSettings()}><Settings size={15} /></IconButton>
       <IconButton label="Workspace" active={view === 'workspace'} onClick={() => setView('workspace')}><LayoutPanelLeft size={15} /></IconButton>
@@ -146,5 +157,7 @@ export function Sidebar() {
       <span className="spacer" />
       <button type="button" className={cx('sidebar__connection', `sidebar__connection--${connection}`)} onClick={() => useMingle.getState().reconnect()} title={`${connectionLabel} to the local server. Click to reconnect.`}><i aria-hidden="true" /><span className="sr-only">{connectionLabel}</span></button>
     </footer>
-  </aside>{removingProject ? <RemoveProjectDialog project={removingProject} onClose={() => setRemovingProject(null)} /> : null}</>;
+  </aside><DialogMotionContext.Provider key={removeKey} value={removeClosing}>
+    {removePresent && retainedProject ? <RemoveProjectDialog project={retainedProject} onClose={() => setRemovingProject(null)} /> : null}
+  </DialogMotionContext.Provider></>;
 }

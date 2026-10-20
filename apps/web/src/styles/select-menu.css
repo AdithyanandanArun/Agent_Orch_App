@@ -1,24 +1,27 @@
 .select-menu__trigger {
   display: inline-flex; align-items: center; justify-content: space-between; gap: 12px;
-  min-width: 0; height: 34px; padding: 0 11px; border: 1px solid var(--line);
+  min-width: 0; height: 36px; padding: 0 11px; border: 1px solid var(--line);
   border-radius: 7px; background: var(--bg-surface); color: var(--fg-0); text-align: left; font-size: 13px;
-  transition: border-color 120ms, background 120ms;
+  transition: border-color var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard);
 }
 .select-menu__trigger > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .select-menu__trigger > svg { flex: none; color: var(--fg-2); }
 .select-menu__trigger:hover:not(:disabled), .select-menu__trigger[aria-expanded='true'] { background: var(--bg-raised); border-color: var(--line-strong); }
+.select-menu__trigger:active:not(:disabled) { transform: translateY(.5px); }
 .select-menu__trigger:disabled { opacity: .45; cursor: not-allowed; }
 .select-menu__trigger:focus-visible { outline: 2px solid var(--blue-line); outline-offset: 2px; }
 .select-menu__popup {
   position: fixed; z-index: 160; width: 250px; max-height: 340px; overflow: auto; padding: 5px;
   border: 1px solid var(--line-strong); border-radius: 11px; background: var(--bg-raised);
-  box-shadow: 0 16px 48px #0005, 0 2px 8px #0003; animation: fade 100ms ease-out;
+  box-shadow: var(--shadow-pop); animation: pop-in var(--motion-overlay) var(--ease-out) both; transform-origin: top center;
 }
+.select-menu__popup.is-closing { pointer-events: none; animation: pop-out var(--motion-overlay) var(--ease-out) both; }
 .select-menu__group { padding: 8px 9px 5px; font-size: 11px; color: var(--fg-2); font-weight: 500; }
 .select-menu__popup > div + div:has(> .select-menu__group) { margin-top: 5px; padding-top: 3px; border-top: 1px solid var(--line); }
 .select-menu__option {
   display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 33px;
   padding: 7px 9px; border-radius: 6px; color: var(--fg-1); font-size: 13px; cursor: pointer; line-height: 1.35;
+  transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard);
 }
 .select-menu__option > span { min-width: 0; overflow-wrap: anywhere; }
 .select-menu__option-copy { display: grid; gap: 2px; }

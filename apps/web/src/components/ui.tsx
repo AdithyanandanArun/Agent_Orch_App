@@ -6,18 +6,21 @@ import { createPortal } from 'react-dom';
 import { AlertTriangle, Check, Loader2, X } from 'lucide-react';
 import type { Provider, SessionStatus } from '@mingle/contracts';
 import { cx } from '../lib/format';
+import { usePresence } from '../lib/motion';
 import { PROVIDER_NAMES } from '../lib/providers';
 import { AntigravityMark } from './AntigravityMark';
 import { OpenCodeMark } from './OpenCodeMark';
 
 /* ——— Brand ——— */
-export function RelayGlyph({ size = 18 }: { size?: number }) {
+export function MingleGlyph({ size = 18 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M6 19V9.5A3.5 3.5 0 0 1 9.5 6H19" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-      <circle cx="6" cy="19" r="2" fill="currentColor" />
-      <circle cx="19" cy="6" r="2" fill="currentColor" />
-      <path d="M11 14.5h4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" opacity=".55" />
+      <path d="M5 18V6l7 7 7-7v12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="5" cy="18" r="1.4" fill="currentColor" />
+      <circle cx="5" cy="6" r="1.4" fill="currentColor" />
+      <circle cx="12" cy="13" r="1.4" fill="currentColor" />
+      <circle cx="19" cy="6" r="1.4" fill="currentColor" />
+      <circle cx="19" cy="18" r="1.4" fill="currentColor" />
     </svg>
   );
 }
@@ -191,6 +194,7 @@ export function Switch({ checked, onChange, label, description, id }: { checked:
 
 /* ——— Modal / sheet ——— */
 const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+export const DialogMotionContext = createContext(false);
 
 export function Modal({ title, description, onClose, children, footer, variant = 'dialog', width, labelledBy }: {
   title: string; description?: ReactNode; onClose: () => void; children: ReactNode; footer?: ReactNode; variant?: 'dialog' | 'sheet' | 'palette'; width?: number; labelledBy?: string;
@@ -198,22 +202,48 @@ export function Modal({ title, description, onClose, children, footer, variant =
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useId();
   const closeRef = useRef(onClose);
+  const previousFocus = useRef<HTMLElement | null>(null);
+  const focusRestored = useRef(false);
+  const wasClosing = useRef(false);
+  const closing = useContext(DialogMotionContext);
   closeRef.current = onClose;
 
   useLayoutEffect(() => {
-    const previous = document.activeElement as HTMLElement | null;
+    previousFocus.current = document.activeElement as HTMLElement | null;
+    focusRestored.current = false;
     const root = ref.current;
     if (root) {
       const auto = root.querySelector<HTMLElement>('[data-autofocus]');
       (auto ?? root.querySelector<HTMLElement>(FOCUSABLE) ?? root).focus({ preventScroll: true });
     }
     return () => {
+      if (focusRestored.current) return;
+      const previous = previousFocus.current;
       if (previous?.isConnected) previous.focus({ preventScroll: true });
       else document.getElementById('main')?.focus({ preventScroll: true });
     };
   }, []);
 
+  useLayoutEffect(() => {
+    if (closing) {
+      wasClosing.current = true;
+      if (focusRestored.current) return;
+      focusRestored.current = true;
+      const previous = previousFocus.current;
+      if (previous?.isConnected) previous.focus({ preventScroll: true });
+      else document.getElementById('main')?.focus({ preventScroll: true });
+      return;
+    }
+    if (!wasClosing.current) return;
+    wasClosing.current = false;
+    focusRestored.current = false;
+    const root = ref.current;
+    const auto = root?.querySelector<HTMLElement>('[data-autofocus]');
+    (auto ?? root?.querySelector<HTMLElement>(FOCUSABLE) ?? root)?.focus({ preventScroll: true });
+  }, [closing]);
+
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (closing) return;
     if (e.key === 'Escape') {
       e.stopPropagation();
       e.preventDefault();
@@ -230,7 +260,8 @@ export function Modal({ title, description, onClose, children, footer, variant =
   };
 
   return createPortal(
-    <div className={cx('scrim', `scrim--${variant}`)} onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className={cx('scrim', `scrim--${variant}`, closing && 'is-closing')} aria-hidden={closing || undefined} inert={closing}
+      onMouseDown={(e) => { if (!closing && e.target === e.currentTarget) onClose(); }}>
       <div
         ref={ref} role="dialog" aria-modal="true" aria-labelledby={labelledBy ?? titleId} tabIndex={-1}
         className={cx('modal', `modal--${variant}`)} style={width ? { width, maxWidth: variant === 'sheet' ? '100vw' : 'calc(100vw - 40px)' } : undefined} onKeyDown={onKeyDown}
@@ -261,6 +292,7 @@ export function Menu({ trigger, children, align = 'start', width }: {
   children: ReactNode; align?: 'start' | 'end'; width?: number;
 }) {
   const [open, setOpen] = useState(false);
+  const { present, closing } = usePresence(open);
   const anchor = useRef<HTMLButtonElement | null>(null);
   const openFromEnd = useRef(false);
   const pop = useRef<HTMLDivElement>(null);
@@ -317,9 +349,9 @@ export function Menu({ trigger, children, align = 'start', width }: {
   return (
     <>
       {trigger({ onClick: () => { openFromEnd.current = false; setOpen((o) => !o); }, onKeyDown: (event) => { if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); openFromEnd.current = event.key === 'ArrowUp'; setOpen(true); } }, 'aria-haspopup': 'menu', 'aria-expanded': open, ref: (el) => { anchor.current = el; } })}
-      {open ? createPortal(
+      {present ? createPortal(
         <MenuContext.Provider value={ctx}>
-          <div ref={pop} role="menu" className="menu" style={pos ?? { visibility: 'hidden' }} onKeyDown={onKey}>{children}</div>
+          <div ref={pop} role="menu" aria-hidden={closing || undefined} inert={closing} className={cx('menu', closing && 'is-closing')} style={pos ?? { visibility: 'hidden' }} onKeyDown={onKey}>{children}</div>
         </MenuContext.Provider>,
         document.body,
       ) : null}

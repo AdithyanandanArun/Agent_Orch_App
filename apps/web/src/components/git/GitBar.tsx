@@ -6,11 +6,12 @@ import { copyText } from '../../lib/clipboard';
 import { cx } from '../../lib/format';
 import { useMingle } from '../../store/store';
 import { useMutationGuard, useRepository, type RepositoryView } from '../../store/repository';
-import { Menu, MenuItem, MenuLabel, MenuSeparator } from '../ui';
+import { DialogMotionContext, Menu, MenuItem, MenuLabel, MenuSeparator } from '../ui';
 import { ActionsStatus } from './ActionsStatus';
 import { CommitDialog, CreateBranchDialog, PullRequestDialog, PushDialog } from './GitDialogs';
 import { Popover } from './Popover';
 import { githubMatches, openExternal, shortSha } from './gitUtil';
+import { useRetainedPresence } from '../../lib/motion';
 
 type DialogKind = 'commit' | 'push' | 'pr' | 'branch';
 
@@ -114,6 +115,7 @@ export function GitBar({ project, session }: { project: Project; session: Sessio
   const guard = useMutationGuard(scope);
   const { repo, repoError, repoLoading, github, githubError, githubLoading } = view.entry;
   const [dialog, setDialog] = useState<DialogKind | null>(null);
+  const { value: activeDialog, present: dialogPresent, closing: dialogClosing, key: dialogKey } = useRetainedPresence(dialog, 160);
   const [copied, setCopied] = useState(false);
 
   const where = session ? (session.isolated ? 'Isolated worktree' : 'Local checkout') : 'Project folder';
@@ -216,16 +218,21 @@ export function GitBar({ project, session }: { project: Project; session: Sessio
   }
 
   const common = repo && repo.isRepo ? { projectId: project.id, sessionId: scope.sessionId, repo, adopt: view.adopt, refresh: view.refresh, blocked: guard, onClose: () => setDialog(null) } : null;
+  const retainedCommon = useRef(common);
+  if (dialog && common) retainedCommon.current = common;
+  const dialogProps = common ?? retainedCommon.current;
   return (
     <div className="gitbar" role="group" aria-label="Repository controls">
       {whereButton}
       {project.isExample ? <span className="gitbar__example" title="This folder belongs to the example workspace">Example</span> : null}
       <span className="gitbar__spacer" />
       {body}
-      {common && dialog === 'commit' ? <CommitDialog {...common} /> : null}
-      {common && dialog === 'push' ? <PushDialog {...common} /> : null}
-      {common && dialog === 'branch' ? <CreateBranchDialog {...common} /> : null}
-      {common && dialog === 'pr' ? <PullRequestDialog {...common} github={github} /> : null}
+      <DialogMotionContext.Provider key={dialogKey} value={dialogClosing}>
+        {dialogPresent && dialogProps && activeDialog === 'commit' ? <CommitDialog {...dialogProps} /> : null}
+        {dialogPresent && dialogProps && activeDialog === 'push' ? <PushDialog {...dialogProps} /> : null}
+        {dialogPresent && dialogProps && activeDialog === 'branch' ? <CreateBranchDialog {...dialogProps} /> : null}
+        {dialogPresent && dialogProps && activeDialog === 'pr' ? <PullRequestDialog {...dialogProps} github={github} /> : null}
+      </DialogMotionContext.Provider>
     </div>
   );
 }

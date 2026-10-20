@@ -9,8 +9,11 @@
   border-radius: 9px;
   background: var(--bg-raised);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.34), 0 2px 6px rgba(0, 0, 0, 0.24);
-  animation: fade 90ms ease-out;
+  animation: pop-in var(--motion-overlay) var(--ease-out) both;
+  transform-origin: top left;
 }
+
+.context-menu.is-closing { pointer-events: none; animation: pop-out var(--motion-overlay) var(--ease-out) both; }
 
 .context-menu--submenu {
   z-index: 121;

@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useRef } from 'react';
+import { Suspense, lazy, useEffect, useRef, type ReactNode } from 'react';
 import { useMingle } from './store/store';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
@@ -10,8 +10,9 @@ import { ArchiveDialog, HandoffDialog, ProjectDialog, RenameDialog, TaskDialog }
 import { ImportDialog } from './components/ImportDialog';
 import { SettingsPage } from './components/Settings';
 import { Palette, ShortcutsDialog } from './components/Palette';
-import { Boundary, Spinner } from './components/ui';
+import { Boundary, DialogMotionContext, Spinner } from './components/ui';
 import { cx } from './lib/format';
+import { useRetainedPresence } from './lib/motion';
 import { AddAgentDialog } from './components/group/AddAgentDialog';
 import { GroupModeDialog, MemberSettingsDialog } from './components/group/GroupDialogs';
 
@@ -19,21 +20,24 @@ const AgentMap = lazy(() => import('./views/AgentMap'));
 
 function Dialogs() {
   const dialog = useMingle((s) => s.dialog);
-  if (!dialog) return null;
-  switch (dialog.kind) {
-    case 'project': return <ProjectDialog />;
-    case 'task': return <TaskDialog />;
-    case 'handoff': return <HandoffDialog taskId={dialog.taskId} fromSessionId={dialog.fromSessionId} />;
-    case 'settings': return null; // Legacy actions route to the Settings page through the store.
-    case 'palette': return <Palette />;
-    case 'rename': return <RenameDialog sessionId={dialog.sessionId} />;
-    case 'archive': return <ArchiveDialog sessionId={dialog.sessionId} />;
-    case 'import': return <ImportDialog />;
-    case 'shortcuts': return <ShortcutsDialog />;
-    case 'add-agent': return <AddAgentDialog sessionId={dialog.sessionId} />;
-    case 'group-mode': return <GroupModeDialog groupId={dialog.groupId} />;
-    case 'member-settings': return <MemberSettingsDialog groupId={dialog.groupId} memberId={dialog.memberId} />;
+  const { value: active, present, closing, key } = useRetainedPresence(dialog, 160);
+  if (!present || !active) return null;
+  let content: ReactNode = null;
+  switch (active.kind) {
+    case 'project': content = <ProjectDialog />; break;
+    case 'task': content = <TaskDialog />; break;
+    case 'handoff': content = <HandoffDialog taskId={active.taskId} fromSessionId={active.fromSessionId} />; break;
+    case 'settings': break; // Legacy actions route to the Settings page through the store.
+    case 'palette': content = <Palette />; break;
+    case 'rename': content = <RenameDialog sessionId={active.sessionId} />; break;
+    case 'archive': content = <ArchiveDialog sessionId={active.sessionId} />; break;
+    case 'import': content = <ImportDialog />; break;
+    case 'shortcuts': content = <ShortcutsDialog />; break;
+    case 'add-agent': content = <AddAgentDialog sessionId={active.sessionId} />; break;
+    case 'group-mode': content = <GroupModeDialog groupId={active.groupId} />; break;
+    case 'member-settings': content = <MemberSettingsDialog groupId={active.groupId} memberId={active.memberId} />; break;
   }
+  return <DialogMotionContext.Provider key={key} value={closing}>{content}</DialogMotionContext.Provider>;
 }
 
 export function App() {

@@ -16,8 +16,8 @@ const isSeparator = (item: ContextMenuEntry): item is Extract<ContextMenuEntry, 
 const enabledIndices = (items: ContextMenuEntry[]): number[] => items.flatMap((item, index) => !isSeparator(item) && !item.disabled ? [index] : []);
 const childrenOf = (item: ContextMenuEntry): ContextMenuEntry[] => !isSeparator(item) ? item.children ?? [] : [];
 
-export function ContextMenu({ x, y, items, onClose, returnFocus }: {
-  x: number; y: number; items: ContextMenuEntry[]; onClose: () => void; returnFocus?: HTMLElement | null;
+export function ContextMenu({ x, y, items, onClose, returnFocus, open = true, closing = false }: {
+  x: number; y: number; items: ContextMenuEntry[]; onClose: () => void; returnFocus?: HTMLElement | null; open?: boolean; closing?: boolean;
 }) {
   const root = useRef<HTMLDivElement>(null);
   const submenu = useRef<HTMLDivElement>(null);
@@ -65,18 +65,19 @@ export function ContextMenu({ x, y, items, onClose, returnFocus }: {
   };
 
   useLayoutEffect(() => {
+    if (!open) return;
     const element = root.current;
     if (!element) return;
     const rect = element.getBoundingClientRect();
     const left = Math.max(8, Math.min(x, window.innerWidth - rect.width - 8));
     const top = Math.max(8, Math.min(y, window.innerHeight - rect.height - 8));
     setRootPoint({ left, top });
-  }, []);
+  }, [open, x, y]);
 
   // Hidden controls cannot receive focus until their measured position has rendered.
   useLayoutEffect(() => {
-    if (rootPoint && activeIndex >= 0) mainButtons.current[activeIndex]?.focus();
-  }, [rootPoint]);
+    if (open && rootPoint && activeIndex >= 0) mainButtons.current[activeIndex]?.focus();
+  }, [open, rootPoint]);
 
   useLayoutEffect(() => {
     if (submenuIndex === null || !submenu.current) return;
@@ -92,6 +93,7 @@ export function ContextMenu({ x, y, items, onClose, returnFocus }: {
   }, [submenuIndex, rootPoint]);
 
   useEffect(() => {
+    if (!open) return;
     const outside = (event: PointerEvent): void => {
       const target = event.target as Node;
       if (!root.current?.contains(target) && !submenu.current?.contains(target)) close(false);
@@ -116,7 +118,7 @@ export function ContextMenu({ x, y, items, onClose, returnFocus }: {
       window.removeEventListener('resize', onViewportChange);
       window.removeEventListener('scroll', onScroll, true);
     };
-  }, [onClose, returnFocus]);
+  }, [open, onClose, returnFocus]);
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
     const inSubmenu = Boolean(submenu.current?.contains(event.target as Node));
@@ -233,11 +235,11 @@ export function ContextMenu({ x, y, items, onClose, returnFocus }: {
 
   return createPortal(
     <>
-      <div ref={root} role="menu" aria-label="Session actions" className="menu context-menu" style={rootStyle} onKeyDown={onKeyDown}>
+      <div ref={root} role="menu" aria-label="Session actions" aria-hidden={closing || undefined} inert={closing} className={cx('menu context-menu', closing && 'is-closing')} style={rootStyle} onKeyDown={onKeyDown}>
         {items.map((item, index) => renderEntry(item, index, false))}
       </div>
       {submenuIndex !== null ? (
-        <div ref={submenu} role="menu" aria-label={`${submenuLabel} options`} className="menu context-menu context-menu--submenu" style={submenuStyle}
+        <div ref={submenu} role="menu" aria-label={`${submenuLabel} options`} aria-hidden={closing || undefined} inert={closing} className={cx('menu context-menu context-menu--submenu', closing && 'is-closing')} style={submenuStyle}
           onKeyDown={(event) => { event.stopPropagation(); onKeyDown(event); }}>
           {childrenOf(items[submenuIndex]!).map((item, index) => renderEntry(item, index, true))}
         </div>

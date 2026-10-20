@@ -2,8 +2,9 @@ import { useState } from 'react';
 import type { Project } from '@mingle/contracts';
 import { useMingle } from '../store/store';
 import { api, errorMessage } from '../lib/api';
-import { Button, InlineError, Modal } from './ui';
+import { Button, DialogMotionContext, InlineError, Modal } from './ui';
 import '../styles/project-removal.css';
+import { useRetainedPresence } from '../lib/motion';
 
 export function RemoveProjectDialog({ project, onClose }: { project: Project; onClose: () => void }) {
   const [busy, setBusy] = useState(false);
@@ -35,9 +36,12 @@ export function RemoveProjectDialog({ project, onClose }: { project: Project; on
 
 export function RemoveProjectButton({ project }: { project: Project }) {
   const [open, setOpen] = useState(false);
+  const { value: retainedProject, present, closing, key } = useRetainedPresence(open ? project : null, 160);
   const online = useMingle((state) => state.connection === 'online');
   return <>
     <Button size="sm" variant="ghost" disabled={!online} onClick={() => setOpen(true)}>Remove project…</Button>
-    {open ? <RemoveProjectDialog project={project} onClose={() => setOpen(false)} /> : null}
+    <DialogMotionContext.Provider key={key} value={closing}>
+      {present && retainedProject ? <RemoveProjectDialog project={retainedProject} onClose={() => setOpen(false)} /> : null}
+    </DialogMotionContext.Provider>
   </>;
 }

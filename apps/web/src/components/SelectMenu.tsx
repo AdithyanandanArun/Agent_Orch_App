@@ -2,6 +2,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent
 import { createPortal } from 'react-dom';
 import { Check, ChevronDown } from 'lucide-react';
 import { cx } from '../lib/format';
+import { usePresence } from '../lib/motion';
 
 export interface SelectOption { value: string; label: string; group?: string; description?: string; badge?: string; disabled?: boolean }
 
@@ -22,6 +23,7 @@ export function SelectMenu({ id, label, value, onChange, options, disabled, clas
   const selected = options.find((option) => option.value === value);
   const enabled = options.map((option, index) => option.disabled ? -1 : index).filter((index) => index >= 0);
   const effectiveOpen = open && !disabled;
+  const { present, closing } = usePresence(effectiveOpen);
 
   const show = (fromEnd = false) => {
     if (disabled || enabled.length === 0) return;
@@ -116,8 +118,8 @@ export function SelectMenu({ id, label, value, onChange, options, disabled, clas
       onClick={() => effectiveOpen ? setOpen(false) : show()}>
       <span>{displayValue ?? selected?.label ?? value}</span><ChevronDown size={12} aria-hidden="true" />
     </button>
-    {effectiveOpen ? createPortal(
-      <div ref={popup} id={listId} role="listbox" aria-label={label} aria-multiselectable={selectedValues ? true : undefined} className="select-menu__popup"
+     {present ? createPortal(
+      <div ref={popup} id={listId} role="listbox" aria-label={label} aria-hidden={closing || undefined} inert={closing} aria-multiselectable={selectedValues ? true : undefined} className={cx('select-menu__popup', closing && 'is-closing')}
         style={position ?? { visibility: 'hidden' }} onMouseDown={(event) => event.preventDefault()}>
         {options.map((option, index) => <div key={option.value} role="presentation">
           {option.group && (index === 0 || options[index - 1]?.group !== option.group) ? <div className="select-menu__group" role="presentation">{option.group}</div> : null}

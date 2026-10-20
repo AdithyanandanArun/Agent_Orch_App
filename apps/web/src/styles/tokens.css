@@ -145,7 +145,13 @@
   --context-w: 340px;
   --header-h: 42px;
 
-  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
-  --dur-fast: 120ms;
-  --dur: 200ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-standard: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --motion-fast: 120ms;
+  --motion-ui: 180ms;
+  --motion-overlay: 160ms;
+  --motion-panel: 260ms;
+  --ease: var(--ease-out);
+  --dur-fast: var(--motion-fast);
+  --dur: var(--motion-ui);
 }

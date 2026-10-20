@@ -1,6 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { cx } from '../../lib/format';
+import { usePresence } from '../../lib/motion';
 
 interface Placement { left: number; top: number; width: number; maxHeight: number }
 
@@ -17,9 +18,10 @@ export function Popover({ anchor, open, onClose, label, children, width = 320, a
   closeRef.current = onClose;
   const [place, setPlace] = useState<Placement | null>(null);
   const id = useId();
+  const { present, closing } = usePresence(open);
 
   useLayoutEffect(() => {
-    if (!open) { setPlace(null); return; }
+    if (!open) return;
     const anchorEl = anchor.current;
     const pop = ref.current;
     if (!anchorEl || !pop) return;
@@ -62,7 +64,7 @@ export function Popover({ anchor, open, onClose, label, children, width = 320, a
     };
   }, [open, anchor]);
 
-  if (!open) return null;
+  if (!present) return null;
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Escape') {
       event.stopPropagation();
@@ -73,7 +75,7 @@ export function Popover({ anchor, open, onClose, label, children, width = 320, a
   };
   return createPortal(
     <div
-      ref={ref} id={id} role="dialog" aria-label={label} tabIndex={-1} className={cx('popover', className)}
+      ref={ref} id={id} role="dialog" aria-label={label} aria-hidden={closing || undefined} inert={closing} tabIndex={-1} className={cx('popover', className, closing && 'is-closing')}
       style={place ?? { visibility: 'hidden' }} onKeyDown={onKeyDown}
       onBlur={(event) => {
         const next = event.relatedTarget as Node | null;

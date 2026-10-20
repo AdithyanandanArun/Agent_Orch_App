@@ -29,8 +29,24 @@ code, pre, kbd, samp { font-family: var(--font-mono); }
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes slide-in { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes fade-up { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes pop-in { from { opacity: 0; transform: translateY(4px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes pop-out { to { opacity: 0; transform: translateY(3px) scale(.985); } }
+@keyframes fade-out { to { opacity: 0; } }
+@keyframes slide-out-right { to { opacity: 0; transform: translateX(8px); } }
 .spin { animation: spin 0.9s linear infinite; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}
+
+@supports (interpolate-size: allow-keywords) and selector(details::details-content) {
+  details { interpolate-size: allow-keywords; }
+  details:not(.composer__details)::details-content {
+    block-size: 0;
+    overflow: clip;
+    opacity: 0;
+    transition: block-size var(--motion-ui) var(--ease-out), opacity var(--motion-fast) var(--ease-standard), content-visibility var(--motion-ui) allow-discrete;
+  }
+  details:not(.composer__details)[open]::details-content { block-size: auto; opacity: 1; }
 }
