@@ -16,6 +16,7 @@ type CreateSession = z.infer<typeof CreateSessionSchema>;
 
 /** Project and session lifecycle: canonical paths, worktree isolation, archival. */
 export class WorkspaceService {
+  private readonly preparing = new Map<string, number>();
   constructor(private readonly store: Store, private readonly dataDir: string, private readonly runtime: RuntimeLike,
     private readonly getProviders: () => ProviderInfo[] | null = () => null) {}
 
@@ -67,6 +68,7 @@ export class WorkspaceService {
   removeProject(id: string): string[] {
     const project = this.store.getProject(id);
     if (!project) throw notFound('Project not found');
+    if ((this.preparing.get(id) ?? 0) > 0) throw conflict('Wait for session creation to finish before removing this project.');
     const sessions = this.store.listSessions(id);
     if (sessions.some((session) => this.runtime.isActive(session.id) || session.status === 'running' || session.status === 'waiting')) {
       throw conflict('Stop the project’s agents before removing it.');
@@ -75,7 +77,7 @@ export class WorkspaceService {
     if (dispatching) throw conflict('Stop the project’s team work before removing it.');
     this.store.tx(() => {
       this.store.removeProject(id);
-      this.store.recordEvent({ type: 'project.removed', summary: `Project removed from Relay: ${project.name}`, payload: { projectId: id, filesKept: true } });
+      this.store.recordEvent({ projectId: id, type: 'project.removed', summary: `Project removed from Relay: ${project.name}`, payload: { projectId: id, filesKept: true } });
     });
     return sessions.map((session) => session.id);
   }
@@ -83,6 +85,16 @@ export class WorkspaceService {
   async createSession(input: CreateSession): Promise<Session> {
     const project = this.store.getProject(input.projectId);
     if (!project) throw notFound('Project not found');
+    this.preparing.set(project.id, (this.preparing.get(project.id) ?? 0) + 1);
+    try { return await this.prepareSession(input, project); }
+    finally {
+      const remaining = (this.preparing.get(project.id) ?? 1) - 1;
+      if (remaining > 0) this.preparing.set(project.id, remaining);
+      else this.preparing.delete(project.id);
+    }
+  }
+
+  private async prepareSession(input: CreateSession, project: Project): Promise<Session> {
     const settings = this.store.getSettings();
     const provider = input.provider ?? settings.defaultProvider;
     const model = input.model ?? defaultModel(provider, settings);

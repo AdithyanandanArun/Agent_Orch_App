@@ -197,7 +197,7 @@ export class ProjectIntelligenceService {
     } catch (error) {
       return this.recordScanFailure(project, previous, error);
     }
-    if (this.closed) return previous ?? this.placeholderFor(undefined);
+    if (this.closed || !this.store.getProject(projectId)) return previous ?? this.placeholderFor(undefined);
 
     let sync: RepoSyncSummary | null = null;
     const notices = [...result.context.notices];
@@ -231,7 +231,7 @@ export class ProjectIntelligenceService {
 
   private recordScanFailure(project: Project, previous: ProjectContext | undefined, error: unknown): ProjectContext {
     const message = redactSecrets(errorMessage(error)).slice(0, 300);
-    if (this.closed) return previous ?? this.placeholderFor(undefined);
+    if (this.closed || !this.store.getProject(project.id)) return previous ?? this.placeholderFor(undefined);
     const base = previous ?? this.placeholderFor(project, 'error');
     const context: ProjectContext = { ...base, projectId: project.id, root: project.path, status: 'error', error: message, taskCount: this.ops.sourcedCount(project.id) };
     if (previous?.status !== 'error' || previous.error !== message) {
@@ -246,6 +246,15 @@ export class ProjectIntelligenceService {
   private onEvent(event: WorkspaceEvent | undefined): void {
     if (this.closed || !event?.projectId) return;
     const { type } = event;
+    if (type === 'project.removed') {
+      const pending = this.debounce.get(event.projectId);
+      if (pending) clearTimeout(pending.timer);
+      this.debounce.delete(event.projectId);
+      const state = this.states.get(event.projectId);
+      state?.next?.resolve(this.placeholderFor(undefined));
+      if (state) state.next = null;
+      return;
+    }
     // Never react to our own output: that would turn every scan into the trigger for the next one.
     if (type.startsWith('project.context.') || type.startsWith('task.auto.')) return;
     if (type === 'project.created' || type === 'project.restored' || type.startsWith('repository.')) return this.schedule(event.projectId);
