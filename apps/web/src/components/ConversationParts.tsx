@@ -1,7 +1,7 @@
 import { memo, useState, type ReactNode } from 'react';
 import { ChevronRight, ShieldAlert, Terminal, Info } from 'lucide-react';
 import type { Approval, Provider } from '@mingle/contracts';
-import { useRelay } from '../store/store';
+import { useMingle } from '../store/store';
 import { api, errorMessage } from '../lib/api';
 import { clockTime, cx } from '../lib/format';
 import { ROLE_LABEL } from '../lib/groups';
@@ -105,10 +105,10 @@ export function ApprovalCard({ approval, speaker, provider }: { approval: Approv
     setBusy(decision);
     try {
       await api.decideApproval(approval.id, decision);
-      await useRelay.getState().refreshNow();
+      await useMingle.getState().refreshNow();
     } catch (e) {
-      useRelay.getState().toast('error', `Approval failed: ${errorMessage(e)}`);
-      void useRelay.getState().refreshNow();
+      useMingle.getState().toast('error', `Approval failed: ${errorMessage(e)}`);
+      void useMingle.getState().refreshNow();
     } finally {
       setBusy(null);
     }

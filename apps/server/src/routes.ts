@@ -414,7 +414,7 @@ export function buildRouter(s: Services) {
   add('GET', '/api/providers/antigravity/auth', () => antigravityAuthState(s.config.dataDir, s.store.getSettings()));
   add('POST', '/api/providers/antigravity/auth', async (ctx) => {
     const body = await ctx.body(z.object({ refresh: z.boolean().optional() }).strict());
-    if (s.setupSignal.aborted) throw new HttpError(503, 'Relay is shutting down.');
+    if (s.setupSignal.aborted) throw new HttpError(503, 'Mingle is shutting down.');
     return startAntigravityAuth(s.config.dataDir, s.store.getSettings(), () => {
       s.providers.invalidate();
       touch();
@@ -424,7 +424,7 @@ export function buildRouter(s: Services) {
   add('GET', '/api/providers/antigravity/install', () => antigravityInstallState(s.config.dataDir));
   add('POST', '/api/providers/antigravity/install', async (ctx) => {
     await ctx.body(z.object({}).strict());
-    if (s.setupSignal.aborted) throw new HttpError(503, 'Relay is shutting down.');
+    if (s.setupSignal.aborted) throw new HttpError(503, 'Mingle is shutting down.');
     const previousExecutable = s.store.getSettings().antigravityExecutable;
     return startAntigravityInstall(s.config.dataDir, (executable) => {
       s.store.tx(() => {

@@ -1,7 +1,7 @@
 import type { CSSProperties } from 'react';
 import type { Provider } from '@mingle/contracts';
 import { cx } from '../../lib/format';
-import { useRelay } from '../../store/store';
+import { useMingle } from '../../store/store';
 import { previewAgentColor, recordedAgentColor } from '../../lib/agentColors';
 import { PROVIDER_NAMES } from '../../lib/providers';
 import { AntigravityMark } from '../AntigravityMark';
@@ -29,10 +29,10 @@ function ProviderLogo({ provider }: { provider: Provider }) {
 export function AgentIdentity({
   handle, identityKey, provider, role, removed = false, className, prefix = true,
 }: { handle: string; identityKey: string; provider?: Provider | null; role?: string; removed?: boolean; className?: string; prefix?: boolean }) {
-  const group = useRelay((state) => state.boot?.groups?.find((snapshot) => snapshot.members.some((member) => member.sessionId === identityKey || member.id === identityKey)));
+  const group = useMingle((state) => state.boot?.groups?.find((snapshot) => snapshot.members.some((member) => member.sessionId === identityKey || member.id === identityKey)));
   const member = group?.members.find((entry) => entry.sessionId === identityKey || entry.id === identityKey);
   const sessionId = member?.sessionId ?? identityKey;
-  const recordedProvider = useRelay((state) => state.boot?.sessions.find((session) => session.id === sessionId)?.provider);
+  const recordedProvider = useMingle((state) => state.boot?.sessions.find((session) => session.id === sessionId)?.provider);
   const effectiveProvider = recordedProvider ?? provider;
   const color = recordedAgentColor(group, sessionId) ?? previewAgentColor(identityKey);
   return (

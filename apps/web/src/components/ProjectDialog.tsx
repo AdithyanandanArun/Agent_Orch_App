@@ -3,7 +3,7 @@ import { ArrowLeft, ArrowUp, ChevronRight, Eye, EyeOff, Folder, FolderPlus, GitB
 import type { DirectoryListing, LocalDirectory, Project } from '@mingle/contracts';
 import { api, errorMessage } from '../lib/api';
 import { basename } from '../lib/format';
-import { useRelay } from '../store/store';
+import { useMingle } from '../store/store';
 import { Button, InlineError, Modal } from './ui';
 
 type PickerView = 'sources' | 'local' | 'new' | 'clone';
@@ -15,7 +15,7 @@ const SOURCES: Source[] = [
 ];
 
 export function ProjectDialog() {
-  const closeDialog = useRelay.getState().closeDialog;
+  const closeDialog = useMingle.getState().closeDialog;
   const [view, setView] = useState<PickerView>('sources');
   const [sourceSearch, setSourceSearch] = useState('');
   const [sourceActive, setSourceActive] = useState(0);
@@ -159,15 +159,15 @@ export function ProjectDialog() {
   };
 
   const selectProject = async (project: Project) => {
-    await useRelay.getState().refreshNow();
-    useRelay.setState((current) => current.boot ? ({
+    await useMingle.getState().refreshNow();
+    useMingle.setState((current) => current.boot ? ({
       boot: {
         ...current.boot,
         projects: current.boot.projects.some((item) => item.id === project.id) ? current.boot.projects : [...current.boot.projects, project],
       },
     }) : current);
-    useRelay.getState().selectProject(project.id);
-    useRelay.getState().toast('success', `${view === 'clone' ? 'Cloned' : view === 'new' ? 'Created' : 'Opened'} ${project.name}`);
+    useMingle.getState().selectProject(project.id);
+    useMingle.getState().toast('success', `${view === 'clone' ? 'Cloned' : view === 'new' ? 'Created' : 'Opened'} ${project.name}`);
     closeDialog();
   };
 

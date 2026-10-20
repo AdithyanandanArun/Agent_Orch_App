@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import type { AppSettings, Project, ProviderInfo, ProviderModel } from '@mingle/contracts';
-import { useRelay, type SettingsSection } from '../store/store';
+import { useMingle, type SettingsSection } from '../store/store';
 import { api, errorMessage } from '../lib/api';
 import { Button, InlineError } from './ui';
 import { copyText } from '../lib/clipboard';
@@ -33,18 +33,18 @@ function ProviderStatus({ provider, settings, disabled, onSavePath }: { provider
 }
 
 export function SettingsPage() {
-  const boot = useRelay((s) => s.boot);
+  const boot = useMingle((s) => s.boot);
   const settings = boot?.settings;
-  const category = useRelay((s) => s.settingsSection);
-  const projectId = useRelay((s) => s.settingsProjectId ?? s.activeProjectId);
+  const category = useMingle((s) => s.settingsSection);
+  const projectId = useMingle((s) => s.settingsProjectId ?? s.activeProjectId);
   const project = boot?.projects.find((item) => item.id === projectId);
-  const setCategory = useRelay.getState().setSettingsSection;
+  const setCategory = useMingle.getState().setSettingsSection;
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
   const refreshAntigravityAfterInstall = useCallback(async () => {
-    await useRelay.getState().refreshNow();
+    await useMingle.getState().refreshNow();
   }, []);
 
   if (!settings || !boot) return null;
@@ -52,7 +52,7 @@ export function SettingsPage() {
     setBusy(key); setError(null);
     try {
       await api.updateSettings(patch);
-      await useRelay.getState().refreshNow();
+      await useMingle.getState().refreshNow();
       setSaved(true);
       return true;
     } catch (cause) { setError(errorMessage(cause)); return false; }
@@ -60,7 +60,7 @@ export function SettingsPage() {
   };
   const refreshProviders = async () => {
     setBusy('providers'); setError(null);
-    try { await api.refreshProviders(); await useRelay.getState().refreshNow(); }
+    try { await api.refreshProviders(); await useMingle.getState().refreshNow(); }
     catch (cause) { setError(errorMessage(cause)); }
     finally { setBusy(null); }
   };
@@ -178,7 +178,7 @@ function AutoCompactSetting({ settings, disabled, update }: { settings: AppSetti
   const [draft, setDraft] = useState(saved === null ? '' : String(saved));
   useEffect(() => { setMode(saved === null ? 'default' : 'custom'); setDraft(saved === null ? '' : String(saved)); }, [saved]);
   const value = Number(draft);
-  const valid = draft.trimrim() !== '' && Number.isInteger(value) && value >= COMPACT_MIN && value <= COMPACT_MAX;
+  const valid = draft.trim() !== '' && Number.isInteger(value) && value >= COMPACT_MIN && value <= COMPACT_MAX;
   const dirty = mode === 'custom' && valid && value !== saved;
   const save = () => { if (dirty) void update({ autoCompactPercent: value }, 'compact'); };
   return <>
@@ -210,13 +210,13 @@ function ProjectSettings({ project }: { project: Project }) {
     setBusy(true); setError(null);
     try {
       await api.renameProject(project.id, name.trim());
-      await useRelay.getState().refreshNow();
-      useRelay.getState().toast('success', 'Project name saved.');
+      await useMingle.getState().refreshNow();
+      useMingle.getState().toast('success', 'Project name saved.');
     } catch (cause) { setError(errorMessage(cause)); }
     finally { setBusy(false); }
   };
   const copyPath = async () => {
-    try { await copyText(project.path); useRelay.getState().toast('success', 'Project path copied.'); }
+    try { await copyText(project.path); useMingle.getState().toast('success', 'Project path copied.'); }
     catch (cause) { setError(errorMessage(cause)); }
   };
   return <section className="settings-page__section" aria-labelledby="project-settings-title">

@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { ChevronRight, FileCode2, GitBranch, RefreshCw } from 'lucide-react';
 import type { GitStatus } from '@mingle/contracts';
 import { api, errorMessage } from '../../lib/api';
-import { useActiveSession, useRelay } from '../../store/store';
+import { useActiveSession, useMingle } from '../../store/store';
 import { useEditor } from '../../store/editor';
 import { parseDiff, type DiffFile } from '../../lib/diff';
 import { cx } from '../../lib/format';
@@ -28,7 +28,7 @@ const DiffBlock = memo(function DiffBlock({ file, projectId, sessionId }: { file
           <span className="diff__path" title={file.path}>{file.path}</span>
         </button>
         <span className="diff__stat"><b className="add">+{file.adds}</b> <b className="del">−{file.dels}</b></span>
-        <IconButton label={`Open ${file.path} in editor`} onClick={() => { useRelay.getState().setView('workspace'); useEditor.getState().open(projectId, sessionId, file.path); }}><FileCode2 size={13} /></IconButton>
+        <IconButton label={`Open ${file.path} in editor`} onClick={() => { useMingle.getState().setView('workspace'); useEditor.getState().open(projectId, sessionId, file.path); }}><FileCode2 size={13} /></IconButton>
       </header>
       {open ? (
         <div className="diff__body" role="table" aria-label={`Diff for ${file.path}`}>

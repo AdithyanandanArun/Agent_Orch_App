@@ -2,7 +2,7 @@ import { Copy, ExternalLink, RefreshCw } from 'lucide-react';
 import type { BrowserDiscovery } from '@mingle/contracts';
 import { copyText } from '../../lib/clipboard';
 import { errorMessage } from '../../lib/api';
-import { useRelay } from '../../store/store';
+import { useMingle } from '../../store/store';
 import { Button } from '../ui';
 import { SelectMenu } from '../SelectMenu';
 
@@ -13,8 +13,8 @@ const CHROME_DOCS_URL = 'https://developer.chrome.com/docs/devtools/agents/use-c
 export function ChromeSetupHelp({ open }: { open?: boolean }) {
   const copy = () => {
     copyText(CHROME_INSPECT_URL)
-      .then(() => useRelay.getState().toast('success', 'Address copied. Paste it into your browser’s address bar.'))
-      .catch((cause) => useRelay.getState().toast('error', errorMessage(cause)));
+      .then(() => useMingle.getState().toast('success', 'Address copied. Paste it into your browser’s address bar.'))
+      .catch((cause) => useMingle.getState().toast('error', errorMessage(cause)));
   };
   return (
     <details className="browser-help" open={open}>

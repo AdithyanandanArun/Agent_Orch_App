@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowDown, ArrowRight, FolderPlus } from 'lucide-react';
 import type { GroupDelivery, GroupSnapshot, Message, Session, SessionRun, Task, ToolCall } from '@mingle/contracts';
-import { useRelay, useProject } from '../../store/store';
+import { useMingle, useProject } from '../../store/store';
 import { clockTime, cx } from '../../lib/format';
 import { DELIVERY_LABEL, activeMembers } from '../../lib/groups';
 import {
@@ -64,8 +64,8 @@ function Handles({ speakersList, sessions }: { speakersList: Speaker[]; sessions
 
 function GroupMessageRow({ item, snapshot }: { item: GroupItem; snapshot: GroupSnapshot }) {
   const { message, sender, recipients, deliveries } = item;
-  const tasks = useRelay((s) => s.boot?.tasks);
-  const sessions = useRelay((s) => s.boot?.sessions ?? NO_SESSIONS);
+  const tasks = useMingle((s) => s.boot?.tasks);
+  const sessions = useMingle((s) => s.boot?.sessions ?? NO_SESSIONS);
   const providerOf = (speaker: Speaker) => sessions.find((session) => session.id === speaker.sessionId)?.provider;
   const time = message.createdAt ? <time className="msg__time" dateTime={message.createdAt} title={clockTime(message.createdAt)}>{clockTime(message.createdAt)}</time> : null;
   if (message.kind === 'user') {
@@ -114,7 +114,7 @@ function GroupMessageRow({ item, snapshot }: { item: GroupItem; snapshot: GroupS
           return (
             <div key={assignment.id} className="group-card__meta">
               {assignment.scope.length ? <ul aria-label="Edit scope">{assignment.scope.map((path) => <li key={path}><code>{path}</code></li>)}</ul> : null}
-              <button type="button" className="link-btn" onClick={() => { const store = useRelay.getState(); store.selectTask(assignment.taskId); store.setView('tasks'); }}>{task ? `Open task: ${task.title}` : 'Open task'}</button>
+              <button type="button" className="link-btn" onClick={() => { const store = useMingle.getState(); store.selectTask(assignment.taskId); store.setView('tasks'); }}>{task ? `Open task: ${task.title}` : 'Open task'}</button>
             </div>
           );
         })}
@@ -137,17 +137,17 @@ function GroupMessageRow({ item, snapshot }: { item: GroupItem; snapshot: GroupS
 
 export function GroupConversation({ snapshot }: { snapshot: GroupSnapshot }) {
   const project = useProject();
-  const sessions = useRelay((s) => s.boot?.sessions ?? NO_SESSIONS);
-  const tasks = useRelay((s) => s.boot?.tasks ?? NO_TASKS);
-  const messages = useRelay((s) => s.boot?.messages ?? NO_MESSAGES);
-  const streams = useRelay((s) => s.streams);
-  const allRuns = useRelay((s) => s.boot?.runs ?? NO_RUNS);
-  const allCalls = useRelay((s) => s.boot?.toolCalls ?? NO_CALLS);
-  const approvals = useRelay((s) => s.boot?.approvals);
-  const providers = useRelay((s) => s.boot?.providers ?? []);
-  const connection = useRelay((s) => s.connection);
-  const contextOpen = useRelay((s) => s.contextOpen);
-  const creating = useRelay((s) => s.creatingSession);
+  const sessions = useMingle((s) => s.boot?.sessions ?? NO_SESSIONS);
+  const tasks = useMingle((s) => s.boot?.tasks ?? NO_TASKS);
+  const messages = useMingle((s) => s.boot?.messages ?? NO_MESSAGES);
+  const streams = useMingle((s) => s.streams);
+  const allRuns = useMingle((s) => s.boot?.runs ?? NO_RUNS);
+  const allCalls = useMingle((s) => s.boot?.toolCalls ?? NO_CALLS);
+  const approvals = useMingle((s) => s.boot?.approvals);
+  const providers = useMingle((s) => s.boot?.providers ?? []);
+  const connection = useMingle((s) => s.connection);
+  const contextOpen = useMingle((s) => s.contextOpen);
+  const creating = useMingle((s) => s.creatingSession);
   const [membersOpen, setMembersOpen] = useState(false);
   const anchor = sessions.find((session) => session.id === snapshot.group.anchorSessionId);
   const members = useMemo(() => activeMembers(snapshot), [snapshot]);
@@ -175,7 +175,7 @@ export function GroupConversation({ snapshot }: { snapshot: GroupSnapshot }) {
 
   if (!project || !anchor) {
     return (
-      <EmptyState icon={<FolderPlus size={20} />} title="Group unavailable" action={<Button variant="primary" disabled={creating} onClick={() => void useRelay.getState().createSession()}>New session</Button>}>
+      <EmptyState icon={<FolderPlus size={20} />} title="Group unavailable" action={<Button variant="primary" disabled={creating} onClick={() => void useMingle.getState().createSession()}>New session</Button>}>
         This group’s anchor session could not be found. Select another session from the sidebar.
       </EmptyState>
     );

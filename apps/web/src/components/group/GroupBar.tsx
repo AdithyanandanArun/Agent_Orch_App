@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { Pause, Play, Square, Users } from 'lucide-react';
 import type { GroupSnapshot } from '@mingle/contracts';
-import { useRelay } from '../../store/store';
+import { useMingle } from '../../store/store';
 import { pauseGroup, resumeGroup, stopGroup } from '../../lib/groupActions';
 import { MODE_LABEL, activeMembers, isBusy } from '../../lib/groups';
 import { Button } from '../ui';
@@ -9,9 +9,9 @@ import { MembersPopover } from './MembersPopover';
 import { AgentIdentity } from './AgentIdentity';
 
 export function GroupBar({ snapshot, membersOpen, setMembersOpen }: { snapshot: GroupSnapshot; membersOpen: boolean; setMembersOpen: (open: boolean) => void }) {
-  const sessions = useRelay((s) => s.boot?.sessions);
-  const approvals = useRelay((s) => s.boot?.approvals);
-  const connection = useRelay((s) => s.connection);
+  const sessions = useMingle((s) => s.boot?.sessions);
+  const approvals = useMingle((s) => s.boot?.approvals);
+  const connection = useMingle((s) => s.connection);
   const trigger = useRef<HTMLButtonElement>(null);
   const [busy, setBusy] = useState<'pause' | 'stop' | null>(null);
   const { group } = snapshot;

@@ -107,7 +107,7 @@ export class TaskService {
 
   buildPrompt(task: Task): string {
     const deps = task.dependsOn.map((dep) => this.store.getTask(dep)).filter((t): t is Task => Boolean(t));
-    const lines = [`You have been assigned a Relay task. Work in your current worktree and do not merge or push.`, '', `Task: ${task.title}`];
+    const lines = [`You have been assigned a Mingle task. Work in your current worktree and do not merge or push.`, '', `Task: ${task.title}`];
     if (task.description.trim()) lines.push('', 'Description:', task.description.trim());
     if (task.acceptanceCriteria.trim()) lines.push('', 'Acceptance criteria:', task.acceptanceCriteria.trim());
     if (deps.length) lines.push('', 'Completed prerequisite tasks:', ...deps.map((d) => `- ${d.title}`));

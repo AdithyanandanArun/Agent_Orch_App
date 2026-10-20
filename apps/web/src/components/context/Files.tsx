@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 're
 import { ChevronRight, File as FileIcon, Folder, FolderOpen, RefreshCw } from 'lucide-react';
 import type { FileEntry } from '@mingle/contracts';
 import { api, errorMessage } from '../../lib/api';
-import { useRelay, useActiveSession } from '../../store/store';
+import { useMingle, useActiveSession } from '../../store/store';
 import { useEditor } from '../../store/editor';
 import { cx } from '../../lib/format';
 import { EmptyState, IconButton, InlineError, Spinner } from '../ui';
@@ -16,7 +16,7 @@ function Tree({ projectId, sessionId, active }: { projectId: string; sessionId: 
   const rootRef = useRef<HTMLDivElement>(null);
   const rev = useActiveSession()?.updatedAt;
   const editorTabs = useEditor((s) => s.tabs);
-  const centerTab = useRelay((s) => s.centerTab);
+  const centerTab = useMingle((s) => s.centerTab);
   const currentKey = editorTabs.find((t) => t.key === centerTab);
 
   const load = useCallback(async (dir: string) => {
@@ -73,7 +73,7 @@ function Tree({ projectId, sessionId, active }: { projectId: string; sessionId: 
                 style={{ paddingLeft: 8 + depth * 14 }} title={entry.path}
                 onClick={() => {
                   if (isDir) toggle(entry.path);
-                  else { useRelay.getState().setView('workspace'); useEditor.getState().open(projectId, sessionId, entry.path); }
+                  else { useMingle.getState().setView('workspace'); useEditor.getState().open(projectId, sessionId, entry.path); }
                 }}
               >
                 {isDir ? <ChevronRight size={12} className={cx('trow__chev', expanded && 'is-open')} aria-hidden="true" /> : <span className="trow__chev" />}

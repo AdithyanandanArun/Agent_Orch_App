@@ -50,7 +50,7 @@ export function currentValue(response: unknown, id: ConfigId): string | null {
  * literally called `none` (an OpenAI reasoning level) is exposed as `variant-none`. Matching at run time recomputes this
  * mapping from the live native options, never from stored copies.
  */
-export function relayEffortId(native: string): string | null {
+export function mingleEffortId(native: string): string | null {
   if (native === NATIVE_VARIANT_DEFAULT) return null;
   if (native === 'none') return 'variant-none';
   if (/^[a-z][a-z0-9_-]{0,39}$/.test(native)) return native;
@@ -64,7 +64,7 @@ export function nativeEfforts(response: unknown): NativeEffort[] {
   const seen = new Set<string>();
   const output: NativeEffort[] = [];
   for (const choice of choices(configuration(response, 'effort')?.options)) {
-    const id = relayEffortId(choice.value);
+    const id = mingleEffortId(choice.value);
     if (!id || seen.has(id)) continue;
     seen.add(id);
     output.push({ id, native: choice.value, label: choice.name, ...(choice.description ? { description: choice.description } : {}) });

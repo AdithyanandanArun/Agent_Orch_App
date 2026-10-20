@@ -1,6 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useRef } from 'react';
 import { FileCode2, X } from 'lucide-react';
-import { useRelay, useProject } from '../store/store';
+import { useMingle, useProject } from '../store/store';
 import { isDirty, useEditor } from '../store/editor';
 import { cx } from '../lib/format';
 import { Boundary, Badge, Spinner } from '../components/ui';
@@ -12,17 +12,17 @@ const TerminalPanel = lazy(() => import('../components/TerminalPanel'));
 
 function CenterTabs() {
   const tabs = useEditor((s) => s.tabs);
-  const centerTab = useRelay((s) => s.centerTab);
-  const sessions = useRelay((s) => s.boot?.sessions);
+  const centerTab = useMingle((s) => s.centerTab);
+  const sessions = useMingle((s) => s.boot?.sessions);
   if (tabs.length === 0) return null;
   return (
     <div className="ctabs" role="tablist" aria-label="Open views">
-      <button type="button" role="tab" aria-selected={centerTab === 'session'} className={cx('ctabs__tab', centerTab === 'session' && 'is-active')} onClick={() => useRelay.getState().setCenterTab('session')}>Session</button>
+      <button type="button" role="tab" aria-selected={centerTab === 'session'} className={cx('ctabs__tab', centerTab === 'session' && 'is-active')} onClick={() => useMingle.getState().setCenterTab('session')}>Session</button>
       {tabs.map((t) => {
         const scope = t.sessionId ? sessions?.find((s) => s.id === t.sessionId)?.name : undefined;
         return (
           <div key={t.key} className={cx('ctabs__tab ctabs__tab--file', centerTab === t.key && 'is-active')} role="presentation">
-            <button type="button" role="tab" aria-selected={centerTab === t.key} onClick={() => useRelay.getState().setCenterTab(t.key)} title={scope ? `${t.path} — ${scope}` : t.path}>
+            <button type="button" role="tab" aria-selected={centerTab === t.key} onClick={() => useMingle.getState().setCenterTab(t.key)} title={scope ? `${t.path} — ${scope}` : t.path}>
               <FileCode2 size={13} aria-hidden="true" />{t.label}{isDirty(t) ? <i className="dirty" aria-label="unsaved changes" /> : null}
             </button>
             <button type="button" className="ctabs__x" aria-label={`Close ${t.path}`} onClick={() => useEditor.getState().close(t.key)}><X size={12} /></button>
@@ -44,22 +44,22 @@ function ExampleBanner() {
 }
 
 export function Workspace() {
-  const centerTab = useRelay((s) => s.centerTab);
+  const centerTab = useMingle((s) => s.centerTab);
   const tabs = useEditor((s) => s.tabs);
-  const terminalOpen = useRelay((s) => s.terminalOpen);
-  const termHeight = useRelay((s) => s.terminalHeight);
-  const contextOpen = useRelay((s) => s.contextOpen);
+  const terminalOpen = useMingle((s) => s.terminalOpen);
+  const termHeight = useMingle((s) => s.terminalHeight);
+  const contextOpen = useMingle((s) => s.contextOpen);
   const editorActive = centerTab !== 'session' && tabs.some((t) => t.key === centerTab);
   const drag = useRef<{ y: number; h: number } | null>(null);
 
   useEffect(() => {
-    if (centerTab !== 'session' && !tabs.some((t) => t.key === centerTab)) useRelay.getState().setCenterTab('session');
+    if (centerTab !== 'session' && !tabs.some((t) => t.key === centerTab)) useMingle.getState().setCenterTab('session');
   }, [centerTab, tabs]);
 
   const onDrag = useCallback((e: PointerEvent) => {
     if (!drag.current) return;
     const h = Math.max(140, Math.min(window.innerHeight * 0.7, drag.current.h + (drag.current.y - e.clientY)));
-    useRelay.getState().setTerminalHeight(Math.round(h));
+    useMingle.getState().setTerminalHeight(Math.round(h));
   }, []);
   const endDrag = useCallback(() => {
     drag.current = null;
@@ -99,8 +99,8 @@ export function Workspace() {
                 e.preventDefault();
               }}
               onKeyDown={(e) => {
-                if (e.key === 'ArrowUp') useRelay.getState().setTerminalHeight(Math.min(termHeight + 24, Math.round(window.innerHeight * 0.7)));
-                if (e.key === 'ArrowDown') useRelay.getState().setTerminalHeight(Math.max(140, termHeight - 24));
+                if (e.key === 'ArrowUp') useMingle.getState().setTerminalHeight(Math.min(termHeight + 24, Math.round(window.innerHeight * 0.7)));
+                if (e.key === 'ArrowDown') useMingle.getState().setTerminalHeight(Math.max(140, termHeight - 24));
               }}
             />
             <Boundary label="Terminal">
@@ -110,7 +110,7 @@ export function Workspace() {
         ) : null}
       </div>
       <ContextPane />
-      <button type="button" className={cx('context-scrim', contextOpen && 'is-open')} aria-label="Close context pane" aria-hidden={!contextOpen} inert={!contextOpen} tabIndex={-1} onClick={() => useRelay.getState().toggleContext(false)} />
+      <button type="button" className={cx('context-scrim', contextOpen && 'is-open')} aria-label="Close context pane" aria-hidden={!contextOpen} inert={!contextOpen} tabIndex={-1} onClick={() => useMingle.getState().toggleContext(false)} />
     </div>
   );
 }

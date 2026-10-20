@@ -1,14 +1,14 @@
 import { FolderGit2, Info, KeyRound } from 'lucide-react';
-import { useRelay, useActiveSession, useProject } from '../../store/store';
+import { useMingle, useActiveSession, useProject } from '../../store/store';
 import { Badge, PROVIDER_NAME, ProviderMark, StatusDot } from '../ui';
 import { ContextCard } from '../automation/ContextSummary';
 
 export function Overview() {
   const project = useProject();
   const session = useActiveSession();
-  const tasks = useRelay((s) => s.boot?.tasks);
-  const provider = useRelay((s) => s.boot?.providers.find((p) => p.id === session?.provider));
-  const { selectTask, setView, openDialog } = useRelay.getState();
+  const tasks = useMingle((s) => s.boot?.tasks);
+  const provider = useMingle((s) => s.boot?.providers.find((p) => p.id === session?.provider));
+  const { selectTask, setView, openDialog } = useMingle.getState();
   const mine = (tasks ?? []).filter((t) => session && t.sessionId === session.id);
 
   if (!project) return <div className="pane-pad"><p className="muted">No project selected.</p></div>;

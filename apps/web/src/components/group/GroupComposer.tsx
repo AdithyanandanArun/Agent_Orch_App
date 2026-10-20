@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowUp, AtSign, Square, UserPlus, X } from 'lucide-react';
 import type { AttachmentRef, GroupSnapshot, NativeActionCatalog, Provider, Session } from '@mingle/contracts';
-import { useRelay } from '../../store/store';
+import { useMingle } from '../../store/store';
 import { api, errorMessage } from '../../lib/api';
 import { cx } from '../../lib/format';
 import { stopGroup } from '../../lib/groupActions';
@@ -38,10 +38,10 @@ interface Suggestion { key: string; token: string; description: string; group: s
 
 /** The group conversation's composer: it resolves recipients itself and sends one message to the group endpoint. */
 export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { snapshot: GroupSnapshot; anchor: Session; onOpenMembers: () => void; footer?: ReactNode }) {
-  const draft = useRelay((s) => s.drafts[anchor.id] ?? '');
-  const connection = useRelay((s) => s.connection);
-  const providers = useRelay((s) => s.boot?.providers);
-  const sessions = useRelay((s) => s.boot?.sessions);
+  const draft = useMingle((s) => s.drafts[anchor.id] ?? '');
+  const connection = useMingle((s) => s.connection);
+  const providers = useMingle((s) => s.boot?.providers);
+  const sessions = useMingle((s) => s.boot?.sessions);
   const ref = useRef<HTMLTextAreaElement>(null);
   const pickerButton = useRef<HTMLButtonElement>(null);
   const pickerId = useId();
@@ -169,7 +169,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
   useEffect(() => { setDismissed((current) => (current === trigger ? current : null)); setActive(0); }, [trigger]);
   useEffect(() => { document.getElementById(`${pickerId}-option-${active}`)?.scrollIntoView({ block: 'nearest' }); }, [active, pickerId, open]);
 
-  const setDraft = (text: string) => useRelay.getState().setDraft(anchor.id, text);
+  const setDraft = (text: string) => useMingle.getState().setDraft(anchor.id, text);
   const choose = (index: number) => {
     const item = suggestions[index];
     if (!item) return;
@@ -183,7 +183,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
   };
 
   const runLocal = async (name: string): Promise<void> => {
-    const store = useRelay.getState();
+    const store = useMingle.getState();
     switch (name) {
       case 'new': await store.createSession(); return;
       case 'stop': await stopGroup(snapshot); return;
@@ -222,8 +222,8 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
       setError(null);
       try {
         await runLocal(local[1]!.toLowerCase());
-        if (useRelay.getState().drafts[anchor.id] === draft) setDraft('');
-        await useRelay.getState().refreshNow();
+        if (useMingle.getState().drafts[anchor.id] === draft) setDraft('');
+        await useMingle.getState().refreshNow();
       } catch (cause) { setError(errorMessage(cause)); } finally { setSending(false); }
       return;
     }
@@ -262,7 +262,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
     setError(null);
     try {
       const updated = await api.sendGroupMessage(snapshot.group.id, { content, ...(targets.length ? { recipients: ids } : {}), ...(attachments.length ? { attachmentIds: attachments.map((item) => item.id) } : {}), ...(invocation ? { invocation } : {}), clientMessageId });
-      const store = useRelay.getState();
+      const store = useMingle.getState();
       store.applyGroup(updated);
       if (store.drafts[anchor.id] === draft) setDraft('');
       setPicked([]);
@@ -364,7 +364,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
         </div> : null}
         <div className="composer__bar">
           <div className="composer__controls">
-            <button type="button" className="composer__add-agent" onClick={() => useRelay.getState().openDialog({ kind: 'add-agent', sessionId: anchor.id })} disabled={connection !== 'online'}>
+            <button type="button" className="composer__add-agent" onClick={() => useMingle.getState().openDialog({ kind: 'add-agent', sessionId: anchor.id })} disabled={connection !== 'online'}>
               <UserPlus size={13} aria-hidden="true" /><span>Add agent</span>
             </button>
           </div>
@@ -403,7 +403,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
       {note || snapshot.group.paused ? (
         <p className={cx('composer__note', noteIsError && 'is-error')} role={noteIsError ? 'alert' : 'status'}>
           {note ?? `Group is paused${snapshot.group.pauseReason ? `: ${snapshot.group.pauseReason}` : ''}. Resume it from the bar above to start queued work.`}
-          {!noteIsError && blocker && unavailable ? <> <button type="button" className="link-btn" onClick={() => useRelay.getState().openDialog({ kind: 'settings' })}>Open Settings</button></> : null}
+          {!noteIsError && blocker && unavailable ? <> <button type="button" className="link-btn" onClick={() => useMingle.getState().openDialog({ kind: 'settings' })}>Open Settings</button></> : null}
         </p>
       ) : null}
       {usageSession ? <UsagePanel key={usageSession.id} session={usageSession} onClose={() => { setUsageSession(null); window.requestAnimationFrame(() => ref.current?.focus()); }} /> : null}

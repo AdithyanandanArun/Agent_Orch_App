@@ -14,7 +14,7 @@ import { badRequest, conflict, errorMessage, HttpError, notFound, redactSecrets,
 /** Metadata discovery never resumes a thread. Only an explicit composer send starts inference. */
 function unsupportedImport(provider: 'antigravity' | 'opencode'): string {
   return provider === 'opencode'
-    ? 'OpenCode conversation import is not supported. ACP can list native sessions, but Relay has no verified bounded history reader for them; continue a Relay OpenCode session to resume its conversation.'
+    ? 'OpenCode conversation import is not supported. ACP can list native sessions, but Mingle has no verified bounded history reader for them; continue a Mingle OpenCode session to resume its conversation.'
     : 'Antigravity conversation import is not supported because its native history protocol has not been verified.';
 }
 
@@ -111,8 +111,8 @@ export class ImportService {
       // Recheck inside the transaction so concurrent requests cannot create duplicate imports.
       const existing = this.store.findProviderSession(provider, id);
       if (existing) {
-        if (this.runtime.isActive(existing.id) || existing.status === 'running' || existing.status === 'waiting') throw conflict('This conversation is already running in Relay.');
-        if (existing.worktreePath !== directory) throw conflict('This conversation already belongs to a Relay session in a different folder. Open that session to continue.');
+        if (this.runtime.isActive(existing.id) || existing.status === 'running' || existing.status === 'waiting') throw conflict('This conversation is already running in Mingle.');
+        if (existing.worktreePath !== directory) throw conflict('This conversation already belongs to a Mingle session in a different folder. Open that session to continue.');
         if (!this.store.getProject(existing.projectId)) {
           const restored = this.store.restoreProject(existing.projectId);
           this.store.recordEvent({ projectId: restored.id, type: 'project.restored', summary: `Project reopened: ${restored.name}`, payload: { projectId: restored.id } });
@@ -121,7 +121,7 @@ export class ImportService {
         const session = archived ? this.store.restoreSession(existing.id) : existing;
         const project = this.store.getProject(session.projectId)!;
         if (archived) this.store.recordEvent({ projectId: project.id, sessionId: session.id, type: 'session.restored', summary: `Session restored: ${session.name}`, payload: {} });
-        return { session, project, alreadyImported: true, notices: ['Opened the existing Relay session; its settings and transcript were kept.'] };
+        return { session, project, alreadyImported: true, notices: ['Opened the existing Mingle session; its settings and transcript were kept.'] };
       }
       const prior = this.store.getProjectByPath(directory, true);
       const removed = prior && !this.store.getProject(prior.id);

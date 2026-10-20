@@ -2,18 +2,18 @@ import { useEffect } from 'react';
 import Editor from '@monaco-editor/react';
 import { RefreshCw, Save, FileWarning } from 'lucide-react';
 import './monacoSetup';
-import { useRelay } from '../store/store';
+import { useMingle } from '../store/store';
 import { isDirty, useEditor } from '../store/editor';
 import { Button, EmptyState, IconButton, MOD, Spinner, isMac } from './ui';
 
 export default function EditorPane({ tabKey }: { tabKey: string }) {
   const tab = useEditor((s) => s.tabs.find((t) => t.key === tabKey));
-  const theme = useRelay((s) => s.boot?.settings.theme ?? 'dark');
-  const sessionName = useRelay((s) => (tab?.sessionId ? s.boot?.sessions.find((x) => x.id === tab.sessionId)?.name : undefined));
+  const theme = useMingle((s) => s.boot?.settings.theme ?? 'dark');
+  const sessionName = useMingle((s) => (tab?.sessionId ? s.boot?.sessions.find((x) => x.id === tab.sessionId)?.name : undefined));
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's' && useRelay.getState().centerTab === tabKey) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's' && useMingle.getState().centerTab === tabKey) {
         e.preventDefault();
         void useEditor.getState().save(tabKey);
       }

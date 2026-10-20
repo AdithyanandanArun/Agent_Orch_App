@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, useRef } from 'react';
-import { useRelay } from './store/store';
+import { useMingle } from './store/store';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
 import { Workspace } from './views/Workspace';
@@ -18,7 +18,7 @@ import { GroupModeDialog, MemberSettingsDialog } from './components/group/GroupD
 const AgentMap = lazy(() => import('./views/AgentMap'));
 
 function Dialogs() {
-  const dialog = useRelay((s) => s.dialog);
+  const dialog = useMingle((s) => s.dialog);
   if (!dialog) return null;
   switch (dialog.kind) {
     case 'project': return <ProjectDialog />;
@@ -37,18 +37,18 @@ function Dialogs() {
 }
 
 export function App() {
-  const boot = useRelay((s) => s.boot);
-  const view = useRelay((s) => s.view);
-  const theme = useRelay((s) => s.boot?.settings.theme ?? 'dark');
-  const sidebarOpen = useRelay((s) => s.sidebarOpen);
+  const boot = useMingle((s) => s.boot);
+  const view = useMingle((s) => s.view);
+  const theme = useMingle((s) => s.boot?.settings.theme ?? 'dark');
+  const sidebarOpen = useMingle((s) => s.sidebarOpen);
   const previousView = useRef(view);
 
-  useEffect(() => { useRelay.getState().init(); }, []);
+  useEffect(() => { useMingle.getState().init(); }, []);
   useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
   useEffect(() => {
     if (view === 'settings') document.getElementById('settings-title')?.focus({ preventScroll: true });
     else if (previousView.current === 'settings') {
-      const state = useRelay.getState();
+      const state = useMingle.getState();
       const sessionId = state.activeProjectId ? state.sessionByProject[state.activeProjectId] : undefined;
       const composer = view === 'workspace' && state.centerTab === 'session' && sessionId ? document.getElementById(`composer-${sessionId}`) : null;
       (composer ?? document.getElementById('main'))?.focus({ preventScroll: true });
@@ -59,7 +59,7 @@ export function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
-      const s = useRelay.getState();
+      const s = useMingle.getState();
       if (mod && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         if (s.dialog?.kind === 'palette') s.closeDialog();
@@ -84,7 +84,7 @@ export function App() {
     <div className={cx('app', `view-${view}`)}>
       <a className="skip" href="#main">Skip to content</a>
       <Sidebar />
-      <button type="button" className={cx('sidebar-scrim', sidebarOpen && 'is-open')} aria-label="Close sidebar" aria-hidden={!sidebarOpen} inert={!sidebarOpen} tabIndex={-1} onClick={() => useRelay.getState().setSidebarOpen(false)} />
+      <button type="button" className={cx('sidebar-scrim', sidebarOpen && 'is-open')} aria-label="Close sidebar" aria-hidden={!sidebarOpen} inert={!sidebarOpen} tabIndex={-1} onClick={() => useMingle.getState().setSidebarOpen(false)} />
       <main className="main" id="main" tabIndex={-1}>
         <Header />
         <ConnectionBanner />

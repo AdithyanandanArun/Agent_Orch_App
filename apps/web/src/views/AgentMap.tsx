@@ -3,7 +3,7 @@ import { Background, BackgroundVariant, Controls, Handle, Position, ReactFlow, t
 import '@xyflow/react/dist/style.css';
 import { ArrowRightLeft, Boxes, ListChecks, MessagesSquare, Network, Package, Play, Settings2, Folder, Bot } from 'lucide-react';
 import type { Session, Task, ToolCall } from '@mingle/contracts';
-import { useRelay, useProject } from '../store/store';
+import { useMingle, useProject } from '../store/store';
 import { useProjectContext } from '../store/projectContext';
 import { clockTime, cx } from '../lib/format';
 import { formatElapsed } from '../lib/activity';
@@ -40,7 +40,7 @@ function ComponentNode({ data, selected }: NodeProps<Node<ComponentData>>) {
   );
 }
 function SessionIdentity({ session }: { session: Session }) {
-  const member = useRelay((state) => {
+  const member = useMingle((state) => {
     const memberships = state.boot?.groups?.flatMap((snapshot) => snapshot.members) ?? [];
     return memberships.find((entry) => entry.sessionId === session.id && !entry.removedAt) ?? memberships.find((entry) => entry.sessionId === session.id);
   });
@@ -85,9 +85,9 @@ const nodeTypes = { root: RootNode, component: ComponentNode, session: SessionNo
 
 export default function AgentMap() {
   const project = useProject();
-  const boot = useRelay((s) => s.boot);
-  const selected = useRelay((s) => s.mapSelection);
-  const creatingSession = useRelay((s) => s.creatingSession);
+  const boot = useMingle((s) => s.boot);
+  const selected = useMingle((s) => s.mapSelection);
+  const creatingSession = useMingle((s) => s.creatingSession);
   const { entry } = useProjectContext(project?.id);
   const context = entry.context;
 
@@ -122,7 +122,7 @@ export default function AgentMap() {
           key={`${project.id}:${components.length > 0}`}
           nodes={nodes} edges={edges} nodeTypes={nodeTypes} colorMode={theme} fitView fitViewOptions={{ padding: 0.12, maxZoom: 1 }} minZoom={0.3} maxZoom={1.6}
           nodesConnectable={false} elementsSelectable
-          onNodeClick={(_, n) => useRelay.getState().setMapSelection(n.id)} onPaneClick={() => useRelay.getState().setMapSelection(null)}
+          onNodeClick={(_, n) => useMingle.getState().setMapSelection(n.id)} onPaneClick={() => useMingle.getState().setMapSelection(null)}
           aria-label="Agent map"
         >
           <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} />
@@ -132,7 +132,7 @@ export default function AgentMap() {
           <div className="map__notice" role="status">
             {notice ? <span>{notice}</span> : null}
             {sessions.length === 0 ? (
-              <span>No sessions yet. <button type="button" className="link-btn" disabled={creatingSession} onClick={() => void useRelay.getState().createSession()}>New session</button></span>
+              <span>No sessions yet. <button type="button" className="link-btn" disabled={creatingSession} onClick={() => void useMingle.getState().createSession()}>New session</button></span>
             ) : null}
           </div>
         ) : null}
@@ -161,7 +161,7 @@ export default function AgentMap() {
 }
 
 function ComponentDetail({ component, all, unresolved }: { component: Component; all: Component[]; unresolved: string[] }) {
-  const { setMapSelection } = useRelay.getState();
+  const { setMapSelection } = useMingle.getState();
   const byKey = new Map<string, Component>();
   for (const c of all) { byKey.set(c.id, c); byKey.set(c.name, c); byKey.set(c.path, c); }
   const resolved = Array.from(new Set(component.dependencies.map((d) => byKey.get(d)).filter((c): c is Component => Boolean(c && c.id !== component.id))));
@@ -190,13 +190,13 @@ function AgentDetail({ call, session }: { call: ToolCall; session?: Session }) {
       <p className="muted small">Reported by {session ? PROVIDER_NAME[session.provider] : 'the provider'} during a run{session ? ` in ${session.name}` : ''}. Started {clockTime(call.startedAt)}{call.durationMs !== null ? ` · took ${formatElapsed(call.durationMs)}` : call.status === 'running' ? ' · still running' : ''}.</p>
       {call.command ? <pre className="evt__payload">{call.command}</pre> : null}
       <p className="muted small">Native ID <code>{call.providerId}</code>{call.parentProviderId ? <> · parent <code>{call.parentProviderId}</code></> : ' · top-level in its run'}</p>
-      {session ? <div className="card__actions"><Button size="sm" variant="primary" onClick={() => useRelay.getState().selectSession(session.id)}>Open session</Button></div> : null}
+      {session ? <div className="card__actions"><Button size="sm" variant="primary" onClick={() => useMingle.getState().selectSession(session.id)}>Open session</Button></div> : null}
     </div>
   );
 }
 
 function SessionDetail({ session, tasks }: { session: Session; tasks: Task[] }) {
-  const { selectSession, selectTask, setView, openDialog } = useRelay.getState();
+  const { selectSession, selectTask, setView, openDialog } = useMingle.getState();
   return (
     <div className="pane-pad stack">
       <div className="card__head"><div className="card__title"><SessionIdentity session={session} /><span>{PROVIDER_NAME[session.provider]} · {session.model}</span></div></div>
@@ -217,7 +217,7 @@ function SessionDetail({ session, tasks }: { session: Session; tasks: Task[] }) 
 }
 
 function TaskDetail({ task, tasks, session }: { task: Task; tasks: Task[]; session?: Session }) {
-  const { selectTask, setView } = useRelay.getState();
+  const { selectTask, setView } = useMingle.getState();
   const parent = task.source?.parentTaskId ? tasks.find((t) => t.id === task.source?.parentTaskId) : undefined;
   return (
     <div className="pane-pad stack">

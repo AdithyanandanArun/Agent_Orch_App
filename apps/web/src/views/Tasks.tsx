@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { ArrowRightLeft, GitMerge, ListPlus, Lock, Play, X } from 'lucide-react';
 import type { Session, Task, TaskStatus } from '@mingle/contracts';
-import { useRelay, useProject } from '../store/store';
+import { useMingle, useProject } from '../store/store';
 import { api, errorMessage } from '../lib/api';
 import { cx, relativeTime, useNow } from '../lib/format';
 import { SOURCE_LABEL } from '../components/automation/TaskSource';
@@ -29,7 +29,7 @@ function TaskCard({ task, byId, session, selected, onDragStart }: { task: Task; 
   return (
     <button
       type="button" className={cx('tcard', selected && 'is-selected')} draggable onDragStart={(e) => onDragStart(e, task.id)}
-      onClick={() => useRelay.getState().selectTask(task.id)} aria-label={`Task ${task.title}, ${task.status}`}
+      onClick={() => useMingle.getState().selectTask(task.id)} aria-label={`Task ${task.title}, ${task.status}`}
     >
       <span className="tcard__title">{task.title}</span>
       {task.description ? <span className="tcard__desc">{task.description}</span> : null}
@@ -58,9 +58,9 @@ function descendants(taskId: string, tasks: Task[]): Set<string> {
 }
 
 function TaskDrawer({ task, tasks, sessions }: { task: Task; tasks: Task[]; sessions: Session[] }) {
-  const providers = useRelay((s) => s.boot?.providers);
-  const runs = useRelay((s) => s.boot?.runs);
-  const connection = useRelay((s) => s.connection);
+  const providers = useMingle((s) => s.boot?.providers);
+  const runs = useMingle((s) => s.boot?.runs);
+  const connection = useMingle((s) => s.connection);
   const now = useNow();
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description);
@@ -109,8 +109,8 @@ function TaskDrawer({ task, tasks, sessions }: { task: Task; tasks: Task[]; sess
         title: title.trim(), description, acceptanceCriteria: criteria, sessionId: sessionId || null, dependsOn: deps,
         ...(status !== task.status ? { status } : {}),
       });
-      await useRelay.getState().refreshNow();
-      useRelay.getState().toast('success', 'Task saved');
+      await useMingle.getState().refreshNow();
+      useMingle.getState().toast('success', 'Task saved');
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -123,8 +123,8 @@ function TaskDrawer({ task, tasks, sessions }: { task: Task; tasks: Task[]; sess
     setError(null);
     try {
       await api.runTask(task.id);
-      useRelay.getState().toast('info', `Dispatched to ${owner?.name ?? 'session'}`);
-      await useRelay.getState().refreshNow();
+      useMingle.getState().toast('info', `Dispatched to ${owner?.name ?? 'session'}`);
+      await useMingle.getState().refreshNow();
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -140,7 +140,7 @@ function TaskDrawer({ task, tasks, sessions }: { task: Task; tasks: Task[]; sess
         <Badge tone="accent">{task.status}</Badge>
         <span className="muted small">Updated {relativeTime(task.updatedAt, now)}</span>
         <span className="spacer" />
-        <IconButton label="Close task details" onClick={() => useRelay.getState().selectTask(null)}><X size={15} /></IconButton>
+        <IconButton label="Close task details" onClick={() => useMingle.getState().selectTask(null)}><X size={15} /></IconButton>
       </header>
       <div className="drawer__body form">
         <SourceDetails task={task} tasks={tasks} sessions={sessions} runs={runs ?? []} />
@@ -172,7 +172,7 @@ function TaskDrawer({ task, tasks, sessions }: { task: Task; tasks: Task[]; sess
         <div className="drawer__actions">
           <Button variant="primary" busy={saving} disabled={!dirty || !title.trim()} why={!title.trim() ? 'Title is required' : 'No changes to save'} onClick={save}>Save changes</Button>
           <Button onClick={run} busy={running} disabled={Boolean(runWhy)} why={runWhy}><Play size={13} /> Run task</Button>
-          <Button variant="ghost" disabled={!owner || sessions.length < 2} why={!owner ? 'Assign a session first' : 'Needs a second session in this project'} onClick={() => useRelay.getState().openDialog({ kind: 'handoff', taskId: task.id, fromSessionId: owner?.id })}><ArrowRightLeft size={13} /> Handoff</Button>
+          <Button variant="ghost" disabled={!owner || sessions.length < 2} why={!owner ? 'Assign a session first' : 'Needs a second session in this project'} onClick={() => useMingle.getState().openDialog({ kind: 'handoff', taskId: task.id, fromSessionId: owner?.id })}><ArrowRightLeft size={13} /> Handoff</Button>
         </div>
         <p className="field__hint">Run sends this task to the assigned session as a real provider turn. A successful turn moves it to Review.</p>
       </div>
@@ -182,8 +182,8 @@ function TaskDrawer({ task, tasks, sessions }: { task: Task; tasks: Task[]; sess
 
 export function TasksView() {
   const project = useProject();
-  const boot = useRelay((s) => s.boot);
-  const selectedId = useRelay((s) => s.selectedTaskId);
+  const boot = useMingle((s) => s.boot);
+  const selectedId = useMingle((s) => s.selectedTaskId);
   const [over, setOver] = useState<TaskStatus | null>(null);
   const [filter, setFilter] = useState('');
   const [origin, setOrigin] = useState('');
@@ -213,7 +213,7 @@ export function TasksView() {
     setError(null);
     try {
       await api.updateTask(id, { status });
-      await useRelay.getState().refreshNow();
+      await useMingle.getState().refreshNow();
     } catch (err) {
       setError(`Could not move “${t.title}”: ${errorMessage(err)}`);
     }
@@ -239,13 +239,13 @@ export function TasksView() {
           ) : null}
           <label className="sr-only" htmlFor="task-filter">Filter by session</label>
           <SelectMenu id="task-filter" label="Filter by session" value={filter} onChange={setFilter} options={[{ value: '', label: 'All sessions' }, { value: 'none', label: 'Unassigned' }, ...sessions.map((s) => ({ value: s.id, label: s.name }))]} />
-          <Button size="sm" variant="primary" onClick={() => useRelay.getState().openDialog({ kind: 'task' })}><ListPlus size={13} /> New task</Button>
+          <Button size="sm" variant="primary" onClick={() => useMingle.getState().openDialog({ kind: 'task' })}><ListPlus size={13} /> New task</Button>
         </div>
         <ContextStrip projectId={project.id} />
         {missingCount > 0 ? <div className="viewbar__error"><p className="ctxstrip__warn" role="status">{missingCount} task{missingCount === 1 ? ' is' : 's are'} no longer found at {missingCount === 1 ? 'its' : 'their'} source and kept on the board. Open one to see where it came from.</p></div> : null}
         {error ? <div className="viewbar__error"><InlineError>{error}</InlineError></div> : null}
         {tasks.length === 0 ? (
-          <EmptyState icon={<ListPlus size={20} />} title="No tasks yet" action={<Button variant="primary" onClick={() => useRelay.getState().openDialog({ kind: 'task' })}>Create the first task</Button>}>
+          <EmptyState icon={<ListPlus size={20} />} title="No tasks yet" action={<Button variant="primary" onClick={() => useMingle.getState().openDialog({ kind: 'task' })}>Create the first task</Button>}>
             {scan?.status === 'ready' && scan.scannedAt
               ? 'The project scan found no tasks to track automatically. Tasks also appear from provider plans in sessions; or create one yourself and chain tasks with dependencies.'
               : 'Break work into tasks, assign each to a session, and chain them with dependencies. Tasks found by the project scan appear here automatically.'}

@@ -4,7 +4,7 @@ import type { BrowserAction, BrowserSessionState, BrowserTab, Session } from '@m
 import { api, errorMessage } from '../../lib/api';
 import { cx } from '../../lib/format';
 import { resolveTab, useBrowserStore } from '../../store/browser';
-import { useRelay } from '../../store/store';
+import { useMingle } from '../../store/store';
 import { Button, EmptyState, IconButton, InlineError, Spinner } from '../ui';
 import { BrowserConnect } from './BrowserConnect';
 import { BrowserHost } from './BrowserHost';
@@ -65,7 +65,7 @@ export function BrowserPane({ session, active }: { session: Session; active: boo
   }, [activeTabId, state, session.id]);
   useEffect(() => { if (state && state.status !== 'connected') setExpanded(false); }, [state]);
 
-  const toast = useRelay.getState().toast;
+  const toast = useMingle.getState().toast;
   const [busy, setBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmClose, setConfirmClose] = useState<string | null>(null);

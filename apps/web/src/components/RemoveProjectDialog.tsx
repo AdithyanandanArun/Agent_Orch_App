@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { Project } from '@mingle/contracts';
-import { useRelay } from '../store/store';
+import { useMingle } from '../store/store';
 import { api, errorMessage } from '../lib/api';
 import { Button, InlineError, Modal } from './ui';
 import '../styles/project-removal.css';
@@ -13,8 +13,8 @@ export function RemoveProjectDialog({ project, onClose }: { project: Project; on
     setBusy(true); setError(null);
     try {
       const result = await api.removeProject(project.id);
-      await useRelay.getState().refreshNow();
-      const state = useRelay.getState();
+      await useMingle.getState().refreshNow();
+      const state = useMingle.getState();
       if (state.view === 'settings' && state.settingsProjectId === project.id) state.openSettings({ section: 'general' });
       state.toast(result.notices.length ? 'info' : 'success', result.notices[0] ?? 'Project removed from Mingle. Your files are kept.');
       onClose();
@@ -35,7 +35,7 @@ export function RemoveProjectDialog({ project, onClose }: { project: Project; on
 
 export function RemoveProjectButton({ project }: { project: Project }) {
   const [open, setOpen] = useState(false);
-  const online = useRelay((state) => state.connection === 'online');
+  const online = useMingle((state) => state.connection === 'online');
   return <>
     <Button size="sm" variant="ghost" disabled={!online} onClick={() => setOpen(true)}>Remove project…</Button>
     {open ? <RemoveProjectDialog project={project} onClose={() => setOpen(false)} /> : null}

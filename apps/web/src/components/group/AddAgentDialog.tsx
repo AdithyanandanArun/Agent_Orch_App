@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Pause, Play } from 'lucide-react';
 import type { AgentConfiguration, GroupMember, GroupMode, GroupSnapshot, ProviderInfo, Session } from '@mingle/contracts';
-import { useRelay } from '../../store/store';
+import { useMingle } from '../../store/store';
 import { api, errorMessage } from '../../lib/api';
 import { shortPath } from '../../lib/format';
 import {
@@ -63,9 +63,9 @@ function changeNotes(before: AgentConfiguration, after: AgentConfiguration, prov
 }
 
 export function AddAgentDialog({ sessionId }: { sessionId: string }) {
-  const close = useRelay.getState().closeDialog;
-  const boot = useRelay((s) => s.boot);
-  const connection = useRelay((s) => s.connection);
+  const close = useMingle.getState().closeDialog;
+  const boot = useMingle((s) => s.boot);
+  const connection = useMingle((s) => s.connection);
   const session = boot?.sessions.find((item) => item.id === sessionId);
   const providers = boot?.providers;
   const settings = boot?.settings;
@@ -177,7 +177,7 @@ export function AddAgentDialog({ sessionId }: { sessionId: string }) {
           ...(currentEdited ? { currentConfiguration } : {}),
         });
       }
-      const store = useRelay.getState();
+      const store = useMingle.getState();
       store.applyGroup(snapshot);
       await store.refreshNow();
       store.toast('success', `Added @${body.handle}. No model run was started.`);

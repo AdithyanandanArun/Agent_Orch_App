@@ -115,7 +115,7 @@ async function perform(entry: TabEntry, action: BrowserAction): Promise<unknown>
       return done;
     }
     case 'evaluate': {
-      // Runs in the page's JavaScript context only (CDP Runtime.evaluate); there is no access to Node or to Relay.
+      // Runs in the page's JavaScript context only (CDP Runtime.evaluate); there is no access to Node or to Mingle.
       const out = await evaluateExpression(entry, action.expression);
       return { result: out.result, truncated: out.truncated };
     }

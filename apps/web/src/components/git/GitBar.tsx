@@ -4,7 +4,7 @@ import type { Project, RepositoryState, Session } from '@mingle/contracts';
 import { api, errorMessage } from '../../lib/api';
 import { copyText } from '../../lib/clipboard';
 import { cx } from '../../lib/format';
-import { useRelay } from '../../store/store';
+import { useMingle } from '../../store/store';
 import { useMutationGuard, useRepository, type RepositoryView } from '../../store/repository';
 import { Menu, MenuItem, MenuLabel, MenuSeparator } from '../ui';
 import { ActionsStatus } from './ActionsStatus';
@@ -14,7 +14,7 @@ import { githubMatches, openExternal, shortSha } from './gitUtil';
 
 type DialogKind = 'commit' | 'push' | 'pr' | 'branch';
 
-const toast = useRelay.getState().toast;
+const toast = useMingle.getState().toast;
 
 /* ——— Branch picker ——— */
 function BranchPicker({ projectId, sessionId, repo, view, disabledWhy, onCreate }: {
@@ -45,7 +45,7 @@ function BranchPicker({ projectId, sessionId, repo, view, disabledWhy, onCreate 
     try {
       const result = await api.repositoryBranch(projectId, sessionId, { expectedHead: repo.head, name: branch.name, create: false });
       view.adopt(result);
-      void useRelay.getState().refreshNow();
+      void useMingle.getState().refreshNow();
       toast('success', `Switched to ${branch.name}`);
       close();
     } catch (cause) {

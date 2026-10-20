@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDown, FolderPlus } from 'lucide-react';
 import type { Session, SessionRun, ToolCall } from '@mingle/contracts';
-import { useRelay, useProject, useActiveSession, useActiveGroup } from '../store/store';
+import { useMingle, useProject, useActiveSession, useActiveGroup } from '../store/store';
 import type { DisplayMessage } from '../lib/conversation';
 import { Button, EmptyState, PROVIDER_NAME } from './ui';
 import { ApprovalCard, LegacyToolGroup, MessageRow } from './ConversationParts';
@@ -15,8 +15,8 @@ const EMPTY_RUNS: SessionRun[] = [];
 const EMPTY_TOOL_CALLS: ToolCall[] = [];
 
 function useSessionMessages(session: Session | undefined): DisplayMessage[] {
-  const all = useRelay((s) => s.boot?.messages);
-  const streams = useRelay((s) => s.streams);
+  const all = useMingle((s) => s.boot?.messages);
+  const streams = useMingle((s) => s.streams);
   return useMemo(() => {
     if (!session || !all) return [];
     const out: DisplayMessage[] = [];
@@ -46,11 +46,11 @@ export function SessionPane() {
 function SingleSessionPane() {
   const project = useProject();
   const session = useActiveSession();
-  const hasSessions = useRelay((s) => (s.boot?.sessions ?? []).some((x) => x.projectId === s.activeProjectId));
+  const hasSessions = useMingle((s) => (s.boot?.sessions ?? []).some((x) => x.projectId === s.activeProjectId));
   const messages = useSessionMessages(session);
-  const allRuns = useRelay((s) => s.boot?.runs ?? EMPTY_RUNS);
+  const allRuns = useMingle((s) => s.boot?.runs ?? EMPTY_RUNS);
   const runs = useMemo(() => allRuns.filter(run => run.sessionId === session?.id), [allRuns, session?.id]);
-  const allToolCalls = useRelay((s) => s.boot?.toolCalls ?? EMPTY_TOOL_CALLS);
+  const allToolCalls = useMingle((s) => s.boot?.toolCalls ?? EMPTY_TOOL_CALLS);
   const toolCallsByRun = useMemo(() => {
     const grouped = new Map<string, ToolCall[]>();
     for (const call of allToolCalls) {
@@ -87,10 +87,10 @@ function SingleSessionPane() {
     }
     return placements;
   }, [runs, messages, messageIds]);
-  const approvals = useRelay((s) => s.boot?.approvals);
+  const approvals = useMingle((s) => s.boot?.approvals);
   const pending = useMemo(() => (approvals ?? []).filter((a) => a.sessionId === session?.id && a.status === 'pending'), [approvals, session?.id]);
-  const { openDialog } = useRelay.getState();
-  const creatingSession = useRelay((s) => s.creatingSession);
+  const { openDialog } = useMingle.getState();
+  const creatingSession = useMingle((s) => s.creatingSession);
 
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -115,7 +115,7 @@ function SingleSessionPane() {
   if (!session) {
     return (
       <div className="chat chat--projectonly">
-        <EmptyState title={hasSessions ? 'Select a session' : 'No sessions yet'} action={<Button variant="primary" busy={creatingSession} disabled={creatingSession} onClick={() => void useRelay.getState().createSession()}>New session</Button>}>
+        <EmptyState title={hasSessions ? 'Select a session' : 'No sessions yet'} action={<Button variant="primary" busy={creatingSession} disabled={creatingSession} onClick={() => void useMingle.getState().createSession()}>New session</Button>}>
           {hasSessions ? 'Choose a session from the sidebar.' : 'Start a session to work in this project.'}
         </EmptyState>
         <div className="composer-wrap"><GitBar project={project} session={null} /></div>

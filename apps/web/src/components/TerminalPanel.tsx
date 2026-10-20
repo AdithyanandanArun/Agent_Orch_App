@@ -3,7 +3,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { RotateCw, Square, X } from 'lucide-react';
-import { useRelay } from '../store/store';
+import { useMingle } from '../store/store';
 import { terminalBus } from '../store/terminalBus';
 import { Button, IconButton } from './ui';
 import { ScopeSwitch } from './context/scope';
@@ -14,13 +14,13 @@ export default function TerminalPanel() {
   const host = useRef<HTMLDivElement>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const term = useRef<Terminal | null>(null);
-  const status = useRelay((s) => s.terminal.status);
-  const exitCode = useRelay((s) => s.terminal.exitCode);
-  const label = useRelay((s) => s.terminal.label);
-  const note = useRelay((s) => s.terminal.note);
-  const connection = useRelay((s) => s.connection);
-  const theme = useRelay((s) => s.boot?.settings.theme);
-  const hasProject = useRelay((s) => Boolean(s.activeProjectId));
+  const status = useMingle((s) => s.terminal.status);
+  const exitCode = useMingle((s) => s.terminal.exitCode);
+  const label = useMingle((s) => s.terminal.label);
+  const note = useMingle((s) => s.terminal.note);
+  const connection = useMingle((s) => s.connection);
+  const theme = useMingle((s) => s.boot?.settings.theme);
+  const hasProject = useMingle((s) => Boolean(s.activeProjectId));
 
   useEffect(() => {
     const el = host.current;
@@ -46,12 +46,12 @@ export default function TerminalPanel() {
       const snapshot = terminalBus.snapshot();
       if (snapshot) t.write(snapshot);
       const off = terminalBus.subscribe((d) => (d === null ? t.reset() : t.write(d)));
-      const dataSub = t.onData((d) => useRelay.getState().sendTerminalInput(d));
-      const resizeSub = t.onResize(({ cols, rows }) => useRelay.getState().resizeTerminal(cols, rows));
+      const dataSub = t.onData((d) => useMingle.getState().sendTerminalInput(d));
+      const resizeSub = t.onResize(({ cols, rows }) => useMingle.getState().resizeTerminal(cols, rows));
       const ro = new ResizeObserver(() => safeFit());
       ro.observe(el);
 
-      const s = useRelay.getState();
+      const s = useMingle.getState();
       if (s.terminal.status === 'idle' && s.connection === 'online' && s.activeProjectId) s.startTerminal(t.cols, t.rows);
 
       cleanup = () => {
@@ -72,7 +72,7 @@ export default function TerminalPanel() {
   }, [theme]);
 
   const restart = () => {
-    const s = useRelay.getState();
+    const s = useMingle.getState();
     s.stopTerminal();
     const t = term.current;
     if (t) { fitRef.current?.fit(); s.startTerminal(t.cols, t.rows); t.focus(); }
@@ -89,8 +89,8 @@ export default function TerminalPanel() {
         <span className="spacer" />
         <ScopeSwitch compact />
         <IconButton label="Restart terminal in current scope" onClick={restart} disabled={connection !== 'online' || !hasProject} why={connection !== 'online' ? 'Disconnected' : 'No project'}><RotateCw size={14} /></IconButton>
-        <IconButton label="Stop terminal" onClick={() => useRelay.getState().stopTerminal()} disabled={dead} why="Not running"><Square size={13} /></IconButton>
-        <IconButton label="Hide terminal" onClick={() => useRelay.getState().toggleTerminal(false)}><X size={15} /></IconButton>
+        <IconButton label="Stop terminal" onClick={() => useMingle.getState().stopTerminal()} disabled={dead} why="Not running"><Square size={13} /></IconButton>
+        <IconButton label="Hide terminal" onClick={() => useMingle.getState().toggleTerminal(false)}><X size={15} /></IconButton>
       </header>
       <div className="term__body">
         <div ref={host} className="term__host" />

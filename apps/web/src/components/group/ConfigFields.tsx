@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import type { AgentConfiguration, Provider } from '@mingle/contracts';
-import { useRelay } from '../../store/store';
+import { useMingle } from '../../store/store';
 import {
   POLICY_DESCRIPTION, effortChoices, modelOf, normalizeConfig, policyChoices, policyLabel, providerAvailability, providerName, tierChoices,
 } from '../../lib/groups';
@@ -12,8 +12,8 @@ import { providerModelChoices } from '../../lib/providers';
 export function ConfigFields({ value, onChange, idPrefix, lockProvider = false, disabled = false, legend }: {
   value: AgentConfiguration; onChange: (next: AgentConfiguration) => void; idPrefix: string; lockProvider?: boolean; disabled?: boolean; legend?: string;
 }) {
-  const providers = useRelay((s) => s.boot?.providers);
-  const settings = useRelay((s) => s.boot?.settings);
+  const providers = useMingle((s) => s.boot?.providers);
+  const settings = useMingle((s) => s.boot?.settings);
   const info = providers?.find((provider) => provider.id === value.provider);
   const model = modelOf(info, value.model);
   const efforts = effortChoices(model);

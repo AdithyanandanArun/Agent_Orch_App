@@ -1,5 +1,5 @@
 import { ArrowLeft, Menu as MenuIcon, PanelRight, Pencil, SquareTerminal, Archive, MoreHorizontal, Square, ListPlus, UserPlus } from 'lucide-react';
-import { useRelay, useActiveSession, useActiveGroup, useProject } from '../store/store';
+import { useMingle, useActiveSession, useActiveGroup, useProject } from '../store/store';
 import { api, errorMessage } from '../lib/api';
 import { Button, IconButton, Menu, MenuItem, MenuSeparator } from './ui';
 import { useState } from 'react';
@@ -9,15 +9,15 @@ import { stopGroup } from '../lib/groupActions';
 const TITLES = { workspace: 'Workspace', tasks: 'Tasks', activity: 'Activity', map: 'Agent map', settings: 'Settings' } as const;
 
 export function Header() {
-  const view = useRelay((s) => s.view);
+  const view = useMingle((s) => s.view);
   const project = useProject();
   const session = useActiveSession();
   const group = useActiveGroup();
-  const sessions = useRelay((s) => s.boot?.sessions ?? []);
-  const connection = useRelay((s) => s.connection);
-  const contextOpen = useRelay((s) => s.contextOpen);
-  const terminalOpen = useRelay((s) => s.terminalOpen);
-  const { openDialog, toggleContext, toggleTerminal, setSidebarOpen } = useRelay.getState();
+  const sessions = useMingle((s) => s.boot?.sessions ?? []);
+  const connection = useMingle((s) => s.connection);
+  const contextOpen = useMingle((s) => s.contextOpen);
+  const terminalOpen = useMingle((s) => s.terminalOpen);
+  const { openDialog, toggleContext, toggleTerminal, setSidebarOpen } = useMingle.getState();
   const [stopping, setStopping] = useState(false);
   const hasActiveRun = group ? activeMembers(group).some((member) => isBusy(sessions.find((item) => item.id === member.sessionId))) : isBusy(session);
 
@@ -30,10 +30,10 @@ export function Header() {
         return;
       }
       await api.interrupt(session.id);
-      useRelay.getState().toast('info', `Interrupted ${session.name}`);
-      void useRelay.getState().refreshNow();
+      useMingle.getState().toast('info', `Interrupted ${session.name}`);
+      void useMingle.getState().refreshNow();
     } catch (e) {
-      useRelay.getState().toast('error', errorMessage(e));
+      useMingle.getState().toast('error', errorMessage(e));
     } finally {
       setStopping(false);
     }
@@ -41,7 +41,7 @@ export function Header() {
 
   if (view === 'settings') return <header className="header header--settings">
     <IconButton label="Open sidebar" className="header__burger" onClick={() => setSidebarOpen(true)}><MenuIcon size={16} /></IconButton>
-    <Button variant="ghost" size="sm" onClick={() => useRelay.getState().closeSettings()}><ArrowLeft size={14} /> Back to workspace</Button>
+    <Button variant="ghost" size="sm" onClick={() => useMingle.getState().closeSettings()}><ArrowLeft size={14} /> Back to workspace</Button>
   </header>;
 
   return (

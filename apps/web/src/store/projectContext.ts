@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { create } from 'zustand';
 import type { ProjectContext } from '@mingle/contracts';
 import { api, errorMessage } from '../lib/api';
-import { useRelay } from './store';
+import { useMingle } from './store';
 
 const IDLE_POLL_MS = 30_000;
 const INDEXING_POLL_MS = 2_500;
@@ -71,7 +71,7 @@ export async function rescanContext(projectId: string): Promise<void> {
 
 interface Watch { count: number; timer: number | undefined }
 const watches = new Map<string, Watch>();
-const visible = (): boolean => document.visibilityState === 'visible' && useRelay.getState().connection === 'online';
+const visible = (): boolean => document.visibilityState === 'visible' && useMingle.getState().connection === 'online';
 
 function schedule(projectId: string): void {
   const watch = watches.get(projectId);
@@ -112,7 +112,7 @@ export interface ProjectContextView { entry: ContextEntry; rescan: () => Promise
 export function useProjectContext(projectId: string | null | undefined): ProjectContextView {
   const entry = useContextStore((s) => (projectId ? s.entries[projectId] : undefined)) ?? BLANK;
   // Realtime: workspace events for this project (task sync, runs) imply the scan summary may have moved.
-  const latestEvent = useRelay((s) => {
+  const latestEvent = useMingle((s) => {
     if (!projectId) return 0;
     let id = 0;
     for (const event of s.boot?.events ?? []) if (event.projectId === projectId && event.id > id) id = event.id;

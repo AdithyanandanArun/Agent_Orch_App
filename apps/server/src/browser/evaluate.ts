@@ -140,7 +140,7 @@ async function abandon(session: CDPSession, run: Promise<unknown>): Promise<neve
   const settled = await Promise.race([run.then(() => true, () => true), delay(EVAL_TERMINATE_WAIT_MS).then(() => false)]);
   throw new BrowserError(422, settled
     ? 'The expression kept the page busy and was terminated. Avoid long synchronous loops.'
-    : 'The expression is still blocking this tab and could not be stopped. Relay does not close tabs to cancel scripts; ask a person to reload or close the tab.');
+    : 'The expression is still blocking this tab and could not be stopped. Mingle does not close tabs to cancel scripts; ask a person to reload or close the tab.');
 }
 
 /**

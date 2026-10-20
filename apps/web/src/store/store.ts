@@ -61,7 +61,7 @@ const loadPersisted = (): Persisted => {
 };
 const persisted = loadPersisted();
 
-interface RelayState {
+interface MingleState {
   boot: Bootstrap | null;
   bootError: string | null;
   bootLoading: boolean;
@@ -186,7 +186,7 @@ function reconcileBootstrap(prev: Bootstrap | null, next: Bootstrap): Bootstrap 
 }
 
 /** Choose valid selections without disturbing choices that are still valid. */
-function resolveSelection(s: Pick<RelayState, 'activeProjectId' | 'sessionByProject'>, boot: Bootstrap): Pick<RelayState, 'activeProjectId' | 'sessionByProject'> {
+function resolveSelection(s: Pick<MingleState, 'activeProjectId' | 'sessionByProject'>, boot: Bootstrap): Pick<MingleState, 'activeProjectId' | 'sessionByProject'> {
   let projectId = s.activeProjectId;
   if (!projectId || !boot.projects.some((p) => p.id === projectId)) {
     projectId = (boot.projects.find((p) => p.isExample) ?? boot.projects[0])?.id ?? null;
@@ -249,7 +249,7 @@ const send = (event: ClientEvent): boolean => {
   return true;
 };
 
-export const useRelay = create<RelayState>((set, get) => {
+export const useMingle = create<MingleState>((set, get) => {
   const savePersisted = (): void => {
     const s = get();
     const data: Persisted = {
@@ -262,7 +262,7 @@ export const useRelay = create<RelayState>((set, get) => {
       /* storage may be unavailable */
     }
   };
-  const patch = (p: Partial<RelayState>): void => {
+  const patch = (p: Partial<MingleState>): void => {
     set(p);
     savePersisted();
   };
@@ -635,9 +635,9 @@ export const useRelay = create<RelayState>((set, get) => {
   };
 });
 
-function handleOnline(): void { useRelay.getState().reconnect(); }
+function handleOnline(): void { useMingle.getState().reconnect(); }
 function handleVisibility(): void {
-  if (document.visibilityState === 'visible' && useRelay.getState().connection !== 'online') useRelay.getState().reconnect();
+  if (document.visibilityState === 'visible' && useMingle.getState().connection !== 'online') useMingle.getState().reconnect();
 }
 
 // React refresh can preserve App's effect while replacing this store module. Boot its replacement explicitly.
@@ -649,22 +649,22 @@ if (import.meta.hot) {
     document.removeEventListener('visibilitychange', handleVisibility);
     if (socket) { socket.onclose = null; socket.close(); socket = null; }
   });
-  useRelay.getState().init();
+  useMingle.getState().init();
 }
 
 /* Selectors */
 export const useProject = (): Project | undefined =>
-  useRelay((s) => s.boot?.projects.find((p) => p.id === s.activeProjectId));
+  useMingle((s) => s.boot?.projects.find((p) => p.id === s.activeProjectId));
 export const useActiveSession = (): Session | undefined =>
-  useRelay((s) => {
+  useMingle((s) => {
     const id = s.activeProjectId ? s.sessionByProject[s.activeProjectId] : undefined;
     return id ? s.boot?.sessions.find((x) => x.id === id) : undefined;
   });
 /** The group the active session anchors, when it has been converted. */
 export const useActiveGroup = (): GroupSnapshot | undefined =>
-  useRelay((s) => {
+  useMingle((s) => {
     const id = s.activeProjectId ? s.sessionByProject[s.activeProjectId] : undefined;
     return findGroupForSession(s.boot?.groups, id);
   });
 export const useGroupById = (groupId: string): GroupSnapshot | undefined =>
-  useRelay((s) => s.boot?.groups?.find((g) => g.group.id === groupId));
+  useMingle((s) => s.boot?.groups?.find((g) => g.group.id === groupId));

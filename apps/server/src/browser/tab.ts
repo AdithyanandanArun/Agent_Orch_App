@@ -16,7 +16,7 @@ export interface ViewerHandle {
   close(reason: string): Promise<void>;
 }
 
-/** Everything Relay tracks for one browser page. */
+/** Everything Mingle tracks for one browser page. */
 export class TabEntry {
   readonly id = `tab_${randomBytes(6).toString('hex')}`;
   readonly control = new TabControl();

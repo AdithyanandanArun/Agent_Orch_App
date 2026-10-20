@@ -116,7 +116,7 @@ export class SessionRuntime {
       const userMessage = this.store.insertMessage({ sessionId, role: 'user', content: options.userMessage?.content ?? content, kind: options.userMessage?.kind ?? null, runId: run.id });
       run.attachmentOwnerId ??= userMessage.id;
       if (options.attachmentIds?.length) {
-        if (!this.attachmentService) throw conflict('Attachments are unavailable in this Relay session.');
+        if (!this.attachmentService) throw conflict('Attachments are unavailable in this Mingle session.');
         this.attachmentService.claim({ kind: 'session', id: sessionId }, options.attachmentIds, 'message', userMessage.id);
       }
       this.store.insertRun({ id: run.id, sessionId, userMessageId: userMessage.id, provider: session.provider, model: session.model, startedAt: run.startedAt });
@@ -136,7 +136,7 @@ export class SessionRuntime {
   private composePrompt(handoffs: Message[], content: string): string {
     if (!handoffs.length) return content;
     const blocks = handoffs.map((h) => h.content.trim());
-    return ['[Relay context — artifacts handed off to this session since your last turn]', ...blocks, '[End of handed-off context]', '', content].join('\n\n');
+    return ['[Mingle context — artifacts handed off to this session since your last turn]', ...blocks, '[End of handed-off context]', '', content].join('\n\n');
   }
 
   private async execute(run: ActiveRun, startSession: Session, prompt: string): Promise<void> {
@@ -367,7 +367,7 @@ export class SessionRuntime {
         buffer.call.status = 'interrupted';
         buffer.call.finishedAt = at;
         buffer.call.durationMs = buffer.tick === null ? null : Math.max(0, Math.round(performance.now() - buffer.tick));
-        buffer.output = (buffer.output + '\n[Relay: run ended before this tool reported completion.]').slice(-MAX_TOOL_CHARS);
+        buffer.output = (buffer.output + '\n[Mingle: run ended before this tool reported completion.]').slice(-MAX_TOOL_CHARS);
       }
       this.persistTool(buffer);
     }

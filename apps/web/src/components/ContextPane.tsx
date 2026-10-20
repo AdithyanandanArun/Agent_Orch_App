@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { FileText, GitCompare, Globe, Info, X } from 'lucide-react';
-import { useActiveSession, useRelay, type ContextTab } from '../store/store';
+import { useActiveSession, useMingle, type ContextTab } from '../store/store';
 import { useBrowserStore } from '../store/browser';
 import { cx } from '../lib/format';
 import { Boundary, IconButton } from './ui';
@@ -17,9 +17,9 @@ const TABS: { id: ContextTab; label: string; icon: typeof Info }[] = [
 ];
 
 export function ContextPane() {
-  const tab = useRelay((s) => s.contextTab);
-  const open = useRelay((s) => s.contextOpen);
-  const { setContextTab, toggleContext } = useRelay.getState();
+  const tab = useMingle((s) => s.contextTab);
+  const open = useMingle((s) => s.contextOpen);
+  const { setContextTab, toggleContext } = useMingle.getState();
   const [visited, setVisited] = useState<Set<ContextTab>>(() => new Set([tab]));
   const listRef = useRef<HTMLDivElement>(null);
   const session = useActiveSession();

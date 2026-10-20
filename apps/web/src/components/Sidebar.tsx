@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Activity, ArrowDownToLine, ChevronsUpDown, FolderOpen, FolderPlus, FolderMinus, Kanban, LayoutPanelLeft, MoreHorizontal, Network, Search, Settings, SquarePen, Loader2, Pin } from 'lucide-react';
 import type { Project, Session } from '@mingle/contracts';
-import { useRelay, useProject, type View } from '../store/store';
+import { useMingle, useProject, type View } from '../store/store';
 import { copyText } from '../lib/clipboard';
 import { errorMessage } from '../lib/api';
 import { ContextMenu, type ContextMenuEntry } from './ContextMenu';
@@ -21,14 +21,14 @@ const GROUPS: { id: string; label: string; match: (session: Session) => boolean 
 ];
 
 export function Sidebar() {
-  const boot = useRelay((state) => state.boot);
+  const boot = useMingle((state) => state.boot);
   const project = useProject();
-  const view = useRelay((state) => state.view);
-  const sidebarOpen = useRelay((state) => state.sidebarOpen);
-  const activeSessionId = useRelay((state) => state.activeProjectId ? state.sessionByProject[state.activeProjectId] : undefined);
-  const connection = useRelay((state) => state.connection);
-  const creatingSession = useRelay((state) => state.creatingSession);
-  const { setView, selectSession, selectProject, openDialog, createSession } = useRelay.getState();
+  const view = useMingle((state) => state.view);
+  const sidebarOpen = useMingle((state) => state.sidebarOpen);
+  const activeSessionId = useMingle((state) => state.activeProjectId ? state.sessionByProject[state.activeProjectId] : undefined);
+  const connection = useMingle((state) => state.connection);
+  const creatingSession = useMingle((state) => state.creatingSession);
+  const { setView, selectSession, selectProject, openDialog, createSession } = useMingle.getState();
   const [menu, setMenu] = useState<{ sessionId: string; x: number; y: number; returnFocus: HTMLElement } | null>(null);
   const [organizing, setOrganizing] = useState<Set<string>>(() => new Set());
   const [removingProject, setRemovingProject] = useState<Project | null>(null);
@@ -53,7 +53,7 @@ export function Sidebar() {
     try {
       const group = changes.unread === false ? findGroupForSession(boot?.groups, session.id) : undefined;
       const affected = group ? activeMembers(group).map((member) => boot?.sessions.find((item) => item.id === member.sessionId)).filter((item): item is Session => Boolean(item && item.unread)) : [session];
-      await Promise.all(affected.map((item) => useRelay.getState().organizeSession(item.id, changes)));
+      await Promise.all(affected.map((item) => useMingle.getState().organizeSession(item.id, changes)));
       if (preserveFocus && (!document.activeElement || document.activeElement === document.body || document.activeElement === focused)) {
         requestAnimationFrame(() => {
           const row = Array.from(document.querySelectorAll<HTMLElement>('.sitem-row')).find((element) => element.dataset.sessionId === session.id);
@@ -65,8 +65,8 @@ export function Sidebar() {
     finally { setOrganizing((current) => { const next = new Set(current); next.delete(session.id); return next; }); }
   };
   const copy = async (text: string, label: string) => {
-    try { await copyText(text); useRelay.getState().toast('success', `${label} copied.`); }
-    catch (error) { useRelay.getState().toast('error', errorMessage(error)); }
+    try { await copyText(text); useMingle.getState().toast('success', `${label} copied.`); }
+    catch (error) { useMingle.getState().toast('error', errorMessage(error)); }
   };
   const menuItems: ContextMenuEntry[] = target ? [
     { id: 'pin', label: target.pinned ? 'Unpin session' : 'Pin session', checked: target.pinned, disabled: connection !== 'online' || organizing.has(target.id), onSelect: () => void organize(target, { pinned: !target.pinned }) },
@@ -80,7 +80,7 @@ export function Sidebar() {
       { id: 'copy-branch', label: 'Branch name', disabled: !target.branch, onSelect: () => void copy(target.branch!, 'Branch name') },
       { id: 'copy-path', label: target.isolated ? 'Worktree path' : 'Project path', onSelect: () => void copy(target.worktreePath, 'Folder path') },
     ] },
-    { id: 'project-settings', label: 'Project settings', onSelect: () => useRelay.getState().openSettings({ section: 'project', projectId: target.projectId }) },
+    { id: 'project-settings', label: 'Project settings', onSelect: () => useMingle.getState().openSettings({ section: 'project', projectId: target.projectId }) },
     ...(!findGroupForSession(boot?.groups, target.id) ? [
       { type: 'separator' as const, id: 'archive-section' },
       { id: 'archive', label: 'Archive session…', disabled: connection !== 'online' || target.status === 'running' || target.status === 'waiting', onSelect: () => openDialog({ kind: 'archive', sessionId: target.id }) },
@@ -136,15 +136,15 @@ export function Sidebar() {
         })}
       </div>
     </div>
-    {menu && targget ? <ContextMenu key={`${menu.sessionId}:${menu.x}:${menu.y}`} x={menu.x} y={menu.y} items={menuItems} returnFocus={menu.returnFocus} onClose={() => setMenu(null)} /> : null}
+    {menu && target ? <ContextMenu key={`${menu.sessionId}:${menu.x}:${menu.y}`} x={menu.x} y={menu.y} items={menuItems} returnFocus={menu.returnFocus} onClose={() => setMenu(null)} /> : null}
     <footer className="sidebar__foot">
-      <IconButton label="Settings" active={view === 'settings'} onClick={() => useRelay.getState().openSettings()}><Settings size={15} /></IconButton>
+      <IconButton label="Settings" active={view === 'settings'} onClick={() => useMingle.getState().openSettings()}><Settings size={15} /></IconButton>
       <IconButton label="Workspace" active={view === 'workspace'} onClick={() => setView('workspace')}><LayoutPanelLeft size={15} /></IconButton>
       <Menu width={192} trigger={(props) => <IconButton label="More workspace views" active={VIEWS.some((item) => item.view === view)} {...props}><MoreHorizontal size={16} /></IconButton>}>
         <MenuLabel>Project</MenuLabel>{VIEWS.map(({ view: target, label, icon: Icon }) => <MenuItem key={target} selected={view === target} icon={<Icon size={14} />} onSelect={() => setView(target)}>{label}</MenuItem>)}
       </Menu>
       <span className="spacer" />
-      <button type="button" className={cx('sidebar__connection', `sidebar__connection--${connection}`)} onClick={() => useRelay.getState().reconnect()} title={`${connectionLabel} to the local server. Click to reconnect.`}><i aria-hidden="true" /><span className="sr-only">{connectionLabel}</span></button>
+      <button type="button" className={cx('sidebar__connection', `sidebar__connection--${connection}`)} onClick={() => useMingle.getState().reconnect()} title={`${connectionLabel} to the local server. Click to reconnect.`}><i aria-hidden="true" /><span className="sr-only">{connectionLabel}</span></button>
     </footer>
   </aside>{removingProject ? <RemoveProjectDialog project={removingProject} onClose={() => setRemovingProject(null)} /> : null}</>;
 }

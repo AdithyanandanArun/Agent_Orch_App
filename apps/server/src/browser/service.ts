@@ -67,10 +67,10 @@ export class BrowserService {
     const [sources, executable] = await Promise.all([discoverSources(), resolveManagedExecutable(this.options.getSettings().browserExecutable)]);
     const notices: string[] = [];
     if (executable.problem) notices.push(executable.problem);
-    else if (!executable.path) notices.push('No Chromium is installed for Relay yet. Install it to get a private, sandboxed browser, or set a browser executable in settings.');
+    else if (!executable.path) notices.push('No Chromium is installed for Mingle yet. Install it to get a private, sandboxed browser, or set a browser executable in settings.');
     if (this.installer.lastError) notices.push(this.installer.lastError);
     if (sources.length > 0 && !sources.some((source) => source.debuggingAvailable)) {
-      notices.push('To share an existing browser, open chrome://inspect/#remote-debugging in it and turn remote debugging on. Relay only attaches after you approve.');
+      notices.push('To share an existing browser, open chrome://inspect/#remote-debugging in it and turn remote debugging on. Mingle only attaches after you approve.');
     }
     return { sources, managedAvailable: executable.path !== null, managedExecutable: executable.path, installing: this.installer.installing, notices };
   }
@@ -189,7 +189,7 @@ export class BrowserService {
     this.stream.handleUpgrade(req, socket, head, security);
   }
 
-  /** Idempotent shutdown: stops streams, closes Relay-launched browsers and detaches from user browsers without closing them. */
+  /** Idempotent shutdown: stops streams, closes Mingle-launched browsers and detaches from user browsers without closing them. */
   close(): Promise<void> {
     this.closing ??= (async () => {
       if (this.notifyTimer) clearTimeout(this.notifyTimer);

@@ -1,7 +1,7 @@
 import { useId, useMemo, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import type { AgentConfiguration, GroupMode } from '@mingle/contracts';
-import { useRelay } from '../../store/store';
+import { useMingle } from '../../store/store';
 import { api, errorMessage, type SessionPatch } from '../../lib/api';
 import { shortPath } from '../../lib/format';
 import {
@@ -16,11 +16,11 @@ const MODES: GroupMode[] = ['cowork', 'orchestrated', 'current-leads'];
 
 /** Edits one member's saved session settings, only while that member has no active or queued work. */
 export function MemberSettingsDialog({ groupId, memberId }: { groupId: string; memberId: string }) {
-  const close = useRelay.getState().closeDialog;
-  const connection = useRelay((s) => s.connection);
-  const snapshot = useRelay((s) => s.boot?.groups?.find((g) => g.group.id === groupId));
+  const close = useMingle.getState().closeDialog;
+  const connection = useMingle((s) => s.connection);
+  const snapshot = useMingle((s) => s.boot?.groups?.find((g) => g.group.id === groupId));
   const member = snapshot?.members.find((m) => m.id === memberId);
-  const session = useRelay((s) => s.boot?.sessions.find((x) => x.id === member?.sessionId));
+  const session = useMingle((s) => s.boot?.sessions.find((x) => x.id === member?.sessionId));
   const idBase = useId();
   const [config, setConfig] = useState<AgentConfiguration | null>(() => (session ? sessionConfig(session) : null));
   const [busy, setBusy] = useState(false);
@@ -46,8 +46,8 @@ export function MemberSettingsDialog({ groupId, memberId }: { groupId: string; m
     setError(null);
     try {
       await api.updateSession(session.id, patch);
-      await useRelay.getState().refreshNow();
-      useRelay.getState().toast('success', `Updated @${member.handle}.`);
+      await useMingle.getState().refreshNow();
+      useMingle.getState().toast('success', `Updated @${member.handle}.`);
       close();
     } catch (cause) {
       setError(errorMessage(cause));
@@ -74,11 +74,11 @@ export function MemberSettingsDialog({ groupId, memberId }: { groupId: string; m
 
 /** Explicit, idle-time mode transition with the resulting roster and routing, using the supported UpdateGroup fields only. */
 export function GroupModeDialog({ groupId }: { groupId: string }) {
-  const close = useRelay.getState().closeDialog;
-  const connection = useRelay((s) => s.connection);
-  const sessions = useRelay((s) => s.boot?.sessions);
-  const providers = useRelay((s) => s.boot?.providers);
-  const snapshot = useRelay((s) => s.boot?.groups?.find((g) => g.group.id === groupId));
+  const close = useMingle.getState().closeDialog;
+  const connection = useMingle((s) => s.connection);
+  const sessions = useMingle((s) => s.boot?.sessions);
+  const providers = useMingle((s) => s.boot?.providers);
+  const snapshot = useMingle((s) => s.boot?.groups?.find((g) => g.group.id === groupId));
   const idBase = useId();
   const members = useMemo(() => (snapshot ? activeMembers(snapshot) : []), [snapshot]);
   const [mode, setMode] = useState<GroupMode>(snapshot?.group.mode ?? 'cowork');
@@ -131,7 +131,7 @@ export function GroupModeDialog({ groupId }: { groupId: string }) {
         ...(!unchanged ? { mode, ...(leadId ? { orchestratorMemberId: leadId } : {}) } : {}),
         ...(limitsDirty ? { maxParallel: Number(limits.maxParallel), maxTurns: Number(limits.maxTurns), maxHops: Number(limits.maxHops) } : {}),
       });
-      const store = useRelay.getState();
+      const store = useMingle.getState();
       store.applyGroup(updated);
       await store.refreshNow();
       store.toast('success', 'Group settings saved. Resume explicitly when you are ready to continue paused work.');

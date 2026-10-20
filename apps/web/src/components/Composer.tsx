@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { ArrowUp, Square } from 'lucide-react';
 import type { AttachmentRef, ProviderModel, Session } from '@mingle/contracts';
-import { useRelay } from '../store/store';
+import { useMingle } from '../store/store';
 import { api, errorMessage, type ProviderCatalog, type SessionPatch } from '../lib/api';
 import { MOD, PROVIDER_NAME } from './ui';
 import { cx } from '../lib/format';
@@ -18,11 +18,11 @@ const localCommandNames = ['new', 'stop', 'settings', 'model', 'effort', 'permis
 const reservedCommands = new Set(localCommandNames);
 
 export function Composer({ session }: { session: Session }) {
-  const draft = useRelay((s) => s.drafts[session.id] ?? '');
-  const connection = useRelay((s) => s.connection);
-  const provider = useRelay((s) => s.boot?.providers.find((p) => p.id === session.provider));
-  const providers = useRelay((s) => s.boot?.providers);
-  const project = useRelay((s) => s.boot?.projects.find((p) => p.id === session.projectId));
+  const draft = useMingle((s) => s.drafts[session.id] ?? '');
+  const connection = useMingle((s) => s.connection);
+  const provider = useMingle((s) => s.boot?.providers.find((p) => p.id === session.provider));
+  const providers = useMingle((s) => s.boot?.providers);
+  const project = useMingle((s) => s.boot?.projects.find((p) => p.id === session.projectId));
   const ref = useRef<HTMLTextAreaElement>(null);
   const [sending, setSending] = useState(false);
   const [updating, setUpdating] = useState(false);
@@ -78,7 +78,7 @@ export function Composer({ session }: { session: Session }) {
 
   const running = session.status === 'running' || session.status === 'waiting';
   const blocker =
-    connection !== 'online' ? 'Disconnected from the Relay server — reconnect to send.'
+    connection !== 'online' ? 'Disconnected from the Mingle server — reconnect to send.'
       : running ? (session.status === 'waiting' ? 'Waiting for your approval above before the run can continue.' : 'This session is running. Wait for it to finish or interrupt it.')
         : provider && !provider.available ? `${PROVIDER_NAME[session.provider]} needs setup before you can send a message.`
           : null;
@@ -96,33 +96,33 @@ export function Composer({ session }: { session: Session }) {
     try {
       if (local) {
         const action = local[1]!.toLowerCase();
-        if (action === 'new') await useRelay.getState().createSession();
+        if (action === 'new') await useMingle.getState().createSession();
         if (action === 'stop') await api.interrupt(session.id);
-        if (action === 'settings') useRelay.getState().openSettings();
+        if (action === 'settings') useMingle.getState().openSettings();
         if (action === 'model') { focusComposerAfter = false; setModelOpenRequest((value) => value + 1); }
         if (action === 'effort' || action === 'tier') { focusComposerAfter = false; setReasoningOpenRequest((value) => value + 1); }
         if (action === 'permissions') { focusComposerAfter = false; setPolicyOpenRequest((value) => value + 1); }
         if (action === 'skills') {
           caret.current = 1; setCaretPosition(1);
-          useRelay.getState().setDraft(session.id, '$');
+          useMingle.getState().setDraft(session.id, '$');
         }
         if (action === 'usage') { focusComposerAfter = false; setUsageOpen(true); }
-        if (action === 'import') { focusComposerAfter = false; useRelay.getState().openDialog({ kind: 'import' }); }
-        if (action === 'diff') useRelay.getState().setContextTab('changes');
+        if (action === 'import') { focusComposerAfter = false; useMingle.getState().openDialog({ kind: 'import' }); }
+        if (action === 'diff') useMingle.getState().setContextTab('changes');
         if (action === 'status') {
           const currentTier = session.serviceTier ?? 'standard';
           const tier = currentTier === 'standard' ? 'Standard' : currentTier === 'priority' ? 'Fast' : currentTier;
-          useRelay.getState().toast('info', `${PROVIDER_NAME[session.provider]} · ${session.model} · ${effortLabel(session.effort)} · ${tier}`);
+          useMingle.getState().toast('info', `${PROVIDER_NAME[session.provider]} · ${session.model} · ${effortLabel(session.effort)} · ${tier}`);
         }
         if (action === 'help') {
           const providerCommands = Array.from(new Set((catalog?.commands ?? []).filter((item) => !reservedCommands.has(item.name.toLowerCase())).map((item) => `/${item.name}`)));
           const preview = providerCommands.slice(0, 5).join(', ');
           const remainder = providerCommands.length > 5 ? `, … ${providerCommands.length - 5} more` : '';
-          useRelay.getState().toast('info', `Relay commands: /new, /stop, /settings, /model, /effort, /permissions, /tier, /skills, /usage, /import, /status, /diff, /help${preview ? `. Other commands: ${preview}${remainder}. Type / to browse all.` : '.'}`);
+          useMingle.getState().toast('info', `Mingle commands: /new, /stop, /settings, /model, /effort, /permissions, /tier, /skills, /usage, /import, /status, /diff, /help${preview ? `. Other commands: ${preview}${remainder}. Type / to browse all.` : '.'}`);
         }
-        if (action !== 'skills') useRelay.getState().setDraft(session.id, '');
+        if (action !== 'skills') useMingle.getState().setDraft(session.id, '');
         setSelectedSkills([]);
-        await useRelay.getState().refreshNow();
+        await useMingle.getState().refreshNow();
         return;
       }
       const mentionedSkills = (catalog?.skills ?? []).filter((item) => item.enabled && hasSkillMarker(draft, item.name));
@@ -142,10 +142,10 @@ export function Composer({ session }: { session: Session }) {
       const submittedDraft = draft;
       const submittedAttachmentIds = attachments.map((item) => item.id);
       await api.sendMessage(session.id, draft.trim(), messageSkills, submittedAttachmentIds);
-      if (useRelay.getState().drafts[session.id] === submittedDraft) useRelay.getState().setDraft(session.id, '');
+      if (useMingle.getState().drafts[session.id] === submittedDraft) useMingle.getState().setDraft(session.id, '');
       attachmentDraft.sent(submittedAttachmentIds);
       setSelectedSkills([]);
-      await useRelay.getState().refreshNow();
+      await useMingle.getState().refreshNow();
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -157,7 +157,7 @@ export function Composer({ session }: { session: Session }) {
   const stop = async () => {
     try {
       await api.interrupt(session.id);
-      void useRelay.getState().refreshNow();
+      void useMingle.getState().refreshNow();
     } catch (e) {
       setError(errorMessage(e));
     }
@@ -169,8 +169,8 @@ export function Composer({ session }: { session: Session }) {
     setError(null);
     try {
       const updated = await api.updateSession(session.id, patch);
-      await useRelay.getState().refreshNow();
-      useRelay.setState((s) => ({
+      await useMingle.getState().refreshNow();
+      useMingle.setState((s) => ({
         boot: s.boot ? { ...s.boot, sessions: s.boot.sessions.map((item) => item.id === updated.id && item.updatedAt <= updated.updatedAt ? updated : item) } : s.boot,
       }));
     } catch (e) {
@@ -241,19 +241,19 @@ export function Composer({ session }: { session: Session }) {
   const suggestions = trigger.startsWith('/')
     ? [
       ...[
-        { name: 'new', description: 'Create a new session', kind: 'local' as const, group: 'Relay' },
-        { name: 'stop', description: 'Interrupt the current run', kind: 'local' as const, group: 'Relay' },
-        { name: 'settings', description: 'Open Settings', kind: 'local' as const, group: 'Relay' },
-        { name: 'model', description: 'Focus model selection', kind: 'local' as const, group: 'Relay' },
-        { name: 'effort', description: 'Focus effort selection', kind: 'local' as const, group: 'Relay' },
-        { name: 'permissions', description: 'Focus approval policy', kind: 'local' as const, group: 'Relay' },
-        { name: 'tier', description: 'Focus service tier', kind: 'local' as const, group: 'Relay' },
-        { name: 'skills', description: 'Choose skills for the next message', kind: 'local' as const, group: 'Relay' },
-        { name: 'usage', description: 'Show provider limits and session totals', kind: 'local' as const, group: 'Relay' },
-        { name: 'import', description: 'Import a local supported provider conversation', kind: 'local' as const, group: 'Relay' },
-        { name: 'status', description: 'Show current provider and settings', kind: 'local' as const, group: 'Relay' },
-        { name: 'diff', description: 'Open the Changes pane', kind: 'local' as const, group: 'Relay' },
-        { name: 'help', description: 'List Relay commands', kind: 'local' as const, group: 'Relay' },
+        { name: 'new', description: 'Create a new session', kind: 'local' as const, group: 'Mingle' },
+        { name: 'stop', description: 'Interrupt the current run', kind: 'local' as const, group: 'Mingle' },
+        { name: 'settings', description: 'Open Settings', kind: 'local' as const, group: 'Mingle' },
+        { name: 'model', description: 'Focus model selection', kind: 'local' as const, group: 'Mingle' },
+        { name: 'effort', description: 'Focus effort selection', kind: 'local' as const, group: 'Mingle' },
+        { name: 'permissions', description: 'Focus approval policy', kind: 'local' as const, group: 'Mingle' },
+        { name: 'tier', description: 'Focus service tier', kind: 'local' as const, group: 'Mingle' },
+        { name: 'skills', description: 'Choose skills for the next message', kind: 'local' as const, group: 'Mingle' },
+        { name: 'usage', description: 'Show provider limits and session totals', kind: 'local' as const, group: 'Mingle' },
+        { name: 'import', description: 'Import a local supported provider conversation', kind: 'local' as const, group: 'Mingle' },
+        { name: 'status', description: 'Show current provider and settings', kind: 'local' as const, group: 'Mingle' },
+        { name: 'diff', description: 'Open the Changes pane', kind: 'local' as const, group: 'Mingle' },
+        { name: 'help', description: 'List Mingle commands', kind: 'local' as const, group: 'Mingle' },
       ].filter((item) => item.name.startsWith(trigger.slice(1).toLowerCase())),
       ...(catalog?.commands ?? []).filter((item) => !reservedCommands.has(item.name.toLowerCase()) && item.name.toLowerCase().startsWith(trigger.slice(1).toLowerCase())).map((item) => ({ id: item.id, name: item.name, description: item.description, group: item.source[0]!.toUpperCase() + item.source.slice(1), kind: 'provider' as const, argumentHint: item.argumentHint })),
     ].map((item) => ({ ...item, key: `${item.kind}:${'id' in item ? item.id : item.name}`, token: `/${item.name}` }))
@@ -283,14 +283,14 @@ export function Composer({ session }: { session: Session }) {
     }
     const text = `${prefix}${item.token} ${suffix}`;
     const nextCaret = prefix.length + item.token.length + 1;
-    useRelay.getState().setDraft(session.id, text);
+    useMingle.getState().setDraft(session.id, text);
     caret.current = nextCaret;
     setCaretPosition(nextCaret);
     setSuggestion(null);
     dismissedSuggestion.current = null;
     if (item.kind === 'skill' && 'id' in item) setSelectedSkills((current) => {
       const next = session.provider === 'claude' ? [item.id] : current.includes(item.id) ? current : [...current, item.id];
-      if (session.provider === 'claude' && current.length && !current.includes(item.id)) useRelay.getState().toast('info', 'Claude supports one selected skill per message; the latest choice replaced the previous one.');
+      if (session.provider === 'claude' && current.length && !current.includes(item.id)) useMingle.getState().toast('info', 'Claude supports one selected skill per message; the latest choice replaced the previous one.');
       return next;
     });
     requestAnimationFrame(() => { const input = ref.current; input?.focus(); input?.setSelectionRange(nextCaret, nextCaret); });
@@ -317,7 +317,7 @@ export function Composer({ session }: { session: Session }) {
             const nextDraft = e.target.value;
             caret.current = e.target.selectionStart ?? nextDraft.length;
             setCaretPosition(caret.current);
-            useRelay.getState().setDraft(session.id, nextDraft);
+            useMingle.getState().setDraft(session.id, nextDraft);
             setSelectedSkills((current) => current.filter((id) => {
               const skill = catalog?.skills.find((item) => item.id === id);
               return Boolean(skill && hasSkillMarker(nextDraft, skill.name));
@@ -359,7 +359,7 @@ export function Composer({ session }: { session: Session }) {
               onChange={(value) => { const [kind, option] = value.split(':'); if (kind === 'effort') void configure({ effort: option }); else if (kind === 'tier') void configure({ serviceTier: option }); }} placement="top" />
             <SelectMenu triggerRef={policyControl} openRequest={policyOpenRequest} className="composer__select composer__select--policy" label="Approval policy" value={session.policy} disabled={disabled || policyChoices.length === 0}
               displayValue={policyChoices.length ? policyChoices.includes(session.policy) ? undefined : 'Not available' : 'Native/default'}
-              options={policyChoices.map((value) => ({ value, label: policyLabels[value]?.[0] ?? valuue]?.[0] ?? value, description: policyLabels[value]?.[1] }))}
+              options={policyChoices.map((value) => ({ value, label: policyLabels[value]?.[0] ?? value, description: policyLabels[value]?.[1] }))}
               onChange={(value) => void configure({ policy: value as Session['policy'] })} placement="top" />
           </div>
           <div className="composer__send">
@@ -376,7 +376,7 @@ export function Composer({ session }: { session: Session }) {
       </div>
       {project ? <GitBar project={project} session={session} /> : null}
       {blocker || error ? (
-        <p className={cx('composer__note', error && 'is-error')} role={error ? 'alert' : 'status'}>{error ?? blocker}{!error && provider && !provider.available ? <> <button type="button" className="link-btn" onClick={() => useRelay.getState().openDialog({ kind: 'settings' })}>Open Settings</button></> : null}</p>
+        <p className={cx('composer__note', error && 'is-error')} role={error ? 'alert' : 'status'}>{error ?? blocker}{!error && provider && !provider.available ? <> <button type="button" className="link-btn" onClick={() => useMingle.getState().openDialog({ kind: 'settings' })}>Open Settings</button></> : null}</p>
       ) : null}
       {catalogError && (trigger.startsWith('/') || trigger.startsWith('$')) ? <p className="composer__note" role="status">Command and skill suggestions unavailable: {catalogError} <button type="button" className="link-btn" onClick={() => setCatalogRevision((value) => value + 1)}>Retry</button></p> : null}
       {catalog?.warnings.length && (suggestion || trigger.startsWith('/') || trigger.startsWith('$')) ? <details className="composer__catalog-note"><summary>Command and skill details · {catalog.warnings.length} notice{catalog.warnings.length === 1 ? '' : 's'}</summary><ul>{catalog.warnings.map((warning, index) => <li key={`${index}:${warning}`}>{warning}</li>)}</ul><button type="button" className="link-btn" onClick={() => setCatalogRevision((value) => value + 1)}>Refresh</button></details> : null}

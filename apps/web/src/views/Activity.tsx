@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { Activity as ActivityIcon, ChevronRight } from 'lucide-react';
 import type { SessionRun, Task, ToolCall } from '@mingle/contracts';
-import { useRelay, useProject } from '../store/store';
+import { useMingle, useProject } from '../store/store';
 import { useProjectContext } from '../store/projectContext';
 import { clockTime, cx, dayLabel, relativeTime, useNow } from '../lib/format';
 import { formatElapsed } from '../lib/activity';
@@ -54,7 +54,7 @@ function EntryRow({ entry, sessionName, now }: { entry: Entry; sessionName?: str
           <Badge tone={entry.tone}>{entry.type}</Badge>
           {entry.identity ? <AgentIdentity handle={entry.identity.handle} identityKey={entry.identity.key} provider={entry.identity.provider} /> : null}
           {entry.source ? <Badge tone="neutral" title={where ?? entry.source.key}>{SOURCE_LABEL[entry.source.kind]}{where ? ` · ${where}` : ''}</Badge> : null}
-          {sessionName ? <button type="button" className="chip chip--btn" onClick={() => entry.sessionId && useRelay.getState().selectSession(entry.sessionId)}>{sessionName}</button> : null}
+          {sessionName ? <button type="button" className="chip chip--btn" onClick={() => entry.sessionId && useMingle.getState().selectSession(entry.sessionId)}>{sessionName}</button> : null}
           <span title={new Date(entry.createdAt).toLocaleString()}>{clockTime(entry.createdAt)} · {relativeTime(entry.createdAt, now)}</span>
           <span className="evt__id">{entry.origin}</span>
         </div>
@@ -86,12 +86,12 @@ function RepoContext({ projectId }: { projectId: string }) {
 
 export function ActivityView() {
   const project = useProject();
-  const events = useRelay((s) => s.boot?.events);
-  const sessions = useRelay((s) => s.boot?.sessions);
-  const runs = useRelay((s) => s.boot?.runs);
-  const toolCalls = useRelay((s) => s.boot?.toolCalls);
-  const tasks = useRelay((s) => s.boot?.tasks);
-  const groupSnapshots = useRelay((s) => s.boot?.groups);
+  const events = useMingle((s) => s.boot?.events);
+  const sessions = useMingle((s) => s.boot?.sessions);
+  const runs = useMingle((s) => s.boot?.runs);
+  const toolCalls = useMingle((s) => s.boot?.toolCalls);
+  const tasks = useMingle((s) => s.boot?.tasks);
+  const groupSnapshots = useMingle((s) => s.boot?.groups);
   const [allProjects, setAllProjects] = useState(false);
   const [type, setType] = useState('');
   const [sessionId, setSessionId] = useState('');

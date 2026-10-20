@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { AlertTriangle } from 'lucide-react';
-import { useRelay, useActiveSession, useProject } from '../store/store';
+import { useMingle, useActiveSession, useProject } from '../store/store';
 import { api, errorMessage } from '../lib/api';
 import { Button, Field, InlineError, Modal, PROVIDER_NAME } from './ui';
 import { SelectMenu } from './SelectMenu';
@@ -25,11 +25,11 @@ function useSubmit(onDone: () => void) {
 }
 
 export function TaskDialog() {
-  const close = useRelay.getState().closeDialog;
+  const close = useMingle.getState().closeDialog;
   const project = useProject();
-  const allSessions = useRelay((s) => s.boot?.sessions);
+  const allSessions = useMingle((s) => s.boot?.sessions);
   const sessions = useMemo(() => (allSessions ?? []).filter(session => session.projectId === project?.id), [allSessions, project?.id]);
-  const allTasks = useRelay((s) => s.boot?.tasks);
+  const allTasks = useMingle((s) => s.boot?.tasks);
   const tasks = useMemo(() => (allTasks ?? []).filter((t) => t.projectId === project?.id), [allTasks, project?.id]);
   const activeSession = useActiveSession();
   const [title, setTitle] = useState('');
@@ -44,9 +44,9 @@ export function TaskDialog() {
     if (!project) return;
     void run(async () => {
       const t = await api.createTask({ projectId: project.id, title: title.trim(), description, acceptanceCriteria: criteria, sessionId: sessionId || null, dependsOn: deps });
-      await useRelay.getState().refreshNow();
-      useRelay.getState().setView('tasks');
-      useRelay.getState().selectTask(t.id);
+      await useMingle.getState().refreshNow();
+      useMingle.getState().setView('tasks');
+      useMingle.getState().selectTask(t.id);
     });
   };
 
@@ -75,11 +75,11 @@ export function TaskDialog() {
 }
 
 export function HandoffDialog({ taskId, fromSessionId }: { taskId?: string; fromSessionId?: string }) {
-  const close = useRelay.getState().closeDialog;
+  const close = useMingle.getState().closeDialog;
   const project = useProject();
   const active = useActiveSession();
-  const allSessions = useRelay((s) => s.boot?.sessions);
-  const allTasks = useRelay((s) => s.boot?.tasks);
+  const allSessions = useMingle((s) => s.boot?.sessions);
+  const allTasks = useMingle((s) => s.boot?.tasks);
   const sessions = useMemo(() => (allSessions ?? []).filter((s) => s.projectId === project?.id), [allSessions, project?.id]);
   const tasks = useMemo(() => (allTasks ?? []).filter((t) => t.projectId === project?.id), [allTasks, project?.id]);
   const [from, setFrom] = useState(fromSessionId ?? active?.id ?? sessions[0]?.id ?? '');
@@ -103,8 +103,8 @@ export function HandoffDialog({ taskId, fromSessionId }: { taskId?: string; from
     e.preventDefault();
     void run(async () => {
       await api.handoff({ fromSessionId: from, toSessionId: to, taskId: task || undefined, path: path.trim(), revision: revision.trim(), note });
-      await useRelay.getState().refreshNow();
-      useRelay.getState().toast('success', 'Handoff recorded');
+      await useMingle.getState().refreshNow();
+      useMingle.getState().toast('success', 'Handoff recorded');
     });
   };
   const why = same ? 'Choose two different sessions' : !path.trim() || !revision.trim() ? 'Path and revision are required' : !to ? 'Choose a receiving session' : undefined;
@@ -142,14 +142,14 @@ export function HandoffDialog({ taskId, fromSessionId }: { taskId?: string; from
 }
 
 export function RenameDialog({ sessionId }: { sessionId: string }) {
-  const close = useRelay.getState().closeDialog;
-  const session = useRelay((s) => s.boot?.sessions.find((x) => x.id === sessionId));
+  const close = useMingle.getState().closeDialog;
+  const session = useMingle((s) => s.boot?.sessions.find((x) => x.id === sessionId));
   const [name, setName] = useState(session?.name ?? '');
   const { busy, error, run } = useSubmit(close);
   return (
     <Modal title="Rename session" onClose={close} width={440}
       footer={<><Button variant="ghost" onClick={close}>Cancel</Button><Button variant="primary" type="submit" form="rename-form" busy={busy} disabled={!name.trim() || name.trim() === session?.name} why="Enter a new name">Rename</Button></>}>
-      <form id="rename-form" className="form" onSubmit={(e) => { e.preventDefault(); void run(async () => { await api.renameSession(sessionId, name.trim()); await useRelay.getState().refreshNow(); }); }}>
+      <form id="rename-form" className="form" onSubmit={(e) => { e.preventDefault(); void run(async () => { await api.renameSession(sessionId, name.trim()); await useMingle.getState().refreshNow(); }); }}>
         <Field label="Name" htmlFor="rn-name"><input id="rn-name" data-autofocus className="input" value={name} maxLength={100} onChange={(e) => setName(e.target.value)} /></Field>
         {error ? <InlineError>{error}</InlineError> : null}
       </form>
@@ -158,12 +158,12 @@ export function RenameDialog({ sessionId }: { sessionId: string }) {
 }
 
 export function ArchiveDialog({ sessionId }: { sessionId: string }) {
-  const close = useRelay.getState().closeDialog;
-  const session = useRelay((s) => s.boot?.sessions.find((x) => x.id === sessionId));
+  const close = useMingle.getState().closeDialog;
+  const session = useMingle((s) => s.boot?.sessions.find((x) => x.id === sessionId));
   const { busy, error, run } = useSubmit(close);
   return (
     <Modal title="Archive session?" onClose={close} width={460}
-      footer={<><Button variant="ghost" onClick={close}>Cancel</Button><Button variant="danger" busy={busy} onClick={() => void run(async () => { await api.archiveSession(sessionId); await useRelay.getState().refreshNow(); useRelay.getState().toast('info', 'Session archived'); })}>Archive</Button></>}>
+      footer={<><Button variant="ghost" onClick={close}>Cancel</Button><Button variant="danger" busy={busy} onClick={() => void run(async () => { await api.archiveSession(sessionId); await useMingle.getState().refreshNow(); useMingle.getState().toast('info', 'Session archived'); })}>Archive</Button></>}>
       <div className="form">
         <p>“{session?.name ?? 'This session'}” will be removed from the sidebar. Its metadata is kept, and its worktree and branch are <strong>never deleted</strong> by Mingle — clean those up with Git when you’re ready.</p>
         {session && (session.status === 'running' || session.status === 'waiting') ? <div className="inline-warn" role="note"><AlertTriangle size={14} /> This session is active. Interrupt it first if you want the run to stop.</div> : null}

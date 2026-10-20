@@ -94,7 +94,7 @@ function Grant({ grant, now }: { grant: UsageResetGrant; now: number }) {
 
 function SessionFacts({ usage }: { usage: SessionUsage }) {
   return <section className="usage-section usage-section--session">
-    <header><div><h2>This session</h2><p>Conversation totals for this Relay session.</p></div></header>
+    <header><div><h2>This session</h2><p>Conversation totals for this Mingle session.</p></div></header>
     <dl className="usage__facts usage__facts--session">
       <div><dt>Input tokens</dt><dd>{tokenCount(usage.session.inputTokens)}</dd></div>
       <div><dt>Output tokens</dt><dd>{tokenCount(usage.session.outputTokens)}</dd></div>
@@ -202,7 +202,7 @@ function Dialog({ session, onClose }: { session: Session; onClose: () => void })
               {!hasAccountDetails ? <p className="usage__unknown">{usage.status === 'unavailable' ? 'Account usage details are unavailable.' : 'No account usage limits, credits, or reset details were reported.'}</p> : null}
               {usage.windows.length ? <div className="usage-windows">{usage.windows.map((item) => <LimitWindow key={item.id} item={item} now={now} />)}</div> : null}
               <div className="usage-account-grid">
-                <section className="usage-subsection"><h3><Coins size={14} /> Credits</h3><CreditDetaiils usage={usage} now={now} /></section>
+                <section className="usage-subsection"><h3><Coins size={14} /> Credits</h3><CreditDetails usage={usage} now={now} /></section>
                 <section className="usage-subsection"><h3><RotateCcw size={14} /> Resets</h3><ResetDetails usage={usage} now={now} /></section>
               </div>
             </section>

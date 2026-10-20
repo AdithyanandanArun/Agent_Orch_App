@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Activity, ArrowDownToLine, ArrowRightLeft, CornerDownLeft, FolderOpen, FolderPlus, Kanban, LayoutPanelLeft, ListPlus, Moon, Network, PanelRight, Pencil, Plus, RefreshCw, Search, Settings, Square, SquareTerminal, Keyboard, Globe } from 'lucide-react';
-import { useRelay } from '../store/store';
+import { useMingle } from '../store/store';
 import { api, errorMessage } from '../lib/api';
 import { cx, fuzzy } from '../lib/format';
 import { Kbd, Modal, MOD, ProviderMark } from './ui';
@@ -9,7 +9,7 @@ import { groupChildSessionIds } from '../lib/groups';
 interface Cmd { id: string; label: string; group: string; icon: ReactNode; hint?: string; keywords?: string; run: () => void; disabled?: string }
 
 export function Palette() {
-  const s = useRelay();
+  const s = useMingle();
   const [query, setQuery] = useState('');
   const [index, setIndex] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
@@ -18,7 +18,7 @@ export function Palette() {
   const session = s.activeProjectId ? s.boot?.sessions.find((x) => x.id === s.sessionByProject[s.activeProjectId!]) : undefined;
 
   const commands = useMemo<Cmd[]>(() => {
-    const st = useRelay.getState();
+    const st = useMingle.getState();
     const go = (fn: () => void) => () => { st.closeDialog(); fn(); };
     const list: Cmd[] = [
       { id: 'new-session', group: 'Create', label: 'New session', icon: <Plus size={15} />, run: go(() => { void st.createSession(); }), disabled: !project ? 'Open a project first' : s.creatingSession ? 'Creating session…' : undefined },
@@ -124,7 +124,7 @@ export function Palette() {
 }
 
 export function ShortcutsDialog() {
-  const close = useRelay.getState().closeDialog;
+  const close = useMingle.getState().closeDialog;
   const rows: [string, string[]][] = [
     ['Open command menu', [MOD, 'K']], ['Toggle terminal', [MOD, 'J']], ['Save file in editor', [MOD, 'S']],
     ['Send message', ['↵']], ['New line in message', ['⇧', '↵']], ['Close dialog or menu', ['Esc']],

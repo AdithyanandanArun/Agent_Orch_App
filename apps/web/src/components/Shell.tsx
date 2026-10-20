@@ -1,14 +1,14 @@
 import { AlertTriangle, CheckCircle2, Info, RefreshCw, WifiOff, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useRelay } from '../store/store';
+import { useMingle } from '../store/store';
 import { Button, RelayGlyph, Spinner } from './ui';
 
 export function ConnectionBanner() {
-  const connection = useRelay((s) => s.connection);
-  const attempt = useRelay((s) => s.attempt);
-  const nextRetryAt = useRelay((s) => s.nextRetryAt);
-  const staleError = useRelay((s) => s.staleError);
+  const connection = useMingle((s) => s.connection);
+  const attempt = useMingle((s) => s.attempt);
+  const nextRetryAt = useMingle((s) => s.nextRetryAt);
+  const staleError = useMingle((s) => s.staleError);
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     if (connection !== 'offline') return;
@@ -28,20 +28,20 @@ export function ConnectionBanner() {
           <strong>Disconnected from the Mingle server.</strong> {connection === 'connecting' ? 'Reconnecting…' : `Retrying in ${secs}s (attempt ${attempt}).`} Showing the last known state; sending and running are paused.
         </>}
       </div>
-      <Button size="sm" onClick={() => useRelay.getState().reconnect()}><RefreshCw size={12} /> Retry now</Button>
+      <Button size="sm" onClick={() => useMingle.getState().reconnect()}><RefreshCw size={12} /> Retry now</Button>
     </div>
   );
 }
 
 export function Toasts() {
-  const toasts = useRelay((s) => s.toasts);
+  const toasts = useMingle((s) => s.toasts);
   return createPortal(
     <div className="toasts" role="region" aria-label="Notifications" aria-live="polite">
       {toasts.map((t) => (
         <div key={t.id} className={`toast toast--${t.tone}`}>
           {t.tone === 'error' ? <AlertTriangle size={15} className="toast__icon" /> : t.tone === 'success' ? <CheckCircle2 size={15} className="toast__icon" /> : <Info size={15} className="toast__icon" />}
           <p>{t.text}</p>
-          <button type="button" className="ibtn" aria-label="Dismiss notification" onClick={() => useRelay.getState().dismissToast(t.id)}><X size={13} /></button>
+          <button type="button" className="ibtn" aria-label="Dismiss notification" onClick={() => useMingle.getState().dismissToast(t.id)}><X size={13} /></button>
         </div>
       ))}
     </div>,
@@ -50,8 +50,8 @@ export function Toasts() {
 }
 
 export function StartupScreen() {
-  const error = useRelay((s) => s.bootError);
-  const attempt = useRelay((s) => s.attempt);
+  const error = useMingle((s) => s.bootError);
+  const attempt = useMingle((s) => s.attempt);
   return (
     <div className="startup" role={error ? 'alert' : 'status'}>
       <div className="startup__card">
@@ -61,7 +61,7 @@ export function StartupScreen() {
             <h1>Can’t reach the Mingle server</h1>
             <p>{error}</p>
             <p className="muted small">Start it with <code>pnpm dev</code> (API on 127.0.0.1:4310). Mingle keeps retrying{attempt > 0 ? ` — attempt ${attempt}` : ''}.</p>
-            <Button variant="primary" onClick={() => useRelay.getState().reconnect()}><RefreshCw size={13} /> Retry now</Button>
+            <Button variant="primary" onClick={() => useMingle.getState().reconnect()}><RefreshCw size={13} /> Retry now</Button>
           </>
         ) : (
           <>

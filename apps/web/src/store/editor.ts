@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { api, errorMessage } from '../lib/api';
 import { basename, languageFor } from '../lib/format';
-import { useRelay } from './store';
+import { useMingle } from './store';
 
 export interface EditorTab {
   key: string;
@@ -55,7 +55,7 @@ export const useEditor = create<EditorState>((set, get) => {
         set((s) => ({ tabs: [...s.tabs, tab] }));
         void load(tab);
       }
-      useRelay.getState().setCenterTab(key);
+      useMingle.getState().setCenterTab(key);
     },
     edit: (key, draft) => update(key, { draft }),
     close(key) {
@@ -63,7 +63,7 @@ export const useEditor = create<EditorState>((set, get) => {
       if (!tab) return;
       if (isDirty(tab) && !window.confirm(`Discard unsaved changes to ${tab.path}?`)) return;
       set((s) => ({ tabs: s.tabs.filter((t) => t.key !== key) }));
-      const relay = useRelay.getState();
+      const relay = useMingle.getState();
       if (relay.centerTab === key) {
         const rest = get().tabs;
         relay.setCenterTab(rest.length ? rest[rest.length - 1]!.key : 'session');
@@ -83,11 +83,11 @@ export const useEditor = create<EditorState>((set, get) => {
       try {
         await api.writeFile(tab.projectId, tab.path, content, tab.sessionId);
         update(key, { saving: false, original: content });
-        useRelay.getState().toast('success', `Saved ${tab.path}`);
+        useMingle.getState().toast('success', `Saved ${tab.path}`);
         return true;
       } catch (e) {
         update(key, { saving: false });
-        useRelay.getState().toast('error', `Could not save ${tab.path}: ${errorMessage(e)}`);
+        useMingle.getState().toast('error', `Could not save ${tab.path}: ${errorMessage(e)}`);
         return false;
       }
     },

@@ -3,7 +3,7 @@ import type { AppSettings, ProviderCatalog, Session } from '@mingle/contracts';
 import { parseNativeCommands } from './metadata.js';
 import { resolveOpencode, safeOpencodeError, withProbeSession } from './runtime.js';
 
-const SKILL_NOTICE = 'OpenCode lists its skills as slash commands through ACP. They appear under commands; Relay’s separate skill picker is unavailable for OpenCode.';
+const SKILL_NOTICE = 'OpenCode lists its skills as slash commands through ACP. They appear under commands; Mingle’s separate skill picker is unavailable for OpenCode.';
 const UNSUPPORTED_NOTICE = 'Only commands that OpenCode advertises over ACP are listed. Terminal-only commands such as /undo and /redo are not available through ACP.';
 
 /**

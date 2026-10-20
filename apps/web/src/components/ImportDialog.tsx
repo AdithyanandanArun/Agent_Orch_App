@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { AlertTriangle, ArrowDownToLine, Check, Clock3, Folder, Search, X } from 'lucide-react';
 import type { ExternalConversation, ExternalConversationDetails, ExternalConversationMessage, Provider } from '@mingle/contracts';
-import { useRelay } from '../store/store';
+import { useMingle } from '../store/store';
 import { api, errorMessage } from '../lib/api';
 import { Button, InlineError, Modal, Spinner } from './ui';
 import { cx } from '../lib/format';
@@ -12,8 +12,8 @@ const PROVIDERS: { id: Provider; label: string }[] = [
 
 /** Providers without a verified bounded native history reader; no request is made for them. */
 const IMPORT_UNSUPPORTED: Partial<Record<Provider, { notice: string; title: string; detail: string }>> = {
-  antigravity: { notice: 'Antigravity native history import is not supported yet. No local history request was made.', title: 'Antigravity import is unavailable', detail: 'Relay does not have an Antigravity native history reader yet.' },
-  opencode: { notice: 'OpenCode native history import is not supported yet. No local history request was made. Continue a Relay OpenCode session to resume its native conversation.', title: 'OpenCode import is unavailable', detail: 'ACP can list OpenCode sessions, but Relay has no verified bounded history reader for them yet.' },
+  antigravity: { notice: 'Antigravity native history import is not supported yet. No local history request was made.', title: 'Antigravity import is unavailable', detail: 'Mingle does not have an Antigravity native history reader yet.' },
+  opencode: { notice: 'OpenCode native history import is not supported yet. No local history request was made. Continue a Mingle OpenCode session to resume its native conversation.', title: 'OpenCode import is unavailable', detail: 'ACP can list OpenCode sessions, but Mingle has no verified bounded history reader for them yet.' },
 };
 
 function shortDate(value: string | null): string {
@@ -29,8 +29,8 @@ function messageLabel(role: ExternalConversationMessage['role']): string {
 }
 
 export function ImportDialog() {
-  const state = useRelay();
-  const close = useRelay.getState().closeDialog;
+  const state = useMingle();
+  const close = useMingle.getState().closeDialog;
   const project = state.boot?.projects.find((item) => item.id === state.activeProjectId) ?? null;
   const activeSession = state.activeProjectId ? state.boot?.sessions.find((item) => item.id === state.sessionByProject[state.activeProjectId!]) : undefined;
   const [provider, setProvider] = useState<Provider>(() => activeSession?.provider ?? state.boot?.settings.defaultProvider ?? 'codex');
@@ -137,18 +137,18 @@ export function ImportDialog() {
     setImporting(true); setImportError(null);
     try {
       const result = await api.importConversation(provider, selected.id);
-      await useRelay.getState().refreshNow();
-      useRelay.setState((current) => current.boot ? ({
+      await useMingle.getState().refreshNow();
+      useMingle.setState((current) => current.boot ? ({
         boot: {
           ...current.boot,
           projects: current.boot.projects.some((item) => item.id === result.project.id) ? current.boot.projects : [...current.boot.projects, result.project],
           sessions: current.boot.sessions.some((item) => item.id === result.session.id) ? current.boot.sessions : [...current.boot.sessions, result.session],
         },
       }) : current);
-      useRelay.getState().selectSession(result.session.id);
+      useMingle.getState().selectSession(result.session.id);
       close();
-      useRelay.getState().toast('success', result.alreadyImported ? `Opened “${result.session.name}”` : `Imported “${result.session.name}”`);
-      for (const notice of [...new Set([...details.notices, ...result.notices])]) useRelay.getState().toast('info', notice);
+      useMingle.getState().toast('success', result.alreadyImported ? `Opened “${result.session.name}”` : `Imported “${result.session.name}”`);
+      for (const notice of [...new Set([...details.notices, ...result.notices])]) useMingle.getState().toast('info', notice);
     } catch (cause) {
       setImportError(errorMessage(cause));
     } finally {
@@ -174,7 +174,7 @@ export function ImportDialog() {
   </>;
 
   return (
-    <Modal title="Import a conversation" description="Continue a supported local provider conversation in Relay." onClose={requestClose} footer={footer}>
+    <Modal title="Import a conversation" description="Continue a supported local provider conversation in Mingle." onClose={requestClose} footer={footer}>
       <form id="import-form" className="import-dialog" onSubmit={(event: FormEvent) => { event.preventDefault(); void importAndOpen(); }} onKeyDown={(event) => {
         if (event.key === 'Enter' && event.target instanceof HTMLInputElement) event.preventDefault();
       }}>
@@ -197,7 +197,7 @@ export function ImportDialog() {
           {listError ? <InlineError onRetry={importing ? undefined : () => setListRevision((value) => value + 1)}>{listError}</InlineError> : null}
           {loading ? <div className="import-dialog__state"><Spinner label="Loading conversations" /><span>Reading local conversation history…</span></div> : null}
           {!loading && IMPORT_UNSUPPORTED[provider] ? <div className="import-dialog__state"><AlertTriangle size={20} /><strong>{IMPORT_UNSUPPORTED[provider]!.title}</strong><span>{IMPORT_UNSUPPORTED[provider]!.detail}</span></div> : null}
-          {!loading && !IMPORT_UNSUPPORTED[provider] && !listError && conversations.length === 0 ? <div className="import-dialog__state"><Folder size={20} /><strong>No conversations found</strong><span>Relay only reads history available from this machine.</span></div> : null}
+          {!loading && !IMPORT_UNSUPPORTED[provider] && !listError && conversations.length === 0 ? <div className="import-dialog__state"><Folder size={20} /><strong>No conversations found</strong><span>Mingle only reads history available from this machine.</span></div> : null}
           {!loading && conversations.length > 0 && visible.length === 0 ? <div className="import-dialog__state"><Search size={18} /><strong>No matches in loaded history</strong><span>Load more history to search older conversations.</span></div> : null}
           <div className="import-dialog__rows" role="listbox" aria-label={`${provider} conversations`} aria-busy={loading} onKeyDown={(event) => {
             if (importing || !visible.length || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;

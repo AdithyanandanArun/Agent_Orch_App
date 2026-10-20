@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { Play, Settings2, Square, UserMinus, UserPlus } from 'lucide-react';
 import type { GroupMember, GroupSnapshot, Session } from '@mingle/contracts';
-import { useRelay } from '../../store/store';
+import { useMingle } from '../../store/store';
 import { shortPath } from '../../lib/format';
 import { interruptMember, removeMember, resumeMember } from '../../lib/groupActions';
 import {
@@ -21,10 +21,10 @@ function removalBlock(snapshot: GroupSnapshot, member: GroupMember, session: Ses
 
 /** Compact participant list: live status, per-member stop/settings/remove, and the group's queue and bounds. */
 export function MembersPopover({ snapshot, anchor, open, onClose }: { snapshot: GroupSnapshot; anchor: RefObject<HTMLElement | null>; open: boolean; onClose: () => void }) {
-  const sessions = useRelay((s) => s.boot?.sessions);
-  const providers = useRelay((s) => s.boot?.providers);
-  const connection = useRelay((s) => s.connection);
-  const project = useRelay((s) => s.boot?.projects.find((item) => item.id === snapshot.group.projectId));
+  const sessions = useMingle((s) => s.boot?.sessions);
+  const providers = useMingle((s) => s.boot?.providers);
+  const connection = useMingle((s) => s.connection);
+  const project = useMingle((s) => s.boot?.projects.find((item) => item.id === snapshot.group.projectId));
   const [confirming, setConfirming] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
@@ -44,7 +44,7 @@ export function MembersPopover({ snapshot, anchor, open, onClose }: { snapshot: 
     <Popover anchor={anchor} open={open} onClose={onClose} label="Group participants" width={420} className="members">
       <div className="members__head">
         <div><strong>Participants</strong><small>{MODE_LABEL[group.mode]} · {members.length} active</small></div>
-        <Button size="sm" disabled={!online} why="Reconnect to the server first." onClick={dialog(() => useRelay.getState().openDialog({ kind: 'add-agent', sessionId: group.anchorSessionId }))}><UserPlus size={13} aria-hidden="true" /> Add agent</Button>
+        <Button size="sm" disabled={!online} why="Reconnect to the server first." onClick={dialog(() => useMingle.getState().openDialog({ kind: 'add-agent', sessionId: group.anchorSessionId }))}><UserPlus size={13} aria-hidden="true" /> Add agent</Button>
       </div>
       <ul className="members__list">
         {members.map((member) => {
@@ -71,7 +71,7 @@ export function MembersPopover({ snapshot, anchor, open, onClose }: { snapshot: 
               </div>
               <div className="member__actions">
                 <IconButton label={`Settings for @${member.handle}`} disabled={!online || locked} why={locked ? 'Only idle members can change settings' : 'Reconnect to the server first'}
-                  onClick={dialog(() => useRelay.getState().openDialog({ kind: 'member-settings', groupId: group.id, memberId: member.id }))}><Settings2 size={14} /></IconButton>
+                  onClick={dialog(() => useMingle.getState().openDialog({ kind: 'member-settings', groupId: group.id, memberId: member.id }))}><Settings2 size={14} /></IconButton>
                 {member.held ? <IconButton label={`Resume @${member.handle}`} disabled={!online || busy === member.id} why="Reconnect to the server first" onClick={() => { setBusy(member.id); void resumeMember(group.id, member.id).finally(() => setBusy(null)); }}><Play size={14} /></IconButton> : null}
                 <IconButton label={`Stop @${member.handle}`} disabled={!online || (!busyMember && active.length === 0) || busy === member.id} why={busyMember || active.length ? 'Reconnect to the server first' : 'No active or queued work'}
                   onClick={() => { setBusy(member.id); void interruptMember(group.id, member.id).finally(() => setBusy(null)); }}><Square size={12} fill="currentColor" /></IconButton>
@@ -107,7 +107,7 @@ export function MembersPopover({ snapshot, anchor, open, onClose }: { snapshot: 
         ) : <p className="field__hint">No queued deliveries.</p>}
       </div>
       <div className="members__foot">
-        <Button size="sm" variant="ghost" disabled={!online} why="Reconnect to the server first." onClick={dialog(() => useRelay.getState().openDialog({ kind: 'group-mode', groupId: group.id }))}>Group settings…</Button>
+        <Button size="sm" variant="ghost" disabled={!online} why="Reconnect to the server first." onClick={dialog(() => useMingle.getState().openDialog({ kind: 'group-mode', groupId: group.id }))}>Group settings…</Button>
       </div>
     </Popover>
   );

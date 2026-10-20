@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Download, Globe, LogIn } from 'lucide-react';
 import type { BrowserConnect as ConnectRequest, BrowserSessionState } from '@mingle/contracts';
 import { api, errorMessage } from '../../lib/api';
-import { useRelay } from '../../store/store';
+import { useMingle } from '../../store/store';
 import { Button, InlineError } from '../ui';
 import { BrowserSourcePicker, ChromeSetupHelp } from './BrowserSources';
 import { useBrowserDiscovery } from './useBrowserDiscovery';
@@ -11,7 +11,7 @@ type Mode = 'managed' | 'existing';
 
 /** Choose how this session gets a browser. Nothing connects, launches or downloads until a button here is pressed. */
 export function BrowserConnect({ sessionId, state, onState }: { sessionId: string; state?: BrowserSessionState; onState(next: BrowserSessionState): void }) {
-  const settings = useRelay((s) => s.boot?.settings);
+  const settings = useMingle((s) => s.boot?.settings);
   const { discovery, loading, error: discoveryError, installing, refresh, install } = useBrowserDiscovery();
   const [sourceId, setSourceId] = useState(settings?.browserExistingSourceId ?? '');
   const [endpoint, setEndpoint] = useState(settings?.browserCdpEndpoint ?? '');

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ExternalLink } from 'lucide-react';
 import type { GitHubState, RepositoryMutationResult, RepositoryState } from '@mingle/contracts';
 import { api, errorMessage } from '../../lib/api';
-import { useRelay } from '../../store/store';
+import { useMingle } from '../../store/store';
 import { cx } from '../../lib/format';
 import { Badge, Button, Field, InlineError, Modal } from '../ui';
 import { SelectMenu } from '../SelectMenu';
@@ -20,8 +20,8 @@ export interface MutationProps {
   onClose: () => void;
 }
 
-const toast = (tone: 'info' | 'success' | 'error', text: string): void => useRelay.getState().toast(tone, text);
-const settle = (): void => { void useRelay.getState().refreshNow(); };
+const toast = (tone: 'info' | 'success' | 'error', text: string): void => useMingle.getState().toast(tone, text);
+const settle = (): void => { void useMingle.getState().refreshNow(); };
 
 /* ——— Commit ——— */
 export function CommitDialog({ projectId, sessionId, repo, adopt, refresh, blocked, onClose }: MutationProps) {

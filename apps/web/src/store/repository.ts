@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { create } from 'zustand';
 import type { GitHubState, RepositoryMutationResult, RepositoryState } from '@mingle/contracts';
 import { api, errorMessage } from '../lib/api';
-import { useRelay } from './store';
+import { useMingle } from './store';
 
 /** Visible status is re-read at most this often; mutations and finished runs refresh immediately. */
 export const REPOSITORY_POLL_MS = 30_000;
@@ -92,7 +92,7 @@ export function applyMutation(scope: RepoScope, result: RepositoryMutationResult
 interface Watch { count: number; scope: RepoScope; timer: number }
 const watches = new Map<string, Watch>();
 
-const canPoll = (): boolean => document.visibilityState === 'visible' && useRelay.getState().connection === 'online';
+const canPoll = (): boolean => document.visibilityState === 'visible' && useMingle.getState().connection === 'online';
 function tick(scope: RepoScope): void {
   if (canPoll()) void loadRepository(scope, { silent: true, github: true });
 }
@@ -134,8 +134,8 @@ export function watchRepository(scope: RepoScope): () => void {
 
 /** Why Git mutations must wait: a provider run may be editing the same checkout. */
 export function useMutationGuard(scope: RepoScope | null): string | null {
-  const connection = useRelay((s) => s.connection);
-  const busy = useRelay((s) => {
+  const connection = useMingle((s) => s.connection);
+  const busy = useMingle((s) => {
     if (!scope) return '';
     const sessions = s.boot?.sessions ?? [];
     if (scope.sessionId) {
@@ -152,7 +152,7 @@ export function useMutationGuard(scope: RepoScope | null): string | null {
 
 /** Re-read when runs in this scope start or finish, and when the server connection returns. */
 function useRunSignal(scope: RepoScope | null): string {
-  return useRelay((s) => {
+  return useMingle((s) => {
     if (!scope) return '';
     const sessions = (s.boot?.sessions ?? []).filter((x) => (scope.sessionId ? x.id === scope.sessionId : x.projectId === scope.projectId));
     return `${s.connection}|${sessions.map((x) => `${x.id}:${x.status}`).join(',')}`;
