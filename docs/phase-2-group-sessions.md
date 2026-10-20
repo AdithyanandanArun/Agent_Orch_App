@@ -125,7 +125,7 @@ Both providers receive a narrow, run-scoped team tool interface, following the e
 
 The server validates group membership, recipient, task ownership, dependencies and current permissions for every operation. It derives the sender from the invoking run. A worker cannot impersonate the orchestrator or create a more privileged agent. In both modes with an orchestrator, assignment scheduling belongs to that designated member. In Cowork, the selected peer can schedule only assignments covered by its request planning lease. All members can communicate directly without gaining arbitrary delegation authority.
 
-A dispatch tool result confirms acceptance/queueing, not successful completion. UI mention labels correspond to real recorded tool actions. Relay does not execute commands by looking for `@...` text in model output.
+A dispatch tool result confirms acceptance/queueing, not successful completion. UI mention labels correspond to real recorded tool actions. Mingle does not execute commands by looking for `@...` text in model output.
 
 ### Efficient context exchange
 
@@ -171,12 +171,12 @@ Browser access continues to honor the actual connection/tab owner and human cont
 
 Acceptance must include no extra coordinator participant in Cowork or Current agent leads; the existing agent retaining its history, configuration and orchestrator role in Current agent leads; the selected mode and roster persisting through reload; the worker configuration question appearing only for Orchestrated conversion; reduced-motion and keyboard alternatives for mode animations; preserved original history and provider conversation IDs; actual model/effort/policy in the add-agent preview; only intended recipients running for direct mentions; live simultaneous streams remaining distinct; changes to busy members refusing safely; restored pending messages without duplicate dispatch; bounded communication; and visible interruption/failure behavior. A real provider-backed integration demonstration requires explicit owner authorization for its model runs. Completion evidence must distinguish implementation, local checks and the live demonstration.
 
-The application now implements this coordination layer. A real provider-backed Codex/OpenCode feature integration has been exercised through Relay; see [the live integration proof](group-session-live-proof.md) for the request, verified automatic handoff, isolated commits, checks and limits. This does not establish Claude interoperability, distributed computers, voice control or general autonomous integration.
+The application now implements this coordination layer. A real provider-backed Codex/OpenCode feature integration has been exercised through Mingle; see [the live integration proof](group-session-live-proof.md) for the request, verified automatic handoff, isolated commits, checks and limits. This does not establish Claude interoperability, distributed computers, voice control or general autonomous integration.
 
 
 ## Interaction preview review — 2026-10-20
 
-`docs/previews/group-modes.html` is a standalone, explicitly labeled example of the mode-choice flow. It uses original SVG/CSS diagrams and local JavaScript, with no dependencies, provider calls or saved settings. It is separate from the current Relay application runtime.
+`docs/previews/group-modes.html` is a standalone, explicitly labeled example of the mode-choice flow. It uses original SVG/CSS diagrams and local JavaScript, with no dependencies, provider calls or saved settings. It is separate from the current Mingle application runtime.
 
 In the native collaborative preview, both choices rendered at 1280px. Selecting Cowork hid the separate coordinator and current-agent configuration question. Arrow-key selection moved to Orchestrated and showed both. Choosing Change allowed a lighter example model and Medium effort, reflected in the review summary. Pause stopped both SVG animation clocks. The 390px layout stacked the choices and had no horizontal overflow. Reduced-motion support is implemented but was not exercised by changing the host's system preference. No automated tests or model runs were started.
 
@@ -188,7 +188,7 @@ Added Current agent leads to the specification and standalone preview. Native br
 
 ## Application implementation review — 2026-10-20
 
-The actual Relay application now exposes all three modes through Add agent, with live provider configuration, independent native sessions, group defaults, shared timelines, resolved recipients, team tools, assignment/task integration and persisted queue controls. The standalone HTML preview above remains a historical design artifact.
+The actual Mingle application now exposes all three modes through Add agent, with live provider configuration, independent native sessions, group defaults, shared timelines, resolved recipients, team tools, assignment/task integration and persisted queue controls. The standalone HTML preview above remains a historical design artifact.
 
 Implementation used authorized Claude Sonnet 5.5 High workers. Claude reached its session quota after writing the backend and most frontend components; an actual GPT-6 Luna High CLI worker completed frontend wiring/styles, and integration review corrected routing, interruption and persistence boundaries. Every implementation worker committed its scoped files. No attribution trailers or publication were added.
 

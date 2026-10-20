@@ -1,5 +1,7 @@
 # Live group-session integration proof — 2026-10-20
 
+> **Naming note:** Mingle was named Relay when these observations were recorded. Historical commands, paths, tool names and artifact receipts are retained. See [current naming and data compatibility](mingle-rename.md).
+
 ## Outcome
 
 **Implemented and integrated in one bounded, provider-backed Relay group request.** The existing OpenCode lead delegated a committed API contract and backend to Codex, then queued an OpenCode frontend assignment against the actual backend task ID and `api-contract.md`. Relay verified and delivered that artifact, automatically released the blocked frontend task while the backend remained in **Review**, and later delivered both worker commits to the lead. The lead integrated both commits in its isolated checkout. Both worker tasks and the coordinator request task remain **Review**, pending human acceptance.
@@ -89,10 +91,10 @@ No Relay runtime fix was needed. The integration correction was confined to the 
 - Claude was not used; Codex/Claude interoperability remains untested. No fixed cost reduction is inferred.
 - All related tasks are still **Review**; no task was marked Done or accepted.
 - The contact form remains a disposable validation example outside Relay's product source. Nothing from this task was pushed, published or installed.
-- The private runtime, SQLite database, example repository, worker worktrees, and artifact commits are preserved under `/home/adithyan/.cache/relay-workers/team-proof`. The isolated Relay server is stopped after proof completion. To restart it from the Relay repository root, run:
+- The private runtime, SQLite database, example repository, worker worktrees, and artifact commits are preserved under `/home/adithyan/.cache/relay-workers/team-proof`. The isolated Relay server is stopped after proof completion. To restart it from the repository root with the current Mingle package names, run:
 
   ```sh
-  pnpm --filter @relay/server exec tsx /home/adithyan/.cache/relay-workers/team-proof/server-entry.mts
+  pnpm --filter @mingle/server exec tsx /home/adithyan/.cache/relay-workers/team-proof/server-entry.mts
   ```
 
   The launcher selects a fresh loopback port and writes it to the private `server-url.txt`. Do not rerun the private setup or send-request scripts unless creating a new proof instance; the database, groups, and paid work already exist.

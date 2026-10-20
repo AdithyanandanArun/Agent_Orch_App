@@ -1,5 +1,7 @@
 # Provider auto-compaction controls — research and mapping
 
+> **Naming note:** Mingle was named Relay when these observations were recorded. Historical commands, paths, tool names and artifact receipts are retained. See [current naming and data compatibility](mingle-rename.md).
+
 Researched 2026-10-20 against Codex CLI 0.160.1 (app-server schema generated with `codex app-server generate-json-schema`) and `@anthropic-ai/claude-agent-sdk` 0.3.302. Implementation: `apps/server/src/providers/compaction.ts`, wired from the Codex and Claude adapters.
 
 ## Setting semantics

@@ -1,6 +1,6 @@
 # OpenCode provider
 
-Updated 2026-10-20. Relay runs the user's installed OpenCode through its native Agent Client Protocol server (`opencode acp`, newline-delimited JSON-RPC over stdio). Authentication, quota, model access and credential storage remain OpenCode's own: Relay never reads OpenCode's auth store, never asks for a key, and never starts a browser login.
+Updated 2026-10-20. Mingle runs the user's installed OpenCode through its native Agent Client Protocol server (`opencode acp`, newline-delimited JSON-RPC over stdio). Authentication, quota, model access and credential storage remain OpenCode's own: Mingle never reads OpenCode's auth store, never asks for a key, and never starts a browser login.
 
 Native version inspected: OpenCode **1.19.3** at `/usr/bin/opencode`, ACP protocol version 1.
 
@@ -14,7 +14,7 @@ Native version inspected: OpenCode **1.19.3** at `/usr/bin/opencode`, ACP protoc
 
 ## Why ACP rather than the HTTP server
 
-`opencode serve` is a long-lived shared server. Relay needs one isolated, killable process per run so permission rules, MCP capabilities and abort cleanup cannot leak between sessions. ACP gives a process Relay owns (and can signal as a process group), session-scoped MCP registration, `session/request_permission`, `session/cancel`, `session/resume` and native config selectors for model/effort. Even the ACP child starts an HTTP listener (OpenCode's default is port 4096, falling back to a random port), so every child is launched as `opencode acp --hostname 127.0.0.1 --port <unused ephemeral port> --no-mdns` and gets a random per-child `OPENCODE_SERVER_PASSWORD` in its environment (verified: unauthenticated requests receive 401 and ACP still works; the explicit flags bind exactly the requested loopback port). A user's own server settings or running OpenCode server therefore cannot expose or collide with a Relay child. The generated password is added to Relay's redaction list for events and tool output.
+`opencode serve` is a long-lived shared server. Mingle needs one isolated, killable process per run so permission rules, MCP capabilities and abort cleanup cannot leak between sessions. ACP gives a process Mingle owns (and can signal as a process group), session-scoped MCP registration, `session/request_permission`, `session/cancel`, `session/resume` and native config selectors for model/effort. Even the ACP child starts an HTTP listener (OpenCode's default is port 4096, falling back to a random port), so every child is launched as `opencode acp --hostname 127.0.0.1 --port <unused ephemeral port> --no-mdns` and gets a random per-child `OPENCODE_SERVER_PASSWORD` in its environment (verified: unauthenticated requests receive 401 and ACP still works; the explicit flags bind exactly the requested loopback port). A user's own server settings or running OpenCode server therefore cannot expose or collide with a Mingle child. The generated password is added to Mingle's redaction list for events and tool output.
 
 ## Settings
 
@@ -30,66 +30,66 @@ Detection skips the real probe when a caller injects only discovery dependencies
 
 ## Models and reasoning effort
 
-Model IDs are OpenCode's own `provider/model` values from the ACP `model` config option (for example `opencode/beam-free`); display names are OpenCode's. Relay adds one sentinel, `default`, which leaves OpenCode's configured/default model unselected. Its entry inherits the name and measured variants of the model OpenCode reports as current (for example "OpenCode/Big Pickle (default)"); this is measured from the private probe directory, so a project `opencode.json` can select a different model, and each run reports the effective model in an info event and validates the requested effort against that model's live options. Nothing is substituted: an unknown model fails before any prompt.
+Model IDs are OpenCode's own `provider/model` values from the ACP `model` config option (for example `opencode/beam-free`); display names are OpenCode's. Mingle adds one sentinel, `default`, which leaves OpenCode's configured/default model unselected. Its entry inherits the name and measured variants of the model OpenCode reports as current (for example "OpenCode/Big Pickle (default)"); this is measured from the private probe directory, so a project `opencode.json` can select a different model, and each run reports the effective model in an info event and validates the requested effort against that model's live options. Nothing is substituted: an unknown model fails before any prompt.
 
-Reasoning effort comes only from native variants. Selecting a model on ACP exposes an `effort` option (category `thought_level`) when the model has variants; its values are the native variant IDs plus a native `default`. Relay maps these to effort choices per model:
+Reasoning effort comes only from native variants. Selecting a model on ACP exposes an `effort` option (category `thought_level`) when the model has variants; its values are the native variant IDs plus a native `default`. Mingle maps these to effort choices per model:
 
-- Relay `none` = **Native default**, always present, and applied explicitly by selecting the native `default` option (OpenCode reports its first variant as "current" even when none is selected, so Relay never trusts the displayed current value).
-- Native variants keep their IDs when they are valid Relay effort slugs (`low`, `medium`, `high`, `xhigh`, `max`, `minimal`, …). A native variant literally named `none` (an OpenAI reasoning level, present on one model here) is exposed as `variant-none` because `none` is reserved; other non-slug names are slugged. The mapping is recomputed from the live native options at run time and never from stored data.
+- Mingle `none` = **Native default**, always present, and applied explicitly by selecting the native `default` option (OpenCode reports its first variant as "current" even when none is selected, so Mingle never trusts the displayed current value).
+- Native variants keep their IDs when they are valid Mingle effort slugs (`low`, `medium`, `high`, `xhigh`, `max`, `minimal`, …). A native variant literally named `none` (an OpenAI reasoning level, present on one model here) is exposed as `variant-none` because `none` is reserved; other non-slug names are slugged. The mapping is recomputed from the live native options at run time and never from stored data.
 - Models without variants offer only Native default.
 
 Model and effort are re-read and verified after each `session/set_config_option`; a mismatch stops the run before the prompt. A model or effort change reported during the run stops the turn (`model_substitution` / `effort_substitution`).
 
 ## Permissions
 
-OpenCode's default agent allows every tool without asking, so ACP's own modes cannot express Relay's policies. Relay supplies per-run OpenCode permission rules in the child's `OPENCODE_PERMISSION` environment variable (no file is written, nothing global changes). Later rules win.
+OpenCode's default agent allows every tool without asking, so ACP's own modes cannot express Mingle's policies. Mingle supplies per-run OpenCode permission rules in the child's `OPENCODE_PERMISSION` environment variable (no file is written, nothing global changes). Later rules win.
 
-| Relay policy | OpenCode rules |
+| Mingle policy | OpenCode rules |
 | --- | --- |
 | Supervised | `*: ask`; `read` allowed except `.env`-shaped files (ask); `glob`, `grep`, `list`, `lsp`, `todowrite`, `skill` allowed; `edit: ask` |
 | Auto-accept edits | Supervised, with `edit: allow` |
 | Full access | `*: allow` |
 | Auto | Unsupported (OpenCode has no automatic reviewer); not advertised, rejected explicitly |
 
-All policies deny `question`, `plan_enter` and `plan_exit` because ACP has no channel for answering them. Prompts arrive as `session/request_permission` and are forwarded to Relay approvals. Relay answers with `allow_once` or `reject_once` only, never an "always" rule. Relay's own browser/team MCP tool names (`relay_browser_*`, `relay_team_*`) are allowed by rule and not double-prompted, because those gateways enforce their own approvals and tab ownership. A project `opencode.json` that denies a tool earlier is overridden by the later `*` rule (Supervised becomes ask; Full access is unrestricted by definition).
+All policies deny `question`, `plan_enter` and `plan_exit` because ACP has no channel for answering them. Prompts arrive as `session/request_permission` and are forwarded to Mingle approvals. Mingle answers with `allow_once` or `reject_once` only, never an "always" rule. Mingle's own browser/team MCP tool names (`mingle_browser_*`, `mingle_team_*`) are allowed by rule and not double-prompted, because those gateways enforce their own approvals and tab ownership. A project `opencode.json` that denies a tool earlier is overridden by the later `*` rule (Supervised becomes ask; Full access is unrestricted by definition).
 
 ## Slash commands
 
-The command catalog is fresh and independent of any paid run: `GET /api/sessions/:id/catalog` starts a metadata-only ACP child **in the session's real folder** (the only case where a project's `.opencode` configuration and plugins load for a probe, and only because the user opened that session) (so project commands, `.opencode` configuration and plugins load as they would for OpenCode), reads `available_commands_update`, and deletes the throwaway session. ProviderService caches it for 30 s; Settings → Re-check and the composer's Refresh drop the cache. OpenCode's own skills are exposed by ACP as commands, so they appear under `/`; Relay's separate `$` skill picker is unavailable and says so.
+The command catalog is fresh and independent of any paid run: `GET /api/sessions/:id/catalog` starts a metadata-only ACP child **in the session's real folder** (the only case where a project's `.opencode` configuration and plugins load for a probe, and only because the user opened that session) (so project commands, `.opencode` configuration and plugins load as they would for OpenCode), reads `available_commands_update`, and deletes the throwaway session. ProviderService caches it for 30 s; Settings → Re-check and the composer's Refresh drop the cache. OpenCode's own skills are exposed by ACP as commands, so they appear under `/`; Mingle's separate `$` skill picker is unavailable and says so.
 
-Only commands the native list advertises are shown. Terminal-only built-ins (`/undo`, `/redo`, and anything absent from the list) are not advertised. Selecting one inserts `/name args`, which is sent as the ACP prompt text; OpenCode's ACP resolves a leading `/name` against its command list and runs the command natively. The run adds an info line (`Running OpenCode command /name`), or states that an unlisted `/name` is being sent as ordinary text. Relay's local actions (`/model`, `/status`, `/usage`, …) keep precedence over native commands with the same name.
+Only commands the native list advertises are shown. Terminal-only built-ins (`/undo`, `/redo`, and anything absent from the list) are not advertised. Selecting one inserts `/name args`, which is sent as the ACP prompt text; OpenCode's ACP resolves a leading `/name` against its command list and runs the command natively. The run adds an info line (`Running OpenCode command /name`), or states that an unlisted `/name` is being sent as ordinary text. Mingle's local actions (`/model`, `/status`, `/usage`, …) keep precedence over native commands with the same name.
 
 ## Conversations, resume and runs
 
 - A run starts `opencode acp` in the session folder and creates `session/new` (or resumes). The native session ID is recorded immediately as `providerSessionId`.
-- A stored ID resumes with `session/resume` (or `session/load` with history replay suppressed). A missing/invalid conversation fails with `resume_failed`; Relay never creates a replacement. Resume was verified across processes.
-- Browser and team capabilities register per session over ACP HTTP MCP (`relay_browser`, `relay_team`, `Authorization: Bearer …` header in the JSON-RPC request, never argv or files). Verified that the header reaches the MCP endpoint and that the token appears in none of OpenCode's config, data, state or cache directories. If MCP HTTP is not advertised, a run that needs it fails before any prompt. Literal capability tokens and credential-shaped environment values are scrubbed from events and errors.
-- Streamed assistant text, tool lifecycle (stable provider IDs, status, command, working directory, exit code when reported, output) and native plan entries become Relay events. Durations come from Relay's host clock; ACP reports no process ID, so none is invented. Reasoning chunks are provider-private and not shown.
-- Cancellation sends `session/cancel`, waits up to 4 s for OpenCode to unwind, then closes stdin, SIGTERMs and SIGKILLs the child's process group. The adapter promise resolves only after the process has closed, so Relay's session lock stays held until cleanup finishes; a child that ignores SIGKILL keeps waiting rather than releasing the lock early. Metadata probes bind the caller's abort signal for their whole life, so aborting a probe kills its child and ends `session/new` / model inspection.
+- A stored ID resumes with `session/resume` (or `session/load` with history replay suppressed). A missing/invalid conversation fails with `resume_failed`; Mingle never creates a replacement. Resume was verified across processes.
+- Browser and team capabilities register per session over ACP HTTP MCP (`mingle_browser`, `mingle_team`, `Authorization: Bearer …` header in the JSON-RPC request, never argv or files). Verified that the header reaches the MCP endpoint and that the token appears in none of OpenCode's config, data, state or cache directories. If MCP HTTP is not advertised, a run that needs it fails before any prompt. Literal capability tokens and credential-shaped environment values are scrubbed from events and errors.
+- Streamed assistant text, tool lifecycle (stable provider IDs, status, command, working directory, exit code when reported, output) and native plan entries become Mingle events. Durations come from Mingle's host clock; ACP reports no process ID, so none is invented. Reasoning chunks are provider-private and not shown.
+- Cancellation sends `session/cancel`, waits up to 4 s for OpenCode to unwind, then closes stdin, SIGTERMs and SIGKILLs the child's process group. The adapter promise resolves only after the process has closed, so Mingle's session lock stays held until cleanup finishes; a child that ignores SIGKILL keeps waiting rather than releasing the lock early. Metadata probes bind the caller's abort signal for their whole life, so aborting a probe kills its child and ends `session/new` / model inspection.
 - Token usage comes from the `session/prompt` response summary when reported. Cost is not reported over ACP and stays unrecorded.
 - Server shutdown stops leftover metadata probes through the provider runtime's optional `close()`.
 
 ## Explicit unsupported boundaries
 
-- **History import.** ACP can list sessions (`session/list`), but Relay has no verified bounded reader for native history. Import lists return a notice and the Import dialog explains it. Continuing a Relay-created OpenCode session works.
+- **History import.** ACP can list sessions (`session/list`), but Mingle has no verified bounded reader for native history. Import lists return a notice and the Import dialog explains it. Continuing a Mingle-created OpenCode session works.
 - **Usage/quota.** ACP exposes no account quota, plan or credits; `/usage` says so and shows no invented windows. Cost is unreported.
-- **Selected skills.** Relay's `$` picker/`skills` field is unavailable; native skills are slash commands.
-- **Compaction threshold.** Relay's percentage setting is not exposed by ACP; OpenCode's native compaction remains and each run notes this. `/compact` is not advertised by this version, so it is not offered.
+- **Selected skills.** Mingle's `$` picker/`skills` field is unavailable; native skills are slash commands.
+- **Compaction threshold.** Mingle's percentage setting is not exposed by ACP; OpenCode's native compaction remains and each run notes this. `/compact` is not advertised by this version, so it is not offered.
 - **Service tiers.** Only Standard.
 - **Auto policy.** Unsupported.
-- **Terminal/undo/redo commands**, ACP-side file-system and terminal client methods (Relay advertises neither), image/attachment prompts and OpenCode "question" interactions.
+- **Terminal/undo/redo commands**, ACP-side file-system and terminal client methods (Mingle advertises neither), image/attachment prompts and OpenCode "question" interactions.
 
 ## Verification performed (no inference)
 
 - Workspace TypeScript checks (`contracts`, `server`, `web`) and a production Vite web build.
 - Native help/version inspection of `opencode`, `opencode acp`, `opencode models` and `opencode session`.
 - `initialize` and `session/new` against the installed binary in a private directory: 10 models, native `effort` option and variants, `mode` option, 16 native commands (including `init`, `review` and skills). `session/set_config_option` for model, effort (`default`, invalid values), mode, and unknown model; `session/resume` across processes, with an unknown ID; HTTP MCP header delivery to a local dummy endpoint; permission-rule parsing through `opencode debug agent build` (ruleset only, no credentials printed); loopback server password enforcement.
-- Relay's own `detectOpencode`, `getOpencodeCatalog` and adapter setup path (session creation, model/effort selection, resume, rejection cases, abort and process cleanup) were exercised against the real binary with `session/prompt` intercepted locally, so no model request was sent. Probe-created native sessions were deleted afterward.
+- Mingle's own `detectOpencode`, `getOpencodeCatalog` and adapter setup path (session creation, model/effort selection, resume, rejection cases, abort and process cleanup) were exercised against the real binary with `session/prompt` intercepted locally, so no model request was sent. Probe-created native sessions were deleted afterward.
 
 Not exercised: any live inference, streamed assistant text, real tool calls, real permission prompts, a real native slash-command execution, cost/usage reporting from a real turn, other providers' credentials, and non-Linux platforms. Those paths follow the documented ACP shapes and the upstream protocol source but have not been observed against a live OpenCode turn.
 
 ## Installed desktop delivery, 2026-10-20
 
-Code at `8dcc425` passed `pnpm typecheck` and `pnpm package:arch`. The Arch package was checksum-checked, reinstalled on this device and restarted while Relay had no active runs or terminals. The installed backend matches the staged bundle SHA-256 `5b18bce9bda4d27057bf8d2db788f169da3f8b9ad76e654b7df9c13058b48079`; package SHA-256 is `db95c744922d0c253ddb79b64c967cc1ae03d1dc3e0fceea4818471c630cecc2`.
+Code at `8dcc425` passed `pnpm typecheck` and `pnpm package:arch`. The Arch package was checksum-checked, reinstalled on this device and restarted while Mingle had no active runs or terminals. The installed backend matches the staged bundle SHA-256 `5b18bce9bda4d27057bf8d2db788f169da3f8b9ad76e654b7df9c13058b48079`; package SHA-256 is `db95c744922d0c253ddb79b64c967cc1ae03d1dc3e0fceea4818471c630cecc2`.
 
 The installed health and provider endpoints reported Codex 0.160.1, Claude 2.1.292, Antigravity ACP 1.4.1 and OpenCode 1.19.3 as available. OpenCode returned ten concrete models, per-model native variants and sixteen native commands through no-prompt catalog discovery. Antigravity recovered Gemini 3.8 Flash with low/medium/high reasoning and its native command catalog from the validated cache in a separate process. The collaborative browser's Settings view showed all four providers, the OpenCode executable field and Antigravity's Refresh models and commands action. Existing projects and sessions were retained. No live inference turn or automatic test suite was run.

@@ -1,5 +1,7 @@
 # Claude native usage research
 
+> **Naming note:** Mingle was named Relay when these observations were recorded. Historical commands, paths, tool names and artifact receipts are retained. See [current naming and data compatibility](mingle-rename.md).
+
 Research checked 2026-10-20 against Anthropic's Agent SDK documentation and the installed `@anthropic-ai/claude-agent-sdk@0.3.302` declarations.
 
 ## Native usage API

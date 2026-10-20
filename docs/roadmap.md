@@ -26,11 +26,11 @@ The product has a multi-month horizon. Milestones are accepted by observed behav
 
 ## Product validation
 
-Use the same feature request, repository, acceptance criteria and quality bar to compare manual multi-session work with Relay. Measure total time until integrated acceptance, human coordination actions, total provider tokens and cost, conflicts, rework and blocked time. Adding agents is useful when the accepted result improves enough to justify their overhead. Record failures as well as successes.
+Use the same feature request, repository, acceptance criteria and quality bar to compare manual multi-session work with Mingle. Measure total time until integrated acceptance, human coordination actions, total provider tokens and cost, conflicts, rework and blocked time. Adding agents is useful when the accepted result improves enough to justify their overhead. Record failures as well as successes.
 
 ## Repository workflow progress — 2026-10-20
 
-These items record implemented work and previously requested capabilities still outside the current pass. They are also explicit sources for Relay's repository task tracking.
+These items record implemented work and previously requested capabilities still outside the current pass. They are also explicit sources for Mingle's repository task tracking.
 
 - [x] Show the real checkout and branch, and commit selected eligible files while preserving other staged work.
 - [x] Add explicit push and pull request controls without automatic publishing.
@@ -53,5 +53,5 @@ The owner's updated direction is recorded in [Group sessions and an orchestrator
 - [x] Add animated Cowork/Orchestrated/Current agent leads selection, agent configuration previews and deterministic routing for @agent mentions.
 - [x] Add Cowork request splitting, separate orchestrator defaults, existing-agent orchestration and the current-worker configuration question for Orchestrated conversion.
 - [x] Add bounded automatic assignments, durable peer requests/replies and compact artifact/context exchange.
-- [x] Demonstrate a Codex/OpenCode feature through Relay with a committed contract automatically unblocking its dependent consumer; see [live group-session proof](group-session-live-proof.md).
-- [ ] Demonstrate an integrated Codex/Claude feature through Relay without manually copying the contract; Claude was not invoked in the recorded proof.
+- [x] Demonstrate a Codex/OpenCode feature through Mingle with a committed contract automatically unblocking its dependent consumer; see [live group-session proof](group-session-live-proof.md).
+- [ ] Demonstrate an integrated Codex/Claude feature through Mingle without manually copying the contract; Claude was not invoked in the recorded proof.

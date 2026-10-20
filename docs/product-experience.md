@@ -1,6 +1,6 @@
 # Product and interaction specification
 
-Relay is a working title for an independent local development environment. The first intended user is a developer already using coding agents who wants to coordinate their work without losing ownership of their project, credentials, or decisions. The original vision remains the source for the broader roadmap.
+Mingle is an independent local development environment, previously named Relay. The first intended user is a developer already using coding agents who wants to coordinate their work without losing ownership of their project, credentials, or decisions. The original vision remains the source for the broader roadmap.
 
 ## First complete workflow
 
@@ -11,7 +11,7 @@ Relay is a working title for an independent local development environment. The f
 5. Create tasks with acceptance criteria and dependencies. Show why blocked work is blocked. Dispatch a ready task only when explicitly requested.
 6. Inspect the source session's Git diff. Send a committed artifact reference to the receiving session. Record the exact revision and receiving message durably. A handoff supplies context; integration remains explicit.
 7. Dispatch the receiving task with the handoff context. Send successful work to review. A human decides whether the acceptance criteria have been met.
-8. Restart Relay. Restore local state, show interrupted runs honestly, expire stale approval requests, and resume provider conversations on the next turn.
+8. Restart Mingle. Restore local state, show interrupted runs honestly, expire stale approval requests, and resume provider conversations on the next turn.
 
 ## Information architecture
 

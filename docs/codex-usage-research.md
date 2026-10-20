@@ -1,5 +1,7 @@
 # Codex usage research
 
+> **Naming note:** Mingle was named Relay when these observations were recorded. Historical commands, paths, tool names and artifact receipts are retained. See [current naming and data compatibility](mingle-rename.md).
+
 Checked on 2026-10-20 against Codex CLI `0.160.1` and a fresh `codex app-server generate-json-schema` bundle. The protocol reference is the official [Codex App Server documentation](https://learn.chatgpt.com/docs/app-server), especially its [rate limits section](https://learn.chatgpt.com/docs/app-server#rate-limits-chatgpt) and [earned reset details](https://learn.chatgpt.com/docs/app-server#earned-rate-limit-resets-chatgpt).
 
 ## Read-only request

@@ -1,5 +1,7 @@
 # Original product vision
 
+> **Naming note:** Mingle was named Relay when these observations were recorded. Historical commands, paths, tool names and artifact receipts are retained. See [current naming and data compatibility](mingle-rename.md).
+
 Transcribed from the project idea document supplied by the owner.
 
 Distributed AI Development Environment

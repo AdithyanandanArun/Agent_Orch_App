@@ -1,5 +1,7 @@
 # Codex controls research
 
+> **Naming note:** Mingle was named Relay when these observations were recorded. Historical commands, paths, tool names and artifact receipts are retained. See [current naming and data compatibility](mingle-rename.md).
+
 Checked against Codex CLI `0.160.1` and the JSON schema generated for that installed CLI on 2026-10-19. The official [Codex App Server reference](https://learn.chatgpt.com/docs/app-server) is the protocol reference. Relay uses only app-server methods and fields available in the installed schema; it does not depend on undocumented slash-command conventions.
 
 ## Permission policies

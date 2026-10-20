@@ -2,7 +2,7 @@
 
 Open Project offers three sources:
 
-- **New project:** choose a parent folder and name. Relay creates a new folder, initializes Git on `main`, and makes an empty initial commit using your configured Git identity. Git must be installed and `user.name` / `user.email` configured. No project dependencies are installed.
+- **New project:** choose a parent folder and name. Mingle creates a new folder, initializes Git on `main`, and makes an empty initial commit using your configured Git identity. Git must be installed and `user.name` / `user.email` configured. No project dependencies are installed.
 - **Local folder:** browse from your home directory, type an absolute path or `~/` path, and open the current folder. Partial paths narrow the directory list but cannot add the parent accidentally. Opening an existing project reuses its metadata.
 - **Git URL:** choose a destination parent and new folder name, then clone an HTTPS or SSH repository. Custom ports, private hosts and standard SSH account names are supported. Use your existing Git authentication; passwords/tokens in URLs, URL query strings and fragments are rejected. Cloning does not recurse into submodules.
 
@@ -12,7 +12,7 @@ Existing destination folders are never overwritten. If repository creation or cl
 
 The picker lists directories only. Arrow keys highlight folders, Enter navigates into one, Backspace goes up when the path input is not being edited, Escape returns to sources or closes, and Ctrl+Enter (Command+Enter on macOS) opens the current folder. Typed partial paths are completed by the server. Hidden dot folders are omitted by default; known credential directories and Git/runtime internals remain excluded. Symlinks and Windows junctions are checked as directories, then project opening resolves their canonical paths.
 
-All filesystem decisions use the operating system running Relay's local server, rather than the browser's operating system. Windows supports fully qualified drive paths and UNC share paths, with available drive roots in Locations. macOS exposes Filesystem and Volumes; Linux exposes Filesystem. Home uses Node's native `os.homedir()`. Names, directory paths and permission failures come from the filesystem; the UI does not invent Desktop/Documents locations or assume English folder names. Open in Files, Finder or File Explorer launches the host file manager with an argv array.
+All filesystem decisions use the operating system running Mingle's local server, rather than the browser's operating system. Windows supports fully qualified drive paths and UNC share paths, with available drive roots in Locations. macOS exposes Filesystem and Volumes; Linux exposes Filesystem. Home uses Node's native `os.homedir()`. Names, directory paths and permission failures come from the filesystem; the UI does not invent Desktop/Documents locations or assume English folder names. Open in Files, Finder or File Explorer launches the host file manager with an argv array.
 
 Listings are bounded to 2,000 matching directories, 20,000 scanned entries and a checked five-second scan budget. A single filesystem operation may still wait on the OS, particularly for disconnected network mounts. Limited listings are disclosed, and path completion/filtering can narrow the results. Four concurrent listing requests are allowed. Browsing never reads file contents. Existing project-scoped file access restrictions are retained.
 

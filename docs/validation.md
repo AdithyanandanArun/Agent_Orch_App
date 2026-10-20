@@ -1,5 +1,7 @@
 # Foundation validation — 2026-10-19
 
+> **Naming note:** Mingle was named Relay when these observations were recorded. Historical commands, paths, tool names and artifact receipts are retained. See [current naming and data compatibility](mingle-rename.md).
+
 This records the first implementation's observed behavior. It is not evidence that the distributed product or the full two-provider feature-integration demo is complete.
 
 ## Automated checks

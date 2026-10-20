@@ -5,10 +5,10 @@ The first workspace exposed too many panels, badges and setup controls at once. 
 ## T3 Code references
 
 - [Official T3 Code site](https://t3.codes/): inspected its product screenshot in the collaborative browser. The useful reference is the compact project/thread sidebar, central conversation and optional diff panel, rather than the site's marketing treatment.
-- [Settings and project overrides](https://github.com/pingdotgg/t3code/blob/main/docs/user/project-settings.md): documents model/workspace defaults for new threads. Relay implements local application defaults; it does not implement T3's environment/project inheritance system.
-- [Keyboard shortcuts](https://github.com/pingdotgg/t3code/blob/main/docs/user/keybindings.md): documents composer model and effort pickers. Relay places those controls in its composer; it does not claim all those keyboard shortcuts.
+- [Settings and project overrides](https://github.com/pingdotgg/t3code/blob/main/docs/user/project-settings.md): documents model/workspace defaults for new threads. Mingle implements local application defaults; it does not implement T3's environment/project inheritance system.
+- [Keyboard shortcuts](https://github.com/pingdotgg/t3code/blob/main/docs/user/keybindings.md): documents composer model and effort pickers. Mingle places those controls in its composer; it does not claim all those keyboard shortcuts.
 
-These are interaction and visual references. Relay's implementation remains original.
+These are interaction and visual references. Mingle's implementation remains original.
 
 ## Implemented behavior
 
@@ -28,7 +28,7 @@ These are interaction and visual references. Relay's implementation remains orig
 
 ## Session context menu
 
-The user's second screenshot supplies the reference for grouped text actions, thin separators, a Copy submenu and quiet charcoal surfaces. Relay includes the applicable actions: pin/unpin, rename, mark read/unread, copy details, Project settings and archive. Unsupported settle, snooze, auto-settle, title regeneration and permanent deletion actions are omitted.
+The user's second screenshot supplies the reference for grouped text actions, thin separators, a Copy submenu and quiet charcoal surfaces. Mingle includes the applicable actions: pin/unpin, rename, mark read/unread, copy details, Project settings and archive. Unsupported settle, snooze, auto-settle, title regeneration and permanent deletion actions are omitted.
 
 Right-clicking a row does not select its conversation. Shift+F10 and a three-dot row button offer the same actions. Arrow keys, Home/End and Escape navigate/dismiss the menu; Copy opens with ArrowRight. Submenus flip at viewport edges. Focus returns to the source row unless an action opens a dialog/page or an outside click moves focus elsewhere. Pinning preserves keyboard focus as the row moves into the Pinned group.
 

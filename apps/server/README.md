@@ -15,12 +15,12 @@ pnpm --filter @mingle/server typecheck
 
 | Setting | Env | Option | Default |
 | --- | --- | --- | --- |
-| Data directory (database, example workspace, worktrees) | `MINGLE_DATA_DIR` (`RELAY_DATA_DIR` legacy fallback) | `dataDir` | `<repo root>/.mingle`, reusing `.relay` when present unless a `.mingle` database already exists |
-| Host (loopback only, anything else is refused) | `MINGLE_HOST` (`RELAY_HOST` fallback) | `host` | `127.0.0.1` |
-| Port (`0` = free port) | `MINGLE_PORT` (`RELAY_PORT` fallback) | `port` | `4310` |
-| Built web app | `MINGLE_WEB_DIST` (`RELAY_WEB_DIST` fallback) | `webDistDir` | `<repo root>/apps/web/dist` if it contains `index.html` |
-| Vite dev port that is trusted as an origin | `MINGLE_WEB_PORT` (`RELAY_WEB_PORT` fallback) | `webDevPort` | `5173` |
-| Extra trusted origins (comma separated) | `MINGLE_ALLOWED_ORIGINS` (`RELAY_ALLOWED_ORIGINS` fallback) | `allowedOrigins` | none |
+| Data directory (database, example workspace, worktrees) | `MINGLE_DATA_DIR` (`MINGLE_DATA_DIR` legacy fallback) | `dataDir` | `<repo root>/.mingle`, reusing `.relay` when present unless a `.mingle` database already exists |
+| Host (loopback only, anything else is refused) | `MINGLE_HOST` (`MINGLE_HOST` fallback) | `host` | `127.0.0.1` |
+| Port (`0` = free port) | `MINGLE_PORT` (`MINGLE_PORT` fallback) | `port` | `4310` |
+| Built web app | `MINGLE_WEB_DIST` (`MINGLE_WEB_DIST` fallback) | `webDistDir` | `<repo root>/apps/web/dist` if it contains `index.html` |
+| Vite dev port that is trusted as an origin | `MINGLE_WEB_PORT` (`MINGLE_WEB_PORT` fallback) | `webDevPort` | `5173` |
+| Extra trusted origins (comma separated) | `MINGLE_ALLOWED_ORIGINS` (`MINGLE_ALLOWED_ORIGINS` fallback) | `allowedOrigins` | none |
 
 Data layout: `relay.sqlite` (+ WAL, retained for database continuity), `example-workspace/` (a real Git repo, stable path), `worktrees/<projectId>/<sessionId>/`.
 Worktrees are never deleted by the server; archiving a session only hides its metadata.

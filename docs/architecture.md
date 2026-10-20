@@ -2,7 +2,7 @@
 
 ## Decisions for the first foundation
 
-Relay uses a pnpm TypeScript workspace with shared typed contracts, a React/Vite web client, a Node application server and an Electron shell. The app owns the local workspace state; each provider owns its conversation runtime. This follows the architectural separation observed in T3 Code without importing its source or depending on its packages.
+Mingle uses a pnpm TypeScript workspace with shared typed contracts, a React/Vite web client, a Node application server and an Electron shell. The app owns the local workspace state; each provider owns its conversation runtime. This follows the architectural separation observed in T3 Code without importing its source or depending on its packages.
 
 The server owns project registration, session metadata, SQLite persistence, durable events, file boundaries, Git commands, worktrees, task dependencies, approval routing and terminal processes. Provider adapters translate supported harness events into the small shared AgentAdapter contract. The UI calls the local application API; it never receives credentials or launches provider processes directly.
 

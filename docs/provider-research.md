@@ -1,5 +1,7 @@
 # Provider research and adapter design
 
+> **Naming note:** Mingle was named Relay when these observations were recorded. Historical commands, paths, tool names and artifact receipts are retained. See [current naming and data compatibility](mingle-rename.md).
+
 Scope: `apps/server/src/providers/**`. Public surface is `apps/server/src/providers/index.ts`:
 
 ```ts
