@@ -2,6 +2,7 @@ import type {
   AddGroupAgent, AntigravityAuthState, AntigravityInstallState, Approval, AppSettings, Bootstrap, BrowserAction, BrowserConnect, BrowserDiscovery, BrowserSessionState, BrowserTab, CreateGroup, DirectoryListing, ExternalConversationDetails, ExternalConversationList, FileEntry, GitHubState, GitStatus, GroupMode, GroupSnapshot, ImportConversationResult, Project, ProjectContext, ProviderCatalog, ProviderInfo,
   RepositoryBranch, RepositoryCommit, RepositoryMutationResult, RepositoryPullRequest, RepositoryPush, RepositoryState, RunChanges, SendGroupMessage, Session, SessionUsage, ToolCall, Task, TaskStatus, WorkspaceEvent,
 } from '@relay/contracts';
+import type { AttachmentRef, NativeActionCatalog } from '@relay/contracts';
 export type { ProviderCatalog } from '@relay/contracts';
 
 export class ApiError extends Error {
@@ -143,6 +144,7 @@ export const api = {
   addGroupAgent: (id: string, input: AddGroupAgent) => json<GroupSnapshot>(`${groupBase(id)}/agents`, 'POST', input),
   removeGroupMember: (id: string, memberId: string) => json<GroupSnapshot>(`${groupBase(id)}/members/${encodeURIComponent(memberId)}`, 'DELETE'),
   sendGroupMessage: (id: string, input: SendGroupMessage) => json<GroupSnapshot>(`${groupBase(id)}/messages`, 'POST', input),
+  groupActionCatalog: (id: string, memberId: string, signal?: AbortSignal, refresh = false) => json<NativeActionCatalog>(`${groupBase(id)}/members/${encodeURIComponent(memberId)}/catalog${refresh ? '?refresh=true' : ''}`, 'GET', undefined, signal),
   stopGroup: (id: string) => json<GroupSnapshot>(`${groupBase(id)}/stop`, 'POST', {}),
   resumeGroupMember: (id: string, memberId: string) => json<GroupSnapshot>(`${groupBase(id)}/members/${encodeURIComponent(memberId)}/resume`, 'POST', {}),
   pauseGroup: (id: string) => json<GroupSnapshot>(`${groupBase(id)}/pause`, 'POST', {}),
@@ -153,7 +155,15 @@ export const api = {
   toolCall: (id: string) => json<ToolCall>(`/api/tool-calls/${encodeURIComponent(id)}`),
   renameSession: (id: string, name: string) => json<Session>(`/api/sessions/${encodeURIComponent(id)}`, 'PATCH', { name }),
   archiveSession: (id: string) => json<unknown>(`/api/sessions/${encodeURIComponent(id)}`, 'DELETE'),
-  sendMessage: (id: string, content: string, skills?: string[]) => json<{ accepted: boolean }>(`/api/sessions/${encodeURIComponent(id)}/messages`, 'POST', { content, ...(skills?.length ? { skills } : {}) }),
+  sendMessage: (id: string, content: string, skills?: string[], attachmentIds?: string[]) => json<{ accepted: boolean }>(`/api/sessions/${encodeURIComponent(id)}/messages`, 'POST', { content, ...(skills?.length ? { skills } : {}), ...(attachmentIds?.length ? { attachmentIds } : {}) }),
+  attachmentDrafts: (scope: { kind: 'session' | 'group'; id: string }, signal?: AbortSignal) => json<AttachmentRef[]>(`/api/${scope.kind === 'session' ? 'sessions' : 'groups'}/${encodeURIComponent(scope.id)}/attachments`, 'GET', undefined, signal),
+  uploadAttachment: async (scope: { kind: 'session' | 'group'; id: string }, file: File, signal?: AbortSignal): Promise<AttachmentRef> => {
+    const url = `/api/${scope.kind === 'session' ? 'sessions' : 'groups'}/${encodeURIComponent(scope.id)}/attachments?name=${encodeURIComponent(file.name)}`;
+    const res = await request(url, { method: 'POST', signal, headers: { 'content-type': file.type || 'application/octet-stream', accept: 'application/json' }, body: file });
+    return await res.json() as AttachmentRef;
+  },
+  removeAttachment: (id: string) => json<{ ok: boolean }>(`/api/attachments/${encodeURIComponent(id)}`, 'DELETE'),
+  attachmentUrl: (id: string) => `/api/attachments/${encodeURIComponent(id)}/content`,
   sessionCatalog: (id: string, signal?: AbortSignal, refresh = false) => json<ProviderCatalog>(`/api/sessions/${encodeURIComponent(id)}/catalog${refresh ? '?refresh=true' : ''}`, 'GET', undefined, signal),
   sessionUsage: (id: string, refresh = false, signal?: AbortSignal) => json<SessionUsage>(`/api/sessions/${encodeURIComponent(id)}/usage${refresh ? '?refresh=true' : ''}`, 'GET', undefined, signal),
   imports: (provider: Session['provider'], projectId?: string, cursor?: string, signal?: AbortSignal) =>

@@ -10,6 +10,7 @@ import type { Speaker } from '../lib/groupTimeline';
 import { Markdown } from './Markdown';
 import { Button, PROVIDER_NAME } from './ui';
 import { AgentIdentity } from './group/AgentIdentity';
+import { AttachmentHistory } from './AttachmentHistory';
 
 function legacyToolTitle(m: DisplayMessage): string {
   const candidates = [m.kind, ...m.content.split('\n')];
@@ -81,7 +82,7 @@ export const MessageRow = memo(function MessageRow({ m, provider, speaker }: { m
   if (m.role === 'user') {
     return (
       <article className="msg msg--user" aria-label="Your message">
-        <div className="msg__bubble"><Markdown text={m.content} /></div>
+        <div className="msg__bubble"><Markdown text={m.content} /><AttachmentHistory attachments={m.attachments} /></div>
         {m.createdAt ? <time className="msg__time" dateTime={m.createdAt} title={clockTime(m.createdAt)}>{clockTime(m.createdAt)}</time> : null}
       </article>
     );

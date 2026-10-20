@@ -18,6 +18,7 @@ import { GroupComposer } from './GroupComposer';
 import { AgentIdentity } from './AgentIdentity';
 import { AgentPresenceRail } from './AgentPresenceRail';
 import { GroupResultSummary } from './GroupResultSummary';
+import { AttachmentHistory } from '../AttachmentHistory';
 
 const NO_SESSIONS: Session[] = [];
 const NO_MESSAGES: Message[] = [];
@@ -70,7 +71,7 @@ function GroupMessageRow({ item, snapshot }: { item: GroupItem; snapshot: GroupS
   if (message.kind === 'user') {
     return (
       <article className="msg msg--user" aria-label="Your message">
-        <div className="msg__bubble"><Markdown text={message.content} /></div>
+        <div className="msg__bubble"><Markdown text={message.content} /><AttachmentHistory attachments={message.attachments} /></div>
         {recipients.length ? <div className="msg__to">To <Handles speakersList={recipients} sessions={sessions} /></div> : null}
         <DeliveryChips deliveries={deliveries} snapshot={snapshot} sessions={sessions} />
         {time}

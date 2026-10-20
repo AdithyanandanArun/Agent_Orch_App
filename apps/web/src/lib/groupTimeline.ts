@@ -70,7 +70,7 @@ export function buildTimeline({ snapshot, sessions, messages, streams }: {
       hidden: message.role === 'user' && message.kind === HIDDEN_NATIVE_KIND,
       message: {
         id: message.id, role: message.role, content: streamed.length > message.content.length ? streamed : message.content, createdAt: message.createdAt,
-        kind: message.kind, runId: message.runId, live: (Boolean(stream) || message.kind === 'streaming') && session?.status === 'running',
+        kind: message.kind, runId: message.runId, live: (Boolean(stream) || message.kind === 'streaming') && session?.status === 'running', attachments: message.attachments,
       },
     });
   }

@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowUp, AtSign, Square, UserPlus, X } from 'lucide-react';
-import type { GroupSnapshot, Provider, Session } from '@relay/contracts';
+import type { AttachmentRef, GroupSnapshot, NativeActionCatalog, Provider, Session } from '@relay/contracts';
 import { useRelay } from '../../store/store';
 import { api, errorMessage } from '../../lib/api';
 import { cx } from '../../lib/format';
@@ -12,6 +12,7 @@ import { MOD } from '../ui';
 import { Popover } from '../git/Popover';
 import { UsagePanel } from '../UsagePanel';
 import { AgentIdentity } from './AgentIdentity';
+import { AttachmentDrafts, useAttachmentDraft } from '../AttachmentDrafts';
 
 const COMMANDS = [
   { name: 'new', description: 'Create a new session' },
@@ -23,7 +24,7 @@ const COMMANDS = [
   { name: 'effort', description: 'Edit a member’s effort in Members' },
   { name: 'permissions', description: 'Edit a member’s permissions in Members' },
   { name: 'tier', description: 'Edit a member’s service tier in Members' },
-  { name: 'skills', description: 'Not available for group messages' },
+  { name: 'skills', description: 'Use @handle $skill-name to call a provider skill' },
   { name: 'usage', description: 'Show provider limits (add @handle for a member)' },
   { name: 'import', description: 'Import a local supported provider conversation' },
   { name: 'status', description: 'Show this group’s mode and members' },
@@ -33,7 +34,7 @@ const COMMANDS = [
 const LOCAL_COMMAND = new RegExp(`^/(${COMMANDS.map((command) => command.name).join('|')})(?:\\s.*)?$`, 'i');
 const MAX_RECIPIENTS = 8;
 
-interface Suggestion { key: string; token: string; description: string; group: string; identityKey?: string; provider?: Provider }
+interface Suggestion { key: string; token: string; description: string; group: string; identityKey?: string; provider?: Provider; action?: { kind: 'command' | 'skill'; id: string; name: string } }
 
 /** The group conversation's composer: it resolves recipients itself and sends one message to the group endpoint. */
 export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { snapshot: GroupSnapshot; anchor: Session; onOpenMembers: () => void; footer?: ReactNode }) {
@@ -46,6 +47,8 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
   const pickerId = useId();
   const pendingId = useRef<{ key: string; id: string } | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
+  const [attachments, setAttachments] = useState<AttachmentRef[]>([]);
+  useEffect(() => { setAttachments([]); }, [snapshot.group.id]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -55,6 +58,10 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
   const [active, setActive] = useState(0);
   const [dismissed, setDismissed] = useState<string | null>(null);
   const [usageSession, setUsageSession] = useState<Session | null>(null);
+  const [nativeCatalog, setNativeCatalog] = useState<NativeActionCatalog | null>(null);
+  const [nativeCatalogError, setNativeCatalogError] = useState<string | null>(null);
+  const [selectedNativeAction, setSelectedNativeAction] = useState<{ kind: 'command' | 'skill'; id: string; name: string } | null>(null);
+  const attachmentDraft = useAttachmentDraft({ kind: 'group', id: snapshot.group.id }, attachments, setAttachments, setError);
 
   const members = useMemo(() => activeMembers(snapshot), [snapshot]);
   const retired = useMemo(() => retiredHandles(snapshot), [snapshot]);
@@ -72,12 +79,15 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
   const stalePicked = picked.filter((id) => !members.some((member) => member.id === id));
   const staleSelectionError = stalePicked.length ? 'A selected recipient was removed. Remove the unavailable recipient chip or clear selection before sending.' : null;
   const direct = members.filter((member) => pickedActive.includes(member.id) || mentions.ids.includes(member.id));
+  const actionTargetId = mentions.ids.length === 1 ? mentions.ids[0] : pickedActive.length === 1 ? pickedActive[0] : null;
+  const actionTargetSession = actionTargetId ? sessionOf(members.find((member) => member.id === actionTargetId)?.sessionId ?? '') : undefined;
+  const actionCatalogKey = `${actionTargetId ?? ''}:${actionTargetSession?.provider ?? ''}:${actionTargetSession?.model ?? ''}:${actionTargetSession?.providerSessionId ?? ''}`;
   const defaults = useMemo(() => defaultRecipients(snapshot), [snapshot]);
   const recipients = direct.length ? direct : defaults;
   const anyBusy = members.some((member) => isBusy(sessionOf(member.sessionId)));
 
-  const empty = draft.trim().length === 0;
-  const local = LOCAL_COMMAND.exec(draft.trim());
+  const empty = draft.trim().length === 0 && attachments.length === 0 && attachmentDraft.uploads.length === 0;
+  const local = attachments.length || attachmentDraft.uploads.length ? null : LOCAL_COMMAND.exec(draft.trim());
   const unavailable = recipients.map((member) => {
     const session = sessionOf(member.sessionId);
     const state = session && providers ? providerAvailability(providers, session.provider) : null;
@@ -88,7 +98,18 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
       : recipients.length > MAX_RECIPIENTS ? `A message can address at most ${MAX_RECIPIENTS} agents.`
         : unavailable;
   const problem = staleSelectionError ?? mentions.problems[0]?.message ?? null;
-  const sendDisabled = sending || empty || (!local && (Boolean(blocker) || Boolean(problem)));
+  const sendDisabled = sending || attachmentDraft.busy || empty || (!local && (Boolean(blocker) || Boolean(problem)));
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setNativeCatalog(null); setNativeCatalogError(null);
+    if (!actionTargetId || connection !== 'online') return () => controller.abort();
+    void api.groupActionCatalog(snapshot.group.id, actionTargetId, controller.signal).then((value) => {
+      if (!controller.signal.aborted) setNativeCatalog(value);
+    }).catch((cause) => { if (!controller.signal.aborted) setNativeCatalogError(errorMessage(cause)); });
+    return () => controller.abort();
+  }, [snapshot.group.id, actionCatalogKey, connection]);
+  useEffect(() => { setSelectedNativeAction(null); }, [actionCatalogKey]);
 
   useEffect(() => {
     const el = ref.current;
@@ -101,11 +122,18 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
   const before = actionable.slice(0, caretIndex);
   const commandMatch = before.match(/(?:^|\s)(\/[^\s]*)$/);
   const mentionMatch = commandMatch ? null : before.match(/(?:^|[\s([{"'“‘,;:!?])@([A-Za-z0-9_-]*)$/);
-  const skillTrigger = !commandMatch && !mentionMatch && /(?:^|\s)\$[^\s]*$/.test(before);
-  const trigger = commandMatch?.[1] ?? (mentionMatch ? `@${mentionMatch[1]}` : '');
+  const skillMatch = !commandMatch && !mentionMatch ? /(?:^|\s)(\$[^\s]*)$/.exec(before) : null;
+  const skillTrigger = Boolean(skillMatch);
+  const trigger = commandMatch?.[1] ?? (mentionMatch ? `@${mentionMatch[1]}` : skillMatch?.[1] ?? '');
   const triggerStart = caretIndex - trigger.length;
   const suggestions: Suggestion[] = (() => {
-    if (commandMatch) return COMMANDS.filter((command) => command.name.startsWith(trigger.slice(1).toLowerCase())).map((command) => ({ key: `c:${command.name}`, token: `/${command.name}`, description: command.description, group: 'Relay' }));
+    if (commandMatch) {
+      const localCommands = COMMANDS.filter((command) => command.name.startsWith(trigger.slice(1).toLowerCase())).map((command) => ({ key: `c:${command.name}`, token: `/${command.name}`, description: command.description, group: 'Relay' }));
+      const nativeCommands = actionTargetId ? (nativeCatalog?.commands ?? []).filter((command) => command.name.toLowerCase().startsWith(trigger.slice(1).toLowerCase())).map((command) => ({
+        key: `native-command:${command.id}`, token: `/${command.name}`, description: command.description || 'Provider command', group: 'Provider', action: { kind: 'command' as const, id: command.id, name: command.name },
+      })) : [];
+      return [...localCommands, ...nativeCommands];
+    }
     if (mentionMatch) {
       const query = mentionMatch[1]!.toLowerCase();
       const matching = members.filter((member) => member.handle.toLowerCase().startsWith(query));
@@ -133,6 +161,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
         return { key: `m:${member.id}`, token: `@${member.handle}`, description: `${ROLE_LABEL[member.role]}${session ? ` · ${providerName(session.provider)} ${session.model}` : ''}`, group: 'Agents', identityKey: member.sessionId, provider: session?.provider };
       });
     }
+    if (skillTrigger && actionTargetId && nativeCatalog) return nativeCatalog.skills.filter((skill) => skill.enabled && skill.name.toLowerCase().startsWith(before.match(/(?:^|\s)\$([^\s]*)$/)?.[1]?.toLowerCase() ?? '')).map((skill) => ({ key: `native-skill:${skill.id}`, token: `$${skill.name}`, description: skill.description, group: 'Provider skill', action: { kind: 'skill' as const, id: skill.id, name: skill.name } }));
     return [];
   })();
   const open = focused && suggestions.length > 0 && trigger !== dismissed;
@@ -143,6 +172,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
   const choose = (index: number) => {
     const item = suggestions[index];
     if (!item) return;
+    setSelectedNativeAction(item.action ?? null);
     const text = `${draft.slice(0, triggerStart)}${item.token} ${draft.slice(caretIndex)}`;
     const next = triggerStart + item.token.length + 1;
     setDraft(text);
@@ -161,7 +191,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
       case 'agent': store.openDialog({ kind: 'add-agent', sessionId: anchor.id }); return;
       case 'import': store.openDialog({ kind: 'import' }); return;
       case 'diff': store.setContextTab('changes'); return;
-      case 'skills': store.toast('info', 'Skills can’t be attached to group messages: the group send carries text only.'); return;
+      case 'skills': store.toast('info', 'Address a native skill directly, such as @codex1 $skill-name task, or @claude1 $project-skill task.'); return;
       case 'status': {
         const lead = members.find((member) => member.id === snapshot.group.orchestratorMemberId);
         store.toast('info', `${MODE_LABEL[snapshot.group.mode]} · ${members.map((member) => `@${member.handle}`).join(', ')}${lead ? ` · ${lead.handle} ${snapshot.group.mode === 'orchestrated' ? 'coordinates' : 'leads'}` : ''}${snapshot.group.paused ? ' · paused' : ''}`);
@@ -184,13 +214,14 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
   };
 
   const submit = async () => {
-    if (sending || empty) return;
+    if (sending || empty || attachmentDraft.isBusy()) return;
+    if (attachmentDraft.uploads.length) { setError('Retry or remove each failed attachment before sending.'); return; }
     if (local) {
       setSending(true);
       setError(null);
       try {
         await runLocal(local[1]!.toLowerCase());
-        setDraft('');
+        if (useRelay.getState().drafts[anchor.id] === draft) setDraft('');
         await useRelay.getState().refreshNow();
       } catch (cause) { setError(errorMessage(cause)); } finally { setSending(false); }
       return;
@@ -202,17 +233,38 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
     const targets = members.filter((member) => pickedActive.includes(member.id) || fresh.ids.includes(member.id));
     const ids = (targets.length ? targets : defaults).map((member) => member.id);
     const content = draft.trim();
-    const key = `${targets.length ? 'direct' : 'default'}\u0000${content}\u0000${ids.join(',')}`;
+    const actionMatch = /^\s*(?:@([A-Za-z0-9_-]+)\s+)?([/$])([A-Za-z0-9][A-Za-z0-9_.:-]*)(?:\s+([\s\S]*))?$/.exec(content);
+    const actionToken = /(?:^|\s)([/$])([A-Za-z0-9][A-Za-z0-9_.:-]*)(?:\s|$)/.exec(content);
+    const nativeIntent = Boolean(actionMatch && (actionMatch[2] === '$' || !local)) || Boolean(actionToken && (actionToken[1] === '$' || !local));
+    let invocation: import('@relay/contracts').NativeInvocationInput | undefined;
+    if (actionMatch && actionTargetId && nativeCatalog) {
+      const symbol = actionMatch[2];
+      const name = actionMatch[3]!;
+      const kind = symbol === '$' ? 'skill' : 'command';
+      const prior = selectedNativeAction?.kind === kind && selectedNativeAction.name === name ? selectedNativeAction : null;
+      const exact = kind === 'skill' ? nativeCatalog.skills.filter((row) => row.enabled && row.name === name) : nativeCatalog.commands.filter((row) => row.name === name);
+      const item = prior ? exact.find((row) => row.id === prior.id) : exact.length === 1 ? exact[0] : undefined;
+      if (item) invocation = { kind, id: item.id, name: item.name, arguments: actionMatch[4] ?? '', recipient: actionTargetId };
+    }
+    if (nativeIntent) {
+      const kind = actionMatch?.[2] ?? actionToken?.[1];
+      const actionName = actionMatch?.[3] ?? actionToken?.[2];
+      if (mentions.ids.length > 1 || pickedActive.length > 1) { setError('A provider command or skill must target exactly one agent. Mention one handle, such as @claude1.'); return; }
+      if (!actionTargetId) { setError('Address a provider command or skill to one agent, for example @claude1 /review or @codex1 $skill-name.'); return; }
+      if (!invocation || invocation.name !== actionName || (kind === '$' ? invocation.kind !== 'skill' : invocation.kind !== 'command')) { setError(nativeCatalogError ?? 'That action is unavailable or ambiguous. Refresh the menu and choose the listed action.'); return; }
+    }
+    const key = `${targets.length ? 'direct' : 'default'}\u0000${content}\u0000${ids.join(',')}\u0000${attachments.map((item) => item.id).join(',')}\u0000${invocation ? `${invocation.kind}:${invocation.id}:${invocation.arguments}` : ''}`;
     const clientMessageId = pendingId.current?.key === key ? pendingId.current.id : crypto.randomUUID();
     pendingId.current = { key, id: clientMessageId };
     setSending(true);
     setError(null);
     try {
-      const updated = await api.sendGroupMessage(snapshot.group.id, { content, ...(targets.length ? { recipients: ids } : {}), clientMessageId });
+      const updated = await api.sendGroupMessage(snapshot.group.id, { content, ...(targets.length ? { recipients: ids } : {}), ...(attachments.length ? { attachmentIds: attachments.map((item) => item.id) } : {}), ...(invocation ? { invocation } : {}), clientMessageId });
       const store = useRelay.getState();
       store.applyGroup(updated);
-      setDraft('');
+      if (store.drafts[anchor.id] === draft) setDraft('');
       setPicked([]);
+      attachmentDraft.sent(attachments.map((item) => item.id));
       pendingId.current = null;
       await store.refreshNow();
     } catch (cause) {
@@ -267,6 +319,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
           onChange={(event) => { setCaret(event.target.selectionStart ?? event.target.value.length); setDraft(event.target.value); }}
           onFocus={(event) => { setFocused(true); setCaret(event.currentTarget.selectionStart ?? 0); }}
           onSelect={(event) => setCaret(event.currentTarget.selectionStart ?? 0)}
+          onPaste={attachmentDraft.onPaste}
           onBlur={() => setFocused(false)}
           onKeyDown={(event) => {
             if (open && !event.nativeEvent.isComposing) {
@@ -290,7 +343,13 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
             ))}
           </div>
         ) : null}
-        {focused && skillTrigger ? <div className="composer-picker-empty" role="status">Skills can’t be attached to group messages: the group send carries text only.</div> : null}
+        {focused && (skillTrigger || commandMatch) && suggestions.length === 0 ? <div className="composer-picker-empty" role="status">
+          {!actionTargetId ? 'Address one agent first, for example @claude1 /review or @codex1 $skill-name.'
+            : nativeCatalogError ? `Could not load this agent’s actions: ${nativeCatalogError}`
+              : !nativeCatalog ? 'Loading this agent’s actions…'
+                : skillTrigger ? nativeCatalog.skills.length ? 'No matching skill.' : nativeCatalog.unsupported.join(' ')
+                  : nativeCatalog.commands.length ? 'No matching command.' : nativeCatalog.unsupported.join(' ')}
+        </div> : null}
         <div className="composer__bar">
           <div className="composer__controls">
             <button type="button" className="composer__add-agent" onClick={() => useRelay.getState().openDialog({ kind: 'add-agent', sessionId: anchor.id })} disabled={connection !== 'online'}>
@@ -298,6 +357,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
             </button>
           </div>
           <div className="composer__send">
+            <AttachmentDrafts scope={{ kind: 'group', id: snapshot.group.id }} attachments={attachments} busy={attachmentDraft.busy} uploads={attachmentDraft.uploads} onRetry={attachmentDraft.retry} onForget={attachmentDraft.forget} loading={attachmentDraft.loading} loadError={attachmentDraft.loadError} onReload={attachmentDraft.reload} onFiles={attachmentDraft.addFiles} onRemove={(id) => void attachmentDraft.remove(id)} disabled={sending || Boolean(blocker)} />
             {anyBusy && !local ? (
               <button type="button" className="sendbtn sendbtn--stop" onClick={() => void stop()} disabled={stopping || connection !== 'online'} aria-label="Pause group and interrupt running members" title="Pause group and interrupt running members"><Square size={12} fill="currentColor" /></button>
             ) : null}

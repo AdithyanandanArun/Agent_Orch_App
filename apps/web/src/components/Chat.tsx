@@ -27,7 +27,7 @@ function useSessionMessages(session: Session | undefined): DisplayMessage[] {
       const st = streams[m.id];
       const streamed = st ? st.base + st.text : '';
       const content = streamed.length > m.content.length ? streamed : m.content;
-      out.push({ id: m.id, role: m.role, content, createdAt: m.createdAt, kind: m.kind, runId: m.runId, live: (Boolean(st) || m.kind === 'streaming') && session.status === 'running' });
+      out.push({ id: m.id, role: m.role, content, createdAt: m.createdAt, kind: m.kind, runId: m.runId, live: (Boolean(st) || m.kind === 'streaming') && session.status === 'running', attachments: m.attachments });
     }
     for (const [id, st] of Object.entries(streams)) {
       if (st.sessionId !== session.id || seen.has(id)) continue;

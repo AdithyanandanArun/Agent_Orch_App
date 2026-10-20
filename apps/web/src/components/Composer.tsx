@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { ArrowUp, Square } from 'lucide-react';
-import type { ProviderModel, Session } from '@relay/contracts';
+import type { AttachmentRef, ProviderModel, Session } from '@relay/contracts';
 import { useRelay } from '../store/store';
 import { api, errorMessage, type ProviderCatalog, type SessionPatch } from '../lib/api';
 import { MOD, PROVIDER_NAME } from './ui';
@@ -9,6 +9,7 @@ import { SelectMenu } from './SelectMenu';
 import { UsagePanel } from './UsagePanel';
 import { GitBar } from './git/GitBar';
 import { providerModelChoices } from '../lib/providers';
+import { AttachmentDrafts, useAttachmentDraft } from './AttachmentDrafts';
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const hasSkillMarker = (text: string, name: string) => new RegExp(`(?:^|\\s)\\$${escapeRegExp(name)}(?=\\s|$)`).test(text);
@@ -32,6 +33,8 @@ export function Composer({ session }: { session: Session }) {
   const [suggestion, setSuggestion] = useState<{ kind: 'command' | 'skill'; start: number; query: string } | null>(null);
   const [activeSuggestion, setActiveSuggestion] = useState(0);
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
+  const [attachments, setAttachments] = useState<AttachmentRef[]>([]);
+  useEffect(() => { setAttachments([]); }, [session.id]);
   const [usageOpen, setUsageOpen] = useState(false);
   const [focused, setFocused] = useState(false);
   const [caretPosition, setCaretPosition] = useState(0);
@@ -71,6 +74,7 @@ export function Composer({ session }: { session: Session }) {
     setUsageOpen(false);
     window.requestAnimationFrame(() => ref.current?.focus());
   }, []);
+  const attachmentDraft = useAttachmentDraft({ kind: 'session', id: session.id }, attachments, setAttachments, setError);
 
   const running = session.status === 'running' || session.status === 'waiting';
   const blocker =
@@ -78,11 +82,13 @@ export function Composer({ session }: { session: Session }) {
       : running ? (session.status === 'waiting' ? 'Waiting for your approval above before the run can continue.' : 'This session is running. Wait for it to finish or interrupt it.')
         : provider && !provider.available ? `${PROVIDER_NAME[session.provider]} needs setup before you can send a message.`
           : null;
-  const empty = draft.trim().length === 0;
-  const localDraftCommand = /^\/(new|stop|settings|model|effort|permissions|tier|skills|usage|import|status|diff|help)(?:\s.*)?$/i.exec(draft.trim());
+  const empty = draft.trim().length === 0 && attachments.length === 0 && attachmentDraft.uploads.length === 0;
+  const localDraftCommand = attachments.length || attachmentDraft.uploads.length ? null : /^\/(new|stop|settings|model|effort|permissions|tier|skills|usage|import|status|diff|help)(?:\s.*)?$/i.exec(draft.trim());
 
   const submit = async () => {
-    const local = /^\/(new|stop|settings|model|effort|permissions|tier|skills|usage|import|status|diff|help)(?:\s.*)?$/i.exec(draft.trim());
+    const local = attachments.length || attachmentDraft.uploads.length ? null : /^\/(new|stop|settings|model|effort|permissions|tier|skills|usage|import|status|diff|help)(?:\s.*)?$/i.exec(draft.trim());
+    if (attachmentDraft.isBusy()) return;
+    if (attachmentDraft.uploads.length) { setError('Retry or remove each failed attachment before sending.'); return; }
     if ((blocker && !local) || empty || sending || updating) return;
     setSending(true);
     setError(null);
@@ -133,8 +139,11 @@ export function Composer({ session }: { session: Session }) {
       if (session.provider === 'claude' && messageSkills.length > 1) {
         throw new Error('Claude accepts one selected skill per message. Remove the extra skill reference.');
       }
-      await api.sendMessage(session.id, draft.trim(), messageSkills);
-      useRelay.getState().setDraft(session.id, '');
+      const submittedDraft = draft;
+      const submittedAttachmentIds = attachments.map((item) => item.id);
+      await api.sendMessage(session.id, draft.trim(), messageSkills, submittedAttachmentIds);
+      if (useRelay.getState().drafts[session.id] === submittedDraft) useRelay.getState().setDraft(session.id, '');
+      attachmentDraft.sent(submittedAttachmentIds);
       setSelectedSkills([]);
       await useRelay.getState().refreshNow();
     } catch (e) {
@@ -315,6 +324,7 @@ export function Composer({ session }: { session: Session }) {
           }}
           onFocus={(e) => { setFocused(true); caret.current = e.currentTarget.selectionStart ?? 0; setCaretPosition(caret.current); }}
           onSelect={(e) => { caret.current = e.currentTarget.selectionStart ?? 0; setCaretPosition(caret.current); }}
+          onPaste={attachmentDraft.onPaste}
           onBlur={() => { setFocused(false); setSuggestion(null); }}
           onKeyDown={(e) => {
             if (suggestion && suggestions.length && !e.nativeEvent.isComposing) {
@@ -352,10 +362,11 @@ export function Composer({ session }: { session: Session }) {
               onChange={(value) => void configure({ policy: value as Session['policy'] })} placement="top" />
           </div>
           <div className="composer__send">
+            <AttachmentDrafts scope={{ kind: 'session', id: session.id }} attachments={attachments} busy={attachmentDraft.busy} uploads={attachmentDraft.uploads} onRetry={attachmentDraft.retry} onForget={attachmentDraft.forget} loading={attachmentDraft.loading} loadError={attachmentDraft.loadError} onReload={attachmentDraft.reload} onFiles={attachmentDraft.addFiles} onRemove={(id) => void attachmentDraft.remove(id)} disabled={sending || updating || Boolean(blocker)} />
             {running && !['usage', 'import'].includes(localDraftCommand?.[1]?.toLowerCase() ?? '') ? (
               <button type="button" className="sendbtn sendbtn--stop" onClick={stop} aria-label="Interrupt run" title="Interrupt run"><Square size={12} fill="currentColor" /></button>
             ) : (
-              <button type="button" className="sendbtn" onClick={() => void submit()} disabled={Boolean(blocker && !localDraftCommand) || empty || sending || updating} aria-label={['usage', 'import'].includes(localDraftCommand?.[1]?.toLowerCase() ?? '') ? (localDraftCommand?.[1]?.toLowerCase() === 'import' ? 'Import conversation' : 'Open usage') : 'Send message'} title={['usage', 'import'].includes(localDraftCommand?.[1]?.toLowerCase() ?? '') ? (localDraftCommand?.[1]?.toLowerCase() === 'import' ? 'Import conversation' : 'Open usage') : blocker ?? (empty ? 'Write a message first' : `Send (${MOD}+Enter or Enter)`)}>
+              <button type="button" className="sendbtn" onClick={() => void submit()} disabled={Boolean(blocker && !localDraftCommand) || empty || sending || updating || attachmentDraft.busy} aria-label={['usage', 'import'].includes(localDraftCommand?.[1]?.toLowerCase() ?? '') ? (localDraftCommand?.[1]?.toLowerCase() === 'import' ? 'Import conversation' : 'Open usage') : 'Send message'} title={['usage', 'import'].includes(localDraftCommand?.[1]?.toLowerCase() ?? '') ? (localDraftCommand?.[1]?.toLowerCase() === 'import' ? 'Import conversation' : 'Open usage') : blocker ?? (empty ? 'Write a message first' : `Send (${MOD}+Enter or Enter)`)}>
                 <ArrowUp size={15} />
               </button>
             )}
