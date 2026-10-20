@@ -52,4 +52,5 @@ The owner's updated direction is recorded in [Group sessions and an orchestrator
 - [x] Add animated Cowork/Orchestrated/Current agent leads selection, agent configuration previews and deterministic routing for @agent mentions.
 - [x] Add Cowork request splitting, separate orchestrator defaults, existing-agent orchestration and the current-worker configuration question for Orchestrated conversion.
 - [x] Add bounded automatic assignments, durable peer requests/replies and compact artifact/context exchange.
-- [ ] Demonstrate an integrated Codex/Claude feature through Relay without manually copying the contract.
+- [x] Demonstrate a Codex/OpenCode feature through Relay with a committed contract automatically unblocking its dependent consumer; see [live group-session proof](group-session-live-proof.md).
+- [ ] Demonstrate an integrated Codex/Claude feature through Relay without manually copying the contract; Claude was not invoked in the recorded proof.

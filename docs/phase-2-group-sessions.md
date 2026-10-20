@@ -1,6 +1,6 @@
 # Phase 2 — Group sessions and coordination modes
 
-Status: implemented in the application, based on the owner's updated vision. Group conversations, participant messaging and bounded automatic delegation use Phase 1's independent provider sessions as their execution foundation. Local implementation checks and the remaining paid integration demonstration are recorded separately below.
+Status: implemented in the application, based on the owner's updated vision. Group conversations, participant messaging and bounded automatic delegation use Phase 1's independent provider sessions as their execution foundation. Local implementation checks and the live Codex/OpenCode integration proof are recorded separately below; Codex/Claude remains unverified.
 
 ## Experience
 
@@ -171,7 +171,7 @@ Browser access continues to honor the actual connection/tab owner and human cont
 
 Acceptance must include no extra coordinator participant in Cowork or Current agent leads; the existing agent retaining its history, configuration and orchestrator role in Current agent leads; the selected mode and roster persisting through reload; the worker configuration question appearing only for Orchestrated conversion; reduced-motion and keyboard alternatives for mode animations; preserved original history and provider conversation IDs; actual model/effort/policy in the add-agent preview; only intended recipients running for direct mentions; live simultaneous streams remaining distinct; changes to busy members refusing safely; restored pending messages without duplicate dispatch; bounded communication; and visible interruption/failure behavior. A real provider-backed integration demonstration requires explicit owner authorization for its model runs. Completion evidence must distinguish implementation, local checks and the live demonstration.
 
-The application now implements this coordination layer. A real provider-backed integrated feature demonstration remains pending; this record does not claim that proof has run. Distributed computers, voice control and general autonomous integration remain later milestones.
+The application now implements this coordination layer. A real provider-backed Codex/OpenCode feature integration has been exercised through Relay; see [the live integration proof](group-session-live-proof.md) for the request, verified automatic handoff, isolated commits, checks and limits. This does not establish Claude interoperability, distributed computers, voice control or general autonomous integration.
 
 
 ## Interaction preview review — 2026-10-20
@@ -202,4 +202,4 @@ Local evidence:
 - A previously running development watcher opened an early v7 schema during integration. Migration 8 upgraded it without deleting data. Read-only SQLite foreign-key checks reported zero violations in both the existing development database and separate review database.
 - Screenshot capture failed in the collaborative browser, although DOM inspection and focused interactions worked. No screenshot is claimed.
 
-A live multi-provider assignment/communication/integration demonstration has not been run. It remains the unchecked proof milestone in roadmap.md. Group messages currently carry text and resolved recipients; attaching selected native skills in the group composer is explicitly unavailable, while independent-session skill controls remain supported. This does not claim distributed machines or general autonomous integration are complete.
+A live Codex/OpenCode assignment, artifact delivery and integration demonstration ran through the group runtime on 2026-10-20; see [group-session-live-proof.md](group-session-live-proof.md). The mixed-provider workflow is evidenced for this single local task; Codex/Claude remains unchecked because Claude was not invoked. Group messages currently carry text and resolved recipients; attaching selected native skills in the group composer is explicitly unavailable, while independent-session skill controls remain supported. This does not claim distributed machines or general autonomous integration are complete.
