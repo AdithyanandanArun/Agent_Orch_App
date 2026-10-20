@@ -5,7 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AppSettings } from '@relay/contracts';
-import { ProviderError, TextTail, cleanEnv, errorMessage, isRecord, redactSecrets, truncate } from '../common.js';
+import { ProviderError, TextTail, abortError, cleanEnv, errorMessage, isRecord, redactSecrets, truncate } from '../common.js';
 import { resolveExecutableCached, type ExecutableSource, type ResolvedExecutable } from '../discovery.js';
 import { runProbe, shutdownChild, type ChildLike } from '../process.js';
 import { OpencodeConnection, type AcpCloseInfo } from './rpc.js';
@@ -66,6 +66,9 @@ export interface StartOptions {
 }
 
 const live = new Set<OpencodeRuntime>();
+const closing = new WeakMap<OpencodeRuntime, Promise<void>>();
+const probes = new Set<{ controller: AbortController; settled: Promise<void> }>();
+let shuttingDown = false;
 
 export function safeOpencodeText(text: string, secrets: readonly (string | undefined)[] = []): string {
   return redactSecrets(text, secrets);
@@ -92,6 +95,7 @@ function freeLoopbackPort(): Promise<number> {
  * cannot expose it or collide with parallel agents; its random password is supplied through the environment.
  */
 export async function startOpencode(executable: string, options: StartOptions): Promise<OpencodeRuntime> {
+  if (shuttingDown) throw new ProviderError('The OpenCode runtime is shutting down.', { code: 'aborted' });
   if (options.signal?.aborted) throw new ProviderError('OpenCode start was interrupted.', { code: 'aborted' });
   const secrets = [...(options.secrets ?? []), ...environmentSecrets(options.env)].filter((value): value is string => Boolean(value));
   const stderr = new TextTail();
@@ -99,6 +103,7 @@ export async function startOpencode(executable: string, options: StartOptions): 
   let child: ChildLike;
   try {
     const port = await freeLoopbackPort();
+    if (options.signal?.aborted || shuttingDown) throw abortError();
     child = spawnFn(executable, ['acp', '--hostname', '127.0.0.1', '--port', String(port), '--no-mdns'], { cwd: options.cwd, env: options.env, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsHide: true });
   } catch (error) {
     throw new ProviderError(`OpenCode could not be started: ${safeOpencodeError(error, secrets)}`, { code: 'spawn_failed', cause: error });
@@ -113,6 +118,7 @@ export async function startOpencode(executable: string, options: StartOptions): 
   live.add(runtime);
   const onAbort = (): void => { void closeOpencode(runtime).catch(() => undefined); };
   options.signal?.addEventListener('abort', onAbort, { once: true });
+  if (options.signal?.aborted) onAbort();
   if (options.killOnAbort) void conn.closed.then(() => options.signal?.removeEventListener('abort', onAbort));
   try {
     const response = await conn.request('initialize', {
@@ -138,16 +144,25 @@ export async function startOpencode(executable: string, options: StartOptions): 
 }
 
 /** Escalating stop for the child and its process group. Resolves only once the process has actually closed. */
-export async function closeOpencode(runtime: OpencodeRuntime): Promise<void> {
-  const outcome = await shutdownChild(runtime.child, { closed: runtime.conn.closed, group: process.platform !== 'win32', graceMs: 1_500, termMs: 3_000, killMs: 2_000 });
-  // A child that ignores SIGKILL is not released: callers hold their session lock until the process has really closed.
-  if (outcome === 'unresponsive') await runtime.conn.closed;
-  live.delete(runtime);
+export function closeOpencode(runtime: OpencodeRuntime): Promise<void> {
+  const existing = closing.get(runtime);
+  if (existing) return existing;
+  const pending = (async () => {
+    const outcome = await shutdownChild(runtime.child, { closed: runtime.conn.closed, group: process.platform !== 'win32', graceMs: 1_500, termMs: 3_000, killMs: 2_000 });
+    // Keep the session lock until native closure, including an unresponsive termination.
+    if (outcome === 'unresponsive') await runtime.conn.closed;
+    live.delete(runtime);
+  })();
+  closing.set(runtime, pending);
+  return pending;
 }
 
 /** Stops every live OpenCode child; used when the Relay server shuts down. */
 export async function closeAllOpencode(): Promise<void> {
-  await Promise.allSettled([...live].map((runtime) => closeOpencode(runtime)));
+  shuttingDown = true;
+  const pending = [...probes];
+  for (const probe of pending) probe.controller.abort();
+  await Promise.allSettled([...live].map((runtime) => closeOpencode(runtime)).concat(pending.map((probe) => probe.settled)));
 }
 
 export const object = (value: unknown): Record<string, unknown> => isRecord(value) ? value : {};
@@ -165,9 +180,21 @@ export interface ProbeOptions { env?: NodeJS.ProcessEnv; cwd?: string; timeoutMs
 
 let slots = 2;
 const waiting: (() => void)[] = [];
-async function acquire(): Promise<void> {
+async function acquire(signal: AbortSignal): Promise<void> {
+  if (signal.aborted) throw abortError();
   if (slots > 0) { slots -= 1; return; }
-  await new Promise<void>((resolve) => waiting.push(resolve));
+  await new Promise<void>((resolve, reject) => {
+    const ready = () => { signal.removeEventListener('abort', aborted); resolve(); };
+    const aborted = () => {
+      signal.removeEventListener('abort', aborted);
+      const index = waiting.indexOf(ready);
+      if (index >= 0) waiting.splice(index, 1);
+      reject(abortError());
+    };
+    waiting.push(ready);
+    signal.addEventListener('abort', aborted, { once: true });
+    if (signal.aborted) aborted();
+  });
 }
 function release(): void {
   const next = waiting.shift();
@@ -180,21 +207,31 @@ function release(): void {
  * At most two probes run at once.
  */
 export async function withProbeSession<T>(executable: string, options: ProbeOptions, work: (session: ProbeSession) => Promise<T>): Promise<T> {
-  await acquire();
+  if (shuttingDown) throw new ProviderError('The OpenCode runtime is shutting down.', { code: 'aborted' });
   const baseEnv = options.env ?? process.env;
   const timeoutMs = options.timeoutMs ?? 30_000;
   const deadline = Date.now() + timeoutMs;
-  const left = (): number => Math.max(2_000, deadline - Date.now());
+  const left = (): number => Math.max(1, deadline - Date.now());
+  const controller = new AbortController();
+  const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
+  const timer = setTimeout(() => controller.abort(), timeoutMs); timer.unref();
+  let settle!: () => void;
+  const job = { controller, settled: new Promise<void>((resolve) => { settle = resolve; }) };
+  probes.add(job);
+  let acquired = false;
   let privateDir: string | null = null;
   let commands: unknown[] | null = null;
   let announce: (() => void) | undefined;
   let runtime: OpencodeRuntime | undefined;
   let sessionId: string | null = null;
   try {
+    await acquire(signal);
+    acquired = true;
+    if (signal.aborted || shuttingDown) throw abortError();
     privateDir = await mkdtemp(join(tmpdir(), 'relay-opencode-'));
     const cwd = options.cwd ?? privateDir;
     runtime = await startOpencode(executable, {
-      env: opencodeEnvironment(baseEnv), cwd, timeoutMs: Math.min(15_000, left()), signal: options.signal, killOnAbort: true, ...(options.spawn ? { spawn: options.spawn } : {}),
+      env: opencodeEnvironment(baseEnv), cwd, timeoutMs: Math.min(15_000, left()), signal, killOnAbort: true, ...(options.spawn ? { spawn: options.spawn } : {}),
       notification: (method, params) => {
         const update = object(object(params).update);
         if (method === 'session/update' && update.sessionUpdate === 'available_commands_update' && Array.isArray(update.availableCommands)) {
@@ -207,13 +244,15 @@ export async function withProbeSession<T>(executable: string, options: ProbeOpti
     sessionId = typeof selected.sessionId === 'string' && SESSION_ID.test(selected.sessionId) ? selected.sessionId : null;
     if (!sessionId) throw new ProviderError('OpenCode did not return a valid native session ID.', { code: 'protocol_error' });
     const active = runtime;
-    return await work({
+    const result = await work({
       runtime: active, sessionId, selected,
       commands: async (waitMs = 1_500) => {
         if (!commands && waitMs > 0) await new Promise<void>((resolve) => { announce = resolve; setTimeout(resolve, Math.min(waitMs, left())).unref(); });
         return commands ?? [];
       },
     });
+    if (signal.aborted) throw abortError();
+    return result;
   } finally {
     try {
       if (runtime) await closeOpencode(runtime).catch(() => undefined);
@@ -224,7 +263,10 @@ export async function withProbeSession<T>(executable: string, options: ProbeOpti
       }
       if (privateDir) await rm(privateDir, { recursive: true, force: true }).catch(() => undefined);
     } finally {
-      release();
+      clearTimeout(timer);
+      if (acquired) release();
+      probes.delete(job);
+      settle();
     }
   }
 }
