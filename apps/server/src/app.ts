@@ -113,6 +113,7 @@ export function createApplication(options: ApplicationOptions): RelayApplication
   const browserMcp = new BrowserMcpBridge(browser, store, () => boundPort, (sessionId, tabId) => hub.broadcast({ type: 'browser.opened', sessionId, tabId }), () => config.host);
   const intelligence = new ProjectIntelligenceService({ store, tasks, log });
   const runtime = new SessionRuntime(store, hub, options.providers, tasks, log, options.runtime, (session) => {
+    repository.assertSessionAvailable(session);
     resolveRunConfig(providers.cached()?.find((row) => row.id === session.provider), session, { effort: true, policy: true, serviceTier: true });
   }, browserMcp, intelligence);
   const terminals = new TerminalManager(store, hub, log, options.terminal);
