@@ -24,7 +24,7 @@ const ROLE_RULE: Record<GroupMember['role'], string> = {
   worker: 'You are a worker: do the assigned scope, report with team_status/team_artifact, and ask the orchestrator through team_message when blocked. You cannot assign work.',
 };
 
-const WORKER_COMPLETION = 'Completion: send one concise completion, not repeats. For each committed file revision you actually produced, call team_artifact (one revision per call; never invent an artifact when nothing is committed), then team_status review, then your final summary of changes, checks you ran and caveats. Do not send team_message completion acknowledgments or wake peers just to repeat completion.';
+const WORKER_COMPLETION = 'Completion: send one concise completion, not repeats. Publish the committed files needed for handoff once through team_artifact (one file revision per call; never invent an artifact when nothing is committed). When the assigned work is ready, record team_status review, then your final summary of changes, checks you ran and caveats; unresolved work stays blocked, not review. Do not send team_message completion acknowledgments or wake peers just to repeat completion.';
 const COORDINATOR_COMPLETION = 'Final answer to the human: begin with the outcome, Implemented, Partially complete or Blocked, plus material caveats. Then state each @agent\'s contribution; where the work is actually integrated (worktree, branch or commit; the selected checkout only if that was authorized and done); which checks you ran yourself versus which a peer reported; and what still needs review or user action. If any worker is still running, say Pending instead of claiming it is done. Review tasks are not Done until a human accepts them.';
 
 /** Bounded per-run guidance. Native history, roster and request excerpt only; never other members' transcripts. */
@@ -89,7 +89,7 @@ export function assignmentText(d: {
   if (d.inputs.length) {
     lines.push('', 'Expected input artifacts (verified handoff messages appear in your session when published):', ...d.inputs.map((input) => `- task ${input.taskId}: ${input.path}${input.reference ? ` · ${input.reference}` : ''}`));
   }
-  lines.push('', 'Report progress with team_status; finish with one completion (team_artifact per committed file revision, team_status review, then a summary of changes and verification). The task goes to Review, not Done.');
+  lines.push('', 'Report progress with team_status; when ready, finish with one completion (publish required committed handoff files with team_artifact, record team_status review, then summarize changes and actual verification). Unresolved work stays blocked. Review is not Done.');
   return truncate(lines.join('\n'), LIMITS.message);
 }
 
@@ -101,7 +101,8 @@ export interface ResultLine { handle: string; title: string; outcome: string; su
 export function resultText(lines: ResultLine[]): string {
   const rows = lines.flatMap((row) => [`- @${row.handle} · ${clean(row.title, 120)} · ${row.outcome}`, row.summary ? `  ${clean(row.summary, LIMITS.summary).replaceAll('\n', '\n  ')}` : '']).filter(Boolean);
   return truncate([
-    'Delegated work from your latest batch has finished. Native results below are bounded excerpts; inspect worker worktrees or artifacts for detail.',
-    ...rows, '', 'Inspect the actual artifacts and worktrees, integrate authorized work within your own scope or location, then send one self-contained final summary for the human (outcome first, each agent\'s contribution, where it landed, checks run versus peer-reported, remaining review or action). Do not claim Done for tasks in Review. Use team_assign only if specific work remains.',
+    'Your latest delegation batch has returned. The statuses below describe native turns; they do not certify implementation, integration or human acceptance. Excerpts are bounded; inspect actual worktrees and artifacts.',
+    'Check team_members and team_inbox, review the actual artifacts and worktrees, integrate authorized work within your own scope or location, then send ONE self-contained final summary for the human (outcome first, each agent\'s contribution, where it landed, checks run versus peer-reported, remaining review or action). Say Pending if workers are still running. Do not claim Done for tasks in Review. Use team_assign only if specific work remains.',
+    '', ...rows,
   ].join('\n'), LIMITS.message);
 }
