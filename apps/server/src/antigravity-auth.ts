@@ -9,7 +9,7 @@ const jobs = new Map<string, AuthJob>();
 
 function authError(error: unknown): string {
   const message = redactSecrets(errorMessage(error)).replace(/https?:\/\/[^\s"'<>]+/g, (value) => {
-    try { const url = new URL(value); url.search = ''; url.hash = ''; return url.toString(); }
+    try { const url = new URL(value); url.search = ''; url.hash = ''; url.username = ''; url.password = ''; return url.toString(); }
     catch { return '[authorization URL omitted]'; }
   });
   return truncate(message, 500);
