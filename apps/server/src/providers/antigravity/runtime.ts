@@ -10,6 +10,7 @@ import { runProbe, settlesWithin, shutdownChild, type ChildLike } from '../proce
 import { AcpConnection, AcpRpcError, ACP_METHOD_NOT_FOUND } from './rpc.js';
 import { delegatedBrowserCommand, googleAuthorizationUrl } from './auth-browser.js';
 import { antigravityLinuxLaunch } from './linux-launch.js';
+import { readAntigravityMetadata, writeAntigravityMetadata } from './cache.js';
 
 export const ANTIGRAVITY_POLICIES: Policy[] = ['supervised', 'balanced', 'full-access'];
 export const ANTIGRAVITY_DEFAULT: ProviderModel = { id: 'default', name: 'Antigravity default', reasoningEfforts: [{ id: 'none', label: 'Native default' }], defaultReasoningEffort: 'none', policies: ANTIGRAVITY_POLICIES };
@@ -46,8 +47,17 @@ const metadata = new Map<string, AntigravityMetadata>();
 const authenticated = new Map<string, number>();
 const keyOf = (exe: string, env: NodeJS.ProcessEnv): string => JSON.stringify([exe, process.platform, env.GEMINI_HOME ?? homedir(), env.GOOGLE_CLOUD_PROJECT ?? '', env.GOOGLE_CLOUD_LOCATION ?? '']);
 function bound<T>(map: Map<string, T>): void { while (map.size > 16) map.delete(map.keys().next().value!); }
-export function cachedAntigravityMetadata(exe: string, env: NodeJS.ProcessEnv = process.env): AntigravityMetadata | undefined { return metadata.get(keyOf(exe, env)); }
-export function rememberAntigravityMetadata(exe: string, env: NodeJS.ProcessEnv, value: AntigravityMetadata): void { metadata.set(keyOf(exe, env), value); bound(metadata); }
+export function cachedAntigravityMetadata(exe: string, env: NodeJS.ProcessEnv = process.env): AntigravityMetadata | undefined {
+  const key = keyOf(exe, env);
+  const value = metadata.get(key) ?? readAntigravityMetadata(exe, key, env);
+  if (value) { metadata.set(key, value); bound(metadata); }
+  return value;
+}
+export function rememberAntigravityMetadata(exe: string, env: NodeJS.ProcessEnv, value: AntigravityMetadata): void {
+  const key = keyOf(exe, env);
+  metadata.set(key, value); bound(metadata);
+  writeAntigravityMetadata(exe, key, env, value);
+}
 export function markAntigravityAuthenticated(exe: string, env: NodeJS.ProcessEnv = process.env): void { authenticated.set(keyOf(exe, env), Date.now()); bound(authenticated); }
 export function isAntigravityAuthenticated(exe: string, env: NodeJS.ProcessEnv = process.env): boolean { return authenticated.has(keyOf(exe, env)); }
 export function antigravityInfo(executablePath: string | null, version: string | null, models: ProviderModel[], available: boolean, reason: string | null): ProviderInfo {

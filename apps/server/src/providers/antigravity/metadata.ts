@@ -60,11 +60,17 @@ export function parseAntigravityMetadata(version: string, response: unknown, com
       return value ? [{ value, name: text(item.name, 200) ?? value }] : [];
     }) : [];
   }
-  const models: ProviderModel[] = [{ ...ANTIGRAVITY_DEFAULT, policies: knownPolicies }];
+  const currentName = advertised.find((model) => model.value === current)?.name;
+  const currentThinking = nativeEfforts.find((choice) => choice.value === thinking?.currentValue);
+  const defaultEffort = { id: 'none', label: currentThinking ? `Default (${currentThinking.name})` : 'Native default' };
+  const selectedEfforts = nativeEfforts.filter((choice) => choice.value !== 'none').map((choice) => ({ id: choice.value, label: choice.name, ...(choice.description ? { description: choice.description } : {}) }));
+  const models: ProviderModel[] = [{ ...ANTIGRAVITY_DEFAULT,
+    name: currentName && current !== 'default' ? `${currentName} (default)` : ANTIGRAVITY_DEFAULT.name,
+    reasoningEfforts: [defaultEffort, ...selectedEfforts], policies: knownPolicies }];
   for (const model of advertised) {
     if (model.value === 'default') continue;
     const efforts = model.value === current ? nativeEfforts.map((choice) => ({ id: choice.value, label: choice.name, ...(choice.description ? { description: choice.description } : {}) })) : [];
-    models.push({ id: model.value, name: model.name, reasoningEfforts: [{ id: 'none', label: 'Native default' }, ...efforts.filter((choice) => choice.id !== 'none')], defaultReasoningEffort: 'none', policies: knownPolicies });
+    models.push({ id: model.value, name: model.name, reasoningEfforts: [model.value === current ? defaultEffort : { id: 'none', label: 'Native default' }, ...efforts.filter((choice) => choice.id !== 'none')], defaultReasoningEffort: 'none', policies: knownPolicies });
   }
   return { version, models, commands: parseNativeCommands(commands), choices: { currentModel: current, modes, thinkingLevels: nativeEfforts.map((item) => item.value) } };
 }
