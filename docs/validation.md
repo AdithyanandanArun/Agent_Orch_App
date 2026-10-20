@@ -180,3 +180,19 @@ Added Google Antigravity as an independent provider, including explicit runtime 
 - Built `pnpm package:arch`, verified the package checksum, reinstalled it through pacman and reopened the idle desktop app. The installed backend matched the staged bundle hash. Its health response retained four projects, five sessions and schema 8; Codex/Claude remained available, while Antigravity correctly reported not installed and its auth state remained idle. No provider setup action ran automatically. The collaborative preview host became unavailable after restart, so the installed settings endpoints were inspected through HTTP instead of claiming another visual check.
 
 Live authenticated tool execution, model/effort changes, approvals, group delegation, browser use, resume and quota retrieval remain unexercised. Windows/macOS runtime execution is also unverified. Native history import, explicit skill attachment and custom compaction thresholds are intentionally unavailable for this provider. See provider-antigravity.md for exact boundaries.
+
+
+## Attachments, team actions and workspace settings — 2026-10-20
+
+Implementation source at `6fd4c18` includes direct member commands/skills, clipboard images and file selection in both composers, private attachment storage/history, visible per-provider executable paths, and reversible project removal. Claude Code Sonnet 5.5 high began the implementation; after its native session limit was reached, the authorized Luna high fallback completed its assigned work with orchestrator integration.
+
+- `pnpm typecheck` passed across contracts, server, web and desktop; `git diff --check` passed. No tests were added or run, and no provider prompt was submitted for validation. Type checking includes existing test source without executing it.
+- Installed public SDK declarations, native app-server schemas and ACP interface/source definitions established structured image and command mappings. This is interface inspection, not evidence of a live image-analysis turn.
+- Review corrected upload serialization, scope changes, failed-upload retention, send acknowledgement, command recognition in ordinary prose, stale metadata/membership checks, queue budgets/stops, shutdown draining and image limits. Native provider runtime checks and failures remain authoritative.
+- `pnpm package:arch` succeeded. The package checksum file verified from its release directory. Build warnings were limited to dependency annotation/deploy notices; the build completed successfully.
+- Archive SHA-256: `f07a932db7c81c3ce9dee97d96ea601d9c01e06fc95a4160abab4a6be8119f9d`.
+- Arch package SHA-256: `67896f247b06d4a6a4e8a95adf8b7972da7667210c4d9343b87286b710f8bd0c`.
+- Staged backend SHA-256: `322cba08df1b4646c02a935a9b54c68d9b9bb8d073986520019019be0e685603`.
+- Before installation, the running desktop was idle with four projects, six sessions and schema 8. Consistent SQLite backups were written to a private cache directory outside tracked source. No real project was removed and no provider path was changed for validation.
+
+Native paid image/skill/command execution, Windows/macOS execution and live project-removal/restoration flows were not exercised in these checks. The desktop installation receipt is recorded separately when administrator authentication completes. Nothing was pushed or published.
