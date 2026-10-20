@@ -11,14 +11,11 @@ interface Headline { tone: 'ok' | 'err' | 'warn' | 'neutral' | 'busy'; label: st
 function headline(repo: RepositoryState, github: GitHubState | null, error: string | null, loading: boolean): Headline {
   if (repo.remotes.length === 0) return { tone: 'neutral', label: 'No remote' };
   if (!github) return error ? { tone: 'warn', label: 'GitHub unavailable' } : { tone: 'busy', label: 'Checking GitHub…' };
+  if (error && github.status === 'available') return { tone: 'warn', label: 'GitHub status stale' };
   if (github.status === 'unsupported') return { tone: 'neutral', label: 'Not a GitHub remote' };
   if (github.status === 'unavailable') return { tone: 'warn', label: 'GitHub unavailable' };
   if (!githubMatches(github, repo)) return { tone: 'busy', label: loading ? 'Updating…' : 'Checks out of date' };
-  if (github.checks.length === 0) {
-    return repo.upstream === null || (repo.ahead ?? 0) > 0
-      ? { tone: 'neutral', label: 'HEAD not pushed' }
-      : { tone: 'neutral', label: 'No checks for HEAD' };
-  }
+  if (github.checks.length === 0) return { tone: 'neutral', label: 'No checks reported' };
   const summary = summarizeChecks(github.checks);
   return { tone: summary.tone, label: `Actions · ${summary.label}` };
 }
@@ -36,7 +33,8 @@ export function ActionsStatus({ repo, github, error, loading, onRefresh }: {
   const head = headline(repo, github, error, loading);
   const exact = githubMatches(github, repo);
   const workflows = github?.workflows ?? [];
-  const pr = github?.pullRequest ?? null;
+  const pr = exact ? github?.pullRequest ?? null : null;
+  const stale = Boolean(error && github);
 
   return (
     <>
@@ -60,12 +58,12 @@ export function ActionsStatus({ repo, github, error, loading, onRefresh }: {
         </header>
 
         {repo.remotes.length === 0 ? <p className="ghpop__note">No remote is configured, so there is nothing on GitHub to check.</p> : null}
-        {error ? <p className="ghpop__note ghpop__note--err" role="alert">Couldn’t read GitHub status: {error}</p> : null}
+        {error ? <p className="ghpop__note ghpop__note--err" role="alert">Couldn’t read GitHub status: {error}{stale ? ' Showing the last successful read, which may be out of date.' : ''}</p> : null}
         {github?.status === 'unsupported' ? <p className="ghpop__note">The remote is not a GitHub repository, so checks are unavailable.</p> : null}
         {github?.status === 'unavailable' ? <p className="ghpop__note">GitHub status is unavailable. See the notes below.</p> : null}
 
         {github?.status === 'available' ? (
-          <>
+          <div className={cx('ghpop__data', stale && 'is-stale')}>
             {pr ? (
               <section className="ghpop__sec">
                 <h4>Pull request</h4>
@@ -82,7 +80,7 @@ export function ActionsStatus({ repo, github, error, loading, onRefresh }: {
               <h4>Checks for <code>{shortSha(repo.head)}</code> (current HEAD)</h4>
               {!exact ? <p className="ghpop__note">These results are for <code>{shortSha(github.head)}</code>{github.branch !== repo.branch ? ` on ${github.branch ?? 'another branch'}` : ''}, not the current checkout. Refreshing…</p> : null}
               {exact && github.checks.length === 0 ? (
-                <p className="ghpop__note">{repo.upstream === null || (repo.ahead ?? 0) > 0 ? 'This commit has not been pushed, so GitHub has no checks for it.' : 'GitHub reports no checks for this commit.'}</p>
+                <p className="ghpop__note">GitHub reported no checks for this commit.</p>
               ) : null}
               {exact ? github.checks.map((check) => {
                 const tone = classifyRun(check.status, check.conclusion);
@@ -120,7 +118,7 @@ export function ActionsStatus({ repo, github, error, loading, onRefresh }: {
                 </>
               )}
             </section>
-          </>
+          </div>
         ) : null}
 
         {github?.notices.length ? (
@@ -130,7 +128,6 @@ export function ActionsStatus({ repo, github, error, loading, onRefresh }: {
           </section>
         ) : null}
         {repo.notices.length ? repo.notices.map((notice, index) => <p key={`r${index}:${notice}`} className="ghpop__note">{notice}</p>) : null}
-        <footer className="ghpop__foot">Read-only. Relay does not start or re-run workflows.</footer>
       </Popover>
     </>
   );

@@ -130,21 +130,24 @@ export function GitBar({ project, session }: { project: Project; session: Sessio
 
   const eligible = repo?.changes.filter((c) => c.eligible).length ?? 0;
   const changed = repo?.changes.length ?? 0;
-  const pr = github?.pullRequest ?? null;
-  const githubOk = Boolean(repo && github?.status === 'available' && githubMatches(github, repo));
+  // Pull request and checks data only describe the branch/commit it was read for, and only while the last read succeeded.
+  const githubOk = Boolean(repo && github?.status === 'available' && githubMatches(github, repo) && !githubError);
+  const pr = githubOk ? github?.pullRequest ?? null : null;
   const hasRemote = (repo?.remotes.length ?? 0) > 0;
-  const ahead = repo?.ahead ?? 0;
+  // An unknown ahead count (null) never means "up to date": pushing stays available and is labelled as unknown.
+  const ahead = repo?.ahead ?? null;
   const publishable = Boolean(repo && repo.head && !repo.detached && hasRemote && !repo.upstream);
-  const pushable = Boolean(repo && repo.head && !repo.detached && hasRemote && (repo.upstream ? ahead > 0 : true));
+  const pushable = Boolean(repo && repo.head && !repo.detached && hasRemote && (!repo.upstream || ahead === null || ahead > 0));
+  const pushText = publishable ? 'Publish' : ahead === null ? 'Push' : `Push ${ahead}`;
 
   const commitWhy = guard ?? (!repo ? 'Repository status is not loaded' : eligible === 0 ? (changed === 0 ? 'Working tree is clean' : 'No changed files are eligible to commit') : null);
   const pushWhy = guard ?? (!repo ? 'Repository status is not loaded' : !hasRemote ? 'No remote is configured' : repo.detached ? 'Detached HEAD cannot be pushed' : !repo.head ? 'Commit something first' : repo.upstream && ahead === 0 ? 'Nothing to push — up to date with upstream' : null);
   const prWhy = guard ?? (!repo ? 'Repository status is not loaded'
     : !hasRemote ? 'No remote is configured'
       : repo.detached ? 'Detached HEAD has no branch to open a pull request from'
-        : !githubOk ? (github?.status === 'available' ? 'GitHub status is updating' : github?.notices[0] ?? githubError ?? 'GitHub is not available for this repository')
+        : !githubOk ? (github?.status === 'available' ? (githubError ? `GitHub status could not be refreshed: ${githubError}` : 'GitHub status is updating') : github?.notices[0] ?? githubError ?? 'GitHub is not available for this repository')
           : pr ? `Pull request #${pr.number} already exists`
-            : !repo.upstream ? 'Push this branch first — Relay never pushes for you' : null);
+            : !repo.upstream ? 'This branch has no upstream configured — push it first; Relay never pushes for you' : null);
   const branchWhy = guard ?? (!repo?.head && !repo?.branches.length ? 'No branches yet — make a first commit' : null);
 
   const whereButton = (
@@ -180,8 +183,8 @@ export function GitBar({ project, session }: { project: Project; session: Sessio
         ) : null}
         <BranchPicker projectId={project.id} sessionId={scope.sessionId} repo={repo} view={view} disabledWhy={branchWhy} onCreate={() => setDialog('branch')} />
         {pushable && !pushWhy ? (
-          <button type="button" className="gitbar__btn gitbar__push" onClick={() => setDialog('push')} title={publishable ? 'Publish this branch to the remote' : `Push ${ahead} commit${ahead === 1 ? '' : 's'} to ${repo.upstream}`}>
-            <ArrowUp size={13} aria-hidden="true" /> {publishable ? 'Publish' : `Push ${ahead}`}
+          <button type="button" className="gitbar__btn gitbar__push" onClick={() => setDialog('push')} title={publishable ? 'Publish this branch to the remote' : ahead === null ? `Push to ${repo.upstream} (commits ahead unknown)` : `Push ${ahead} commit${ahead === 1 ? '' : 's'} to ${repo.upstream}`}>
+            <ArrowUp size={13} aria-hidden="true" /> {pushText}
           </button>
         ) : null}
         <div className="gitbar__split" role="group" aria-label="Commit">
@@ -198,7 +201,7 @@ export function GitBar({ project, session }: { project: Project; session: Sessio
             <MenuItem icon={<GitCommitHorizontal size={14} />} disabled={Boolean(commitWhy)} why={commitWhy ?? undefined} onSelect={() => setDialog('commit')}>Commit changes…</MenuItem>
             <MenuSeparator />
             <MenuLabel>Remote — only when you choose</MenuLabel>
-            <MenuItem icon={<ArrowUp size={14} />} disabled={Boolean(pushWhy)} why={pushWhy ?? undefined} onSelect={() => setDialog('push')} hint={repo.upstream ? `↑${ahead}` : undefined}>{publishable ? 'Publish branch…' : 'Push…'}</MenuItem>
+            <MenuItem icon={<ArrowUp size={14} />} disabled={Boolean(pushWhy)} why={pushWhy ?? undefined} onSelect={() => setDialog('push')} hint={repo.upstream ? (ahead === null ? '↑ unknown' : `↑${ahead}`) : undefined}>{publishable ? 'Publish branch…' : 'Push…'}</MenuItem>
             {pr ? (
               <MenuItem icon={<ExternalLink size={14} />} onSelect={() => { if (!openExternal(pr.url)) toast('error', 'The pull request link is not a web address.'); }} hint={`#${pr.number}`}>View pull request</MenuItem>
             ) : (

@@ -179,7 +179,7 @@ export function PushDialog({ projectId, sessionId, repo, adopt, refresh, blocked
           <dt>Branch</dt><dd><code>{repo.branch ?? 'detached'}</code></dd>
           <dt>Commit</dt><dd><code>{shortSha(repo.head)}</code></dd>
           {repo.upstream ? <><dt>Upstream</dt><dd><code>{repo.upstream}</code></dd></> : null}
-          {repo.ahead !== null && repo.upstream ? <><dt>Ahead</dt><dd>{repo.ahead} commit{repo.ahead === 1 ? '' : 's'} to push</dd></> : null}
+          {repo.upstream ? <><dt>Ahead</dt><dd>{repo.ahead === null ? 'Unknown — Git did not report a count' : `${repo.ahead} commit${repo.ahead === 1 ? '' : 's'} to push`}</dd></> : null}
           {repo.behind ? <><dt>Behind</dt><dd>{repo.behind} commit{repo.behind === 1 ? '' : 's'} on upstream</dd></> : null}
         </dl>
         {repo.remotes.length > 1 ? (
@@ -269,7 +269,7 @@ export function PullRequestDialog({ projectId, sessionId, repo, github, adopt, r
   const unpushed = repo.upstream ? (repo.ahead ?? 0) : 0;
   const baseProblem = !base.trim() ? 'Choose the branch the pull request targets.' : /[\0\r\n]/.test(base) ? 'The base branch contains invalid characters.' : base.trim() === repo.branch ? 'The base branch must differ from the current branch.' : null;
   const problem = blocked ?? (!repo.branch ? 'Detached HEAD has no branch to open a pull request from'
-    : unpublished ? 'Push this branch first — Relay never pushes for you'
+    : unpublished ? 'No upstream is configured — push the branch first; Relay never pushes for you'
       : !title.trim() ? 'Enter a title' : baseProblem);
 
   useEffect(() => { if (created) document.getElementById('pr-done')?.focus(); }, [created]);
@@ -322,7 +322,7 @@ export function PullRequestDialog({ projectId, sessionId, repo, github, adopt, r
     >
       {step === 'edit' ? (
         <div className="form gitdlg">
-          {unpublished ? <InlineError>This branch has no upstream on the remote. Push it first; creating a pull request does not push.</InlineError> : unpushed > 0 ? <p className="gitdlg__warn" role="status">{unpushed} local commit{unpushed === 1 ? ' is' : 's are'} not pushed and will not be in the pull request until you push.</p> : null}
+          {unpublished ? <InlineError>This branch has no upstream configured, so Relay can’t confirm it is on the remote. Push it first; creating a pull request does not push.</InlineError> : unpushed > 0 ? <p className="gitdlg__warn" role="status">{unpushed} local commit{unpushed === 1 ? ' is' : 's are'} not pushed and will not be in the pull request until you push.</p> : null}
           <Field label="Title" htmlFor="pr-title"><input id="pr-title" className="input" value={title} data-autofocus maxLength={250} onChange={(e) => setTitle(e.target.value)} /></Field>
           <Field label="Description" htmlFor="pr-body"><textarea id="pr-body" className="textarea" rows={6} value={body} maxLength={50000} onChange={(e) => setBody(e.target.value)} placeholder="Optional. Markdown is supported." /></Field>
           <Field label="Base branch" htmlFor="pr-base" hint={<>Merge <code>{repo.branch ?? 'HEAD'}</code> into this branch.</>} error={base && baseProblem ? baseProblem : null}>

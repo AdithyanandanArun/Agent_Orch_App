@@ -91,3 +91,4 @@ button.ghpop__row:hover, button.ghpop__row:focus-visible { background: var(--bg-
   .gitbar { padding-inline: 2px; }
   .gitbar__branch-name { max-width: 110px; }
 }
+.ghpop__data { display: grid; gap: 12px; } .ghpop__data.is-stale { opacity: 0.6; }
