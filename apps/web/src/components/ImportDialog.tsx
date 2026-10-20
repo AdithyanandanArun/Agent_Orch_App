@@ -7,7 +7,7 @@ import { Button, InlineError, Modal, Spinner } from './ui';
 import { cx } from '../lib/format';
 
 const PROVIDERS: { id: Provider; label: string }[] = [
-  { id: 'claude', label: 'Claude' }, { id: 'codex', label: 'Codex' },
+  { id: 'claude', label: 'Claude' }, { id: 'codex', label: 'Codex' }, { id: 'antigravity', label: 'Antigravity' },
 ];
 
 function shortDate(value: string | null): string {
@@ -63,6 +63,11 @@ export function ImportDialog() {
     setConversations([]); setNextCursor(null); setListNotices([]); setListError(null);
     setLoadingMore(false);
     setSelected(null); setDetails(null); setDetailError(null); setImportError(null);
+    if (provider === 'antigravity') {
+      setListNotices(['Antigravity native history import is not supported yet. No local history request was made.']);
+      setLoading(false);
+      return () => controller.abort();
+    }
     setLoading(true);
     void api.imports(provider, folderProjectId, undefined, controller.signal).then((result) => {
       if (controller.signal.aborted || request !== listRequest.current) return;
@@ -162,7 +167,7 @@ export function ImportDialog() {
   </>;
 
   return (
-    <Modal title="Import a conversation" description="Continue a local Claude or Codex conversation in Relay." onClose={requestClose} footer={footer}>
+    <Modal title="Import a conversation" description="Continue a supported local provider conversation in Relay." onClose={requestClose} footer={footer}>
       <form id="import-form" className="import-dialog" onSubmit={(event: FormEvent) => { event.preventDefault(); void importAndOpen(); }} onKeyDown={(event) => {
         if (event.key === 'Enter' && event.target instanceof HTMLInputElement) event.preventDefault();
       }}>
@@ -184,7 +189,8 @@ export function ImportDialog() {
           {listNotices.map((notice, index) => <p className="import-dialog__notice" key={`${index}:${notice}`}>{notice}</p>)}
           {listError ? <InlineError onRetry={importing ? undefined : () => setListRevision((value) => value + 1)}>{listError}</InlineError> : null}
           {loading ? <div className="import-dialog__state"><Spinner label="Loading conversations" /><span>Reading local conversation history…</span></div> : null}
-          {!loading && !listError && conversations.length === 0 ? <div className="import-dialog__state"><Folder size={20} /><strong>No conversations found</strong><span>Relay only reads history available from this machine.</span></div> : null}
+          {!loading && provider === 'antigravity' ? <div className="import-dialog__state"><AlertTriangle size={20} /><strong>Antigravity import is unavailable</strong><span>Relay does not have an Antigravity native history reader yet.</span></div> : null}
+          {!loading && provider !== 'antigravity' && !listError && conversations.length === 0 ? <div className="import-dialog__state"><Folder size={20} /><strong>No conversations found</strong><span>Relay only reads history available from this machine.</span></div> : null}
           {!loading && conversations.length > 0 && visible.length === 0 ? <div className="import-dialog__state"><Search size={18} /><strong>No matches in loaded history</strong><span>Load more history to search older conversations.</span></div> : null}
           <div className="import-dialog__rows" role="listbox" aria-label={`${provider} conversations`} aria-busy={loading} onKeyDown={(event) => {
             if (importing || !visible.length || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;

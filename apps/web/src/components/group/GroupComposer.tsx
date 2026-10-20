@@ -25,7 +25,7 @@ const COMMANDS = [
   { name: 'tier', description: 'Edit a member’s service tier in Members' },
   { name: 'skills', description: 'Not available for group messages' },
   { name: 'usage', description: 'Show provider limits (add @handle for a member)' },
-  { name: 'import', description: 'Import a local Claude or Codex conversation' },
+  { name: 'import', description: 'Import a local supported provider conversation' },
   { name: 'status', description: 'Show this group’s mode and members' },
   { name: 'diff', description: 'Open the Changes pane' },
   { name: 'help', description: 'List Relay commands' },
@@ -108,7 +108,15 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
     if (commandMatch) return COMMANDS.filter((command) => command.name.startsWith(trigger.slice(1).toLowerCase())).map((command) => ({ key: `c:${command.name}`, token: `/${command.name}`, description: command.description, group: 'Relay' }));
     if (mentionMatch) {
       const query = mentionMatch[1]!.toLowerCase();
-      return members.filter((member) => member.handle.toLowerCase().startsWith(query)).slice(0, 8).map((member) => {
+      const matching = members.filter((member) => member.handle.toLowerCase().startsWith(query));
+      const antigravity = members.filter((member) => sessionOf(member.sessionId)?.provider === 'antigravity');
+      const isAntigravityAlias = Boolean(query && 'antigravity'.startsWith(query));
+      const alias = isAntigravityAlias && antigravity.length === 1 ? [{
+        key: `provider:antigravity:${antigravity[0]!.id}`, token: '@antigravity', description: `Antigravity agent · @${antigravity[0]!.handle}`, group: 'Providers', identityKey: antigravity[0]!.sessionId, provider: 'antigravity' as Provider,
+      }] : [];
+      const aliasChoices = isAntigravityAlias && antigravity.length > 1 ? antigravity : [];
+      return [...alias, ...aliasChoices, ...matching].slice(0, 8).map((member) => {
+        if ('token' in member) return member;
         const session = sessionOf(member.sessionId);
         return { key: `m:${member.id}`, token: `@${member.handle}`, description: `${ROLE_LABEL[member.role]}${session ? ` · ${providerName(session.provider)} ${session.model}` : ''}`, group: 'Agents', identityKey: member.sessionId, provider: session?.provider };
       });

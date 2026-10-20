@@ -1,6 +1,7 @@
 import type {
   AgentConfiguration, AppSettings, GroupDelivery, GroupMember, GroupMode, GroupSnapshot, Policy, Provider, ProviderInfo, ProviderModel, Session, SessionStatus,
 } from '@relay/contracts';
+import { defaultProviderModel, PROVIDER_NAMES } from './providers';
 
 export const MODE_LABEL: Record<GroupMode, string> = { cowork: 'Cowork', orchestrated: 'Orchestrated', 'current-leads': 'Current agent leads' };
 export const MODE_TAGLINE: Record<GroupMode, string> = {
@@ -36,7 +37,7 @@ export const effortLabel = (id: string): string => {
 };
 export const tierLabel = (id: string, name?: string): string => (id === 'standard' ? 'Standard' : id === 'priority' ? 'Fast' : name ?? id);
 export const policyLabel = (policy: string): string => POLICY_LABEL[policy as Policy] ?? policy;
-export const providerName = (provider: Provider): string => (provider === 'codex' ? 'Codex' : 'Claude');
+export const providerName = (provider: Provider): string => PROVIDER_NAMES[provider];
 
 /* ——— Membership ——— */
 export const activeMembers = (snapshot: GroupSnapshot): GroupMember[] => snapshot.members.filter((member) => !member.removedAt);
@@ -109,23 +110,26 @@ export function validateHandle(raw: string, taken: Iterable<string>): string | n
 export interface Choice { id: string; label: string; description?: string }
 export const modelOf = (info: ProviderInfo | undefined, id: string): ProviderModel | undefined => info?.models.find((model) => model.id === id || model.aliases?.includes(id));
 export const effortChoices = (model: ProviderModel | undefined): Choice[] =>
-  model?.reasoningEfforts ?? (model ? [{ id: 'low', label: 'Low' }, { id: 'medium', label: 'Medium' }, { id: 'high', label: 'High' }] : []);
+  model?.reasoningEfforts ?? [];
 export const tierChoices = (model: ProviderModel | undefined): Choice[] =>
   [{ id: 'standard', label: 'Standard', description: 'Standard service tier.' }, ...(model?.serviceTiers ?? []).filter((tier) => tier.id !== 'standard').map((tier) => ({ id: tier.id, label: tierLabel(tier.id, tier.name), description: tier.description }))];
 export const policyChoices = (info: ProviderInfo | undefined, model: ProviderModel | undefined): Policy[] => model?.policies ?? info?.policies ?? [];
 
-const defaultModelFor = (provider: Provider, settings: AppSettings): string => (provider === 'codex' ? settings.defaultCodexModel : settings.defaultClaudeModel);
+const defaultModelFor = defaultProviderModel;
 
 /** Moves a configuration onto values the provider currently advertises; used only when the user changes provider or model. */
 export function normalizeConfig(config: AgentConfiguration, providers: readonly ProviderInfo[], settings: AppSettings): AgentConfiguration {
   const info = providers.find((provider) => provider.id === config.provider);
-  const model = modelOf(info, config.model) ?? modelOf(info, defaultModelFor(config.provider, settings)) ?? info?.models[0];
+  const configuredDefault = defaultModelFor(config.provider, settings);
+  const nativeDefault = config.provider === 'antigravity' && config.model === 'default';
+  const model = nativeDefault ? undefined : modelOf(info, config.model) ?? modelOf(info, configuredDefault)
+    ?? (config.provider === 'antigravity' && configuredDefault === 'default' ? undefined : info?.models[0]);
   const efforts = effortChoices(model);
   const tiers = tierChoices(model);
   const policies = policyChoices(info, model);
   return {
     provider: config.provider,
-    model: model?.id ?? config.model,
+    model: model?.id ?? (config.provider === 'antigravity' && (nativeDefault || configuredDefault === 'default' && !modelOf(info, config.model)) ? 'default' : config.model),
     effort: efforts.some((item) => item.id === config.effort) ? config.effort : model?.defaultReasoningEffort ?? efforts[0]?.id ?? config.effort,
     policy: policies.includes(config.policy) ? config.policy : policies.includes(settings.defaultPolicy) ? settings.defaultPolicy : policies[0] ?? config.policy,
     serviceTier: tiers.some((item) => item.id === config.serviceTier) ? config.serviceTier : model?.defaultServiceTier ?? 'standard',
@@ -259,7 +263,7 @@ export function resolveMentions(text: string, members: readonly MentionCandidate
     const label = `@${token.handle}`;
     if (exact) { if (!ids.includes(exact.id)) ids.push(exact.id); continue; }
     if (retiredSet.has(token.handle)) { problems.push({ token: label, message: `${label} was removed from this group.` }); continue; }
-    if (token.handle === 'claude' || token.handle === 'codex') {
+    if (token.handle === 'claude' || token.handle === 'codex' || token.handle === 'antigravity') {
       const matches = members.filter((member) => member.provider === token.handle);
       if (matches.length === 1) { if (!ids.includes(matches[0]!.id)) ids.push(matches[0]!.id); }
       else if (matches.length === 0) problems.push({ token: label, message: `No active ${providerName(token.handle)} agent in this group for ${label}.` });

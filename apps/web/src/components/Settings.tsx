@@ -9,6 +9,7 @@ import { SelectMenu } from './SelectMenu';
 import { SettingRow } from './SettingRow';
 import { BrowserSettings } from './browser/BrowserSettings';
 import { AgentsSettings } from './AgentsSettings';
+import { defaultProviderModel, providerModelChoices, providerModelSetting, PROVIDER_NAMES } from '../lib/providers';
 
 const CATEGORIES: { id: SettingsSection; name: string }[] = [
   { id: 'general', name: 'General' }, { id: 'project', name: 'Project' }, { id: 'agents', name: 'Agents' }, { id: 'providers', name: 'Providers' }, { id: 'browser', name: 'Browser' }, { id: 'appearance', name: 'Appearance' },
@@ -33,6 +34,7 @@ export function SettingsPage() {
   const setCategory = useRelay.getState().setSettingsSection;
   const [claude, setClaude] = useState(settings?.claudeExecutable ?? '');
   const [codex, setCodex] = useState(settings?.codexExecutable ?? '');
+  const [antigravity, setAntigravity] = useState(settings?.antigravityExecutable ?? '');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -55,28 +57,26 @@ export function SettingsPage() {
     finally { setBusy(null); }
   };
   const disabled = busy !== null;
-  const modelKey = settings.defaultProvider === 'codex' ? 'defaultCodexModel' : 'defaultClaudeModel';
-  const defaultModel = settings[modelKey];
-  const reportedModels = boot.providers.find((p) => p.id === settings.defaultProvider)?.models ?? [];
-  const models = reportedModels;
+  const modelKey = providerModelSetting(settings.defaultProvider);
+  const defaultModel = defaultProviderModel(settings.defaultProvider, settings);
+  const providerInfo = boot.providers.find((p) => p.id === settings.defaultProvider);
+  const models = providerModelChoices(providerInfo, defaultModel);
   const selectedModel = models.find((m) => m.id === defaultModel || m.aliases?.includes(defaultModel));
   const selectedModelId = selectedModel?.id ?? defaultModel;
-  const efforts = selectedModel?.reasoningEfforts ?? (selectedModel ? [
-    { id: 'low', label: 'Low' }, { id: 'medium', label: 'Medium' }, { id: 'high', label: 'High' },
-  ] : []);
+  const efforts = selectedModel?.reasoningEfforts ?? [];
   const tiers = [{ id: 'standard', name: 'Standard', description: 'Standard service tier.' }, ...(selectedModel?.serviceTiers ?? []).filter((item) => item.id !== 'standard')];
   const policies = selectedModel?.policies ?? boot.providers.find((p) => p.id === settings.defaultProvider)?.policies ?? [];
   const updateDefaultModel = (value: string) => {
     const nextModel = models.find((model) => model.id === value);
     if (!nextModel) return;
     const patch: Partial<AppSettings> = { [modelKey]: value };
-    const nextEfforts = nextModel.reasoningEfforts ?? [{ id: 'low', label: 'Low' }, { id: 'medium', label: 'Medium' }, { id: 'high', label: 'High' }];
+    const nextEfforts = nextModel.reasoningEfforts ?? [];
     if (nextEfforts.length && !nextEfforts.some((item) => item.id === settings.defaultEffort)) patch.defaultEffort = nextModel.defaultReasoningEffort ?? nextEfforts[0]!.id;
     const nextTiers = [{ id: 'standard', name: 'Standard' }, ...(nextModel.serviceTiers ?? []).filter((item) => item.id !== 'standard')];
     if (!nextTiers.some((item) => item.id === (settings.defaultServiceTier ?? 'standard'))) patch.defaultServiceTier = nextModel.defaultServiceTier ?? nextTiers[0]!.id;
     void update(patch, 'model');
   };
-  const pathsDirty = claude.trim() !== settings.claudeExecutable || codex.trim() !== settings.codexExecutable;
+  const pathsDirty = claude.trim() !== settings.claudeExecutable || codex.trim() !== settings.codexExecutable || antigravity.trim() !== (settings.antigravityExecutable ?? '');
   const status = busy === 'providers' ? 'Checking providers…' : busy ? 'Saving…' : error ? 'Could not complete change' : saved ? 'All changes saved' : category === 'project' ? 'Project details' : 'Changes save automatically';
 
   return <div className="settings-page" aria-labelledby="settings-title">
@@ -89,9 +89,9 @@ export function SettingsPage() {
       {category === 'general' ? <div className="settings-page__section">
         <div className="settings-page__section-head"><h2>New sessions</h2><p>Defaults for your next session. Existing conversations keep their own settings.</p></div>
         <SettingRow title="Provider" description="The agent used when you start a session." htmlFor="st-provider">
-          <SelectMenu id="st-provider" label="Default provider" value={settings.defaultProvider} disabled={disabled} options={[{ value: 'codex', label: 'Codex' }, { value: 'claude', label: 'Claude' }]} onChange={(value) => void update({ defaultProvider: value as AppSettings['defaultProvider'] }, 'provider')} />
+          <SelectMenu id="st-provider" label="Default provider" value={settings.defaultProvider} disabled={disabled} options={boot.providers.map((provider) => ({ value: provider.id, label: PROVIDER_NAMES[provider.id], description: provider.available ? 'Available' : provider.reason ?? 'Needs setup' }))} onChange={(value) => void update({ defaultProvider: value as AppSettings['defaultProvider'] }, 'provider')} />
         </SettingRow>
-        <SettingRow title="Model" description={`Default for ${settings.defaultProvider === 'codex' ? 'Codex' : 'Claude'} sessions.`} htmlFor="st-model">
+        <SettingRow title="Model" description={`Default for ${PROVIDER_NAMES[settings.defaultProvider]} sessions.`} htmlFor="st-model">
           <SelectMenu id="st-model" label="Default model" value={selectedModelId} disabled={disabled || models.length === 0} options={models.map((m) => ({ value: m.id, label: m.name }))} onChange={updateDefaultModel} />
         </SettingRow>
         <SettingRow title="Reasoning effort" description="How much reasoning to use for a response." htmlFor="st-effort">
@@ -117,11 +117,12 @@ export function SettingsPage() {
         <div className="settings-page__section-head settings-page__section-head--actions"><div><h2>Connected agents</h2><p>Local installations and login status.</p></div><Button size="sm" disabled={disabled} busy={busy === 'providers'} onClick={() => void refreshProviders()}><RefreshCw size={12} /> Re-check</Button></div>
         {boot.providers.map((provider) => <ProviderStatus key={provider.id} provider={provider} />)}
         {!boot.providers.length ? <p className="settings-page__hint">Provider information is loading. Re-check to request a fresh status.</p> : null}
-        <div className="settings-page__login"><p>Sign in on this machine with <code>claude auth login</code> or <code>codex login</code>, then re-check.</p><p>Claude uses its existing login. An <code>ANTHROPIC_API_KEY</code> in the server environment takes precedence and uses API billing. Relay stores no credentials.</p></div>
+        <div className="settings-page__login"><p>Sign in on this machine with <code>claude auth login</code> or <code>codex login</code>, then re-check. For Antigravity, run <code>agy</code> interactively once to establish its cached credentials.</p><p>Claude uses its existing login. An <code>ANTHROPIC_API_KEY</code> in the server environment takes precedence and uses API billing. Relay stores no credentials.</p></div>
         <details className="settings-page__advanced"><summary>Executable paths</summary><p className="settings-page__hint">Leave empty to use automatic discovery.</p>
-          <form className="settings-page__paths" onSubmit={(event) => { event.preventDefault(); void update({ claudeExecutable: claude.trim(), codexExecutable: codex.trim() }, 'paths').then((ok) => { if (ok) void refreshProviders(); }); }}>
+          <form className="settings-page__paths" onSubmit={(event) => { event.preventDefault(); void update({ claudeExecutable: claude.trim(), codexExecutable: codex.trim(), antigravityExecutable: antigravity.trim() }, 'paths').then((ok) => { if (ok) void refreshProviders(); }); }}>
             <label htmlFor="st-claude">Claude executable</label><input id="st-claude" className="input input--mono" value={claude} disabled={disabled} onChange={(event) => setClaude(event.target.value)} placeholder="claude" spellCheck={false} />
             <label htmlFor="st-codex">Codex executable</label><input id="st-codex" className="input input--mono" value={codex} disabled={disabled} onChange={(event) => setCodex(event.target.value)} placeholder="codex" spellCheck={false} />
+            <label htmlFor="st-antigravity">Antigravity executable</label><input id="st-antigravity" className="input input--mono" value={antigravity} disabled={disabled} onChange={(event) => setAntigravity(event.target.value)} placeholder="agy" spellCheck={false} />
             <div><Button type="submit" size="sm" disabled={!pathsDirty || disabled} busy={busy === 'paths'}>Save paths and re-check</Button></div>
           </form>
         </details>

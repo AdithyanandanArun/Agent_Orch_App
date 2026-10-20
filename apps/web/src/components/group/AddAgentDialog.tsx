@@ -80,10 +80,10 @@ export function AddAgentDialog({ sessionId }: { sessionId: string }) {
   const [step, setStep] = useState<'mode' | 'configure'>(joining ? 'configure' : 'mode');
   const [mode, setMode] = useState<GroupMode | null>(group?.group.mode ?? null);
 
-  const existingHandle = useMemo(() => suggestHandle(session?.provider ?? 'claude', []), [session?.provider]);
+  const existingHandle = useMemo(() => suggestHandle(session?.provider ?? settings?.defaultProvider ?? 'claude', []), [session?.provider, settings?.defaultProvider]);
   const takenHandles = useMemo(() => (group ? allHandles(group) : new Set([existingHandle])), [group, existingHandle]);
   const [agent, setAgent] = useState<AgentConfiguration | null>(() => (providers && settings ? initialWorkerConfig(settings, providers) : null));
-  const [handle, setHandle] = useState(() => suggestHandle(agent?.provider ?? 'codex', takenHandles));
+  const [handle, setHandle] = useState(() => suggestHandle(agent?.provider ?? settings?.defaultProvider ?? 'codex', takenHandles));
   const [handleTouched, setHandleTouched] = useState(false);
   const [isolated, setIsolated] = useState(true);
   const [keepCurrent, setKeepCurrent] = useState<'keep' | 'change'>('keep');

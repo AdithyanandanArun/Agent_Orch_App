@@ -6,6 +6,7 @@ import {
 } from '../../lib/groups';
 import { Field } from '../ui';
 import { SelectMenu } from '../SelectMenu';
+import { providerModelChoices } from '../../lib/providers';
 
 /** One agent's provider, model, effort, permissions and service tier, offering only what each provider currently advertises. */
 export function ConfigFields({ value, onChange, idPrefix, lockProvider = false, disabled = false, legend }: {
@@ -21,8 +22,7 @@ export function ConfigFields({ value, onChange, idPrefix, lockProvider = false, 
   const availability = providers ? providerAvailability(providers, value.provider) : { available: false, reason: 'Provider status is loading.' };
 
   const modelOptions = useMemo(() => {
-    const options = (info?.models ?? []).map((item) => ({ value: item.id, label: item.name }));
-    return options.some((option) => option.value === (model?.id ?? value.model)) ? options : [{ value: value.model, label: value.model }, ...options];
+    return providerModelChoices(info, value.model).map((item) => ({ value: item.id, label: item.name }));
   }, [info, model, value.model]);
   if (!providers || !settings) return null;
   const patch = (change: Partial<AgentConfiguration>) => onChange(normalizeConfig({ ...value, ...change }, providers, settings));

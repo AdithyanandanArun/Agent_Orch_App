@@ -116,7 +116,7 @@ export function GroupModeDialog({ groupId }: { groupId: string }) {
     return {
       key: member.id, handle: member.handle, role: !needsLead ? 'peer' : member.id === leadId ? 'orchestrator' : 'worker',
       note: member.role === (!needsLead ? 'peer' : member.id === leadId ? 'orchestrator' : 'worker') ? 'Unchanged' : `Was ${ROLE_LABEL[member.role].toLowerCase()}`,
-      provider: session?.provider ?? 'claude', model: session?.model ?? '', effort: session?.effort ?? '', policy: session?.policy ?? 'supervised', serviceTier: session?.serviceTier ?? 'standard',
+      provider: session?.provider, model: session?.model ?? '', effort: session?.effort ?? '', policy: session?.policy ?? 'supervised', serviceTier: session?.serviceTier ?? 'standard',
       workspace: session ? (session.isolated ? 'Isolated worktree' : 'Project folder') : 'Unknown workspace',
     };
   });
@@ -183,4 +183,3 @@ export function GroupModeDialog({ groupId }: { groupId: string }) {
     </Modal>
   );
 }
-

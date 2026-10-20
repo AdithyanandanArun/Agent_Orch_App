@@ -8,6 +8,7 @@ import { cx } from '../lib/format';
 import { SelectMenu } from './SelectMenu';
 import { UsagePanel } from './UsagePanel';
 import { GitBar } from './git/GitBar';
+import { providerModelChoices } from '../lib/providers';
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const hasSkillMarker = (text: string, name: string) => new RegExp(`(?:^|\\s)\\$${escapeRegExp(name)}(?=\\s|$)`).test(text);
@@ -175,9 +176,7 @@ export function Composer({ session }: { session: Session }) {
   const modelData = (currentProvider?.models ?? []) as ProviderModel[];
   const currentModel = modelData.find((m) => m.id === session.model || m.aliases?.includes(session.model));
   const selectedModelId = currentModel?.id ?? session.model;
-  const effortChoices = currentModel?.reasoningEfforts ?? (currentModel ? [
-    { id: 'low', label: 'Low' }, { id: 'medium', label: 'Medium' }, { id: 'high', label: 'High' },
-  ] : []);
+  const effortChoices = currentModel?.reasoningEfforts ?? [];
   const tierChoices = [
     { id: 'standard', name: 'Standard', description: 'Standard service tier.' },
     ...(currentModel?.serviceTiers ?? []).filter((item) => item.id !== 'standard'),
@@ -240,7 +239,7 @@ export function Composer({ session }: { session: Session }) {
         { name: 'tier', description: 'Focus service tier', kind: 'local' as const, group: 'Relay' },
         { name: 'skills', description: 'Choose skills for the next message', kind: 'local' as const, group: 'Relay' },
         { name: 'usage', description: 'Show provider limits and session totals', kind: 'local' as const, group: 'Relay' },
-        { name: 'import', description: 'Import a local Claude or Codex conversation', kind: 'local' as const, group: 'Relay' },
+        { name: 'import', description: 'Import a local supported provider conversation', kind: 'local' as const, group: 'Relay' },
         { name: 'status', description: 'Show current provider and settings', kind: 'local' as const, group: 'Relay' },
         { name: 'diff', description: 'Open the Changes pane', kind: 'local' as const, group: 'Relay' },
         { name: 'help', description: 'List Relay commands', kind: 'local' as const, group: 'Relay' },
@@ -289,7 +288,7 @@ export function Composer({ session }: { session: Session }) {
     document.getElementById(`${pickerId}-option-${activeSuggestion}`)?.scrollIntoView({ block: 'nearest' });
   }, [activeSuggestion, pickerId, suggestion]);
   const modelOptions = modelGroups.flatMap((p) => {
-    return p.models.map((m) => ({ value: JSON.stringify([p.id, m.id]), label: m.name, group: p.name }));
+    return providerModelChoices(p, p.id === session.provider ? session.model : undefined).map((m) => ({ value: JSON.stringify([p.id, m.id]), label: m.name, group: p.name }));
   });
 
   return (
