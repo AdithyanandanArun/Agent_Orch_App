@@ -34,3 +34,17 @@
 .source__link { display: inline-flex; align-items: center; gap: 5px; text-align: left; overflow-wrap: anywhere; }
 .source__link:disabled { color: var(--fg-3); text-decoration: none; cursor: not-allowed; }
 @media (max-width: 899px) { .ctxstrip { margin-inline: 16px; } }
+
+/* Agent map additions */
+.gnode--root { width: 210px; border-radius: 14px; border-color: var(--line-strong); }
+.gnode--component { width: 190px; padding: 9px 12px; }
+.gnode--component .gnode__row svg { color: var(--fg-2); flex: none; }
+.gnode--agent { width: 200px; border-style: dashed; }
+.gnode--agent .gnode__row svg { color: var(--fg-2); flex: none; }
+.gnode--tool-failed { border-color: color-mix(in srgb, var(--err) 55%, transparent); }
+.edge-contains .react-flow__edge-path { stroke: var(--fg-3); stroke-width: 1.2; }
+.edge-component .react-flow__edge-path { stroke: var(--blue); stroke-width: 1.4; opacity: 0.8; }
+.edge-agent .react-flow__edge-path { stroke: var(--fg-2); stroke-width: 1.4; stroke-dasharray: 2 4; }
+.edge-unresolved .react-flow__edge-path { stroke: var(--warn); stroke-width: 1.2; stroke-dasharray: 2 4; }
+.lg--contains { border-color: var(--fg-3); } .lg--component { border-color: var(--blue); } .lg--agent { border-color: var(--fg-2); border-top-style: dotted; }
+.map__notice { position: absolute; z-index: 5; top: 14px; left: 14px; display: grid; gap: 4px; max-width: min(420px, calc(100% - 28px)); padding: 8px 12px; border-radius: var(--radius-md); background: var(--bg-surface); border: 1px solid var(--line-soft); color: var(--fg-1); font-size: var(--text-xs); }
