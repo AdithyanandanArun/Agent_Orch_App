@@ -205,3 +205,5 @@
   .gm-packet { display: none; }
   .chat--group *, .members *, .group-dialog * { scroll-behavior: auto !important; }
 }
+
+.recips__chip.is-stale { color: var(--warn); background: transparent; border-color: var(--warn); }

@@ -65,6 +65,8 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
   const caretIndex = Math.min(caret, draft.length);
   const mentions = useMemo(() => resolveMentions(draft, candidates, retired), [draft, candidates, retired]);
   const pickedActive = picked.filter((id) => members.some((member) => member.id === id));
+  const stalePicked = picked.filter((id) => !members.some((member) => member.id === id));
+  const staleSelectionError = stalePicked.length ? 'A selected recipient was removed. Remove the unavailable recipient chip or clear selection before sending.' : null;
   const direct = members.filter((member) => pickedActive.includes(member.id) || mentions.ids.includes(member.id));
   const defaults = useMemo(() => defaultRecipients(snapshot), [snapshot]);
   const recipients = direct.length ? direct : defaults;
@@ -81,7 +83,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
     : recipients.length === 0 ? 'No agent is set to receive unaddressed messages. Mention an agent or choose a recipient.'
       : recipients.length > MAX_RECIPIENTS ? `A message can address at most ${MAX_RECIPIENTS} agents.`
         : unavailable;
-  const problem = mentions.problems[0]?.message ?? null;
+  const problem = staleSelectionError ?? mentions.problems[0]?.message ?? null;
   const sendDisabled = sending || empty || (!local && (Boolean(blocker) || Boolean(problem)));
 
   useEffect(() => {
@@ -143,6 +145,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
       }
       case 'help': store.toast('info', `Relay commands: ${COMMANDS.map((command) => `/${command.name}`).join(', ')}. Type @ to address an agent.`); return;
       case 'usage': {
+        if (staleSelectionError) throw new Error(staleSelectionError);
         const resolved = resolveMentions(draft, candidates, retired);
         if (resolved.problems.length) throw new Error(resolved.problems[0]!.message);
         const targets = resolved.ids.length ? resolved.ids : pickedActive;
@@ -175,13 +178,13 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
     const targets = members.filter((member) => pickedActive.includes(member.id) || fresh.ids.includes(member.id));
     const ids = (targets.length ? targets : defaults).map((member) => member.id);
     const content = draft.trim();
-    const key = `${content}\u0000${ids.join(',')}`;
+    const key = `${targets.length ? 'direct' : 'default'}\u0000${content}\u0000${ids.join(',')}`;
     const clientMessageId = pendingId.current?.key === key ? pendingId.current.id : crypto.randomUUID();
     pendingId.current = { key, id: clientMessageId };
     setSending(true);
     setError(null);
     try {
-      const updated = await api.sendGroupMessage(snapshot.group.id, { content, recipients: ids, clientMessageId });
+      const updated = await api.sendGroupMessage(snapshot.group.id, { content, ...(targets.length ? { recipients: ids } : {}), clientMessageId });
       const store = useRelay.getState();
       store.applyGroup(updated);
       setDraft('');
@@ -211,6 +214,10 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
       <div className={cx('composer composer--group', blocker && 'is-blocked')}>
         <div className="recips" role="group" aria-label="Recipients">
           <span className="recips__label">To</span>
+          {stalePicked.map((id) => <span key={id} className="recips__chip is-stale" title="This recipient is no longer in the group">
+            @{snapshot.members.find((member) => member.id === id)?.handle ?? 'removed-agent'}
+            <button type="button" aria-label="Remove unavailable recipient" onClick={() => togglePick(id)}><X size={10} aria-hidden="true" /></button>
+          </span>)}
           {direct.length ? direct.map((member) => {
             const removable = pickedActive.includes(member.id);
             const mentioned = mentions.ids.includes(member.id);
@@ -220,12 +227,12 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
                 {removable ? <button type="button" aria-label={`Remove @${member.handle} from recipients`} onClick={() => togglePick(member.id)}><X size={10} aria-hidden="true" /></button> : null}
               </span>
             );
-          }) : defaults.length ? <>
+          }) : defaults.length && !stalePicked.length ? <>
             {defaults.map((member) => <span key={member.id} className="recips__chip is-default">@{member.handle}</span>)}
             <span className="recips__default">{defaultLabel}</span>
-          </> : <span className="recips__default">no default recipient</span>}
+          </> : !stalePicked.length ? <span className="recips__default">no default recipient</span> : null}
           <button ref={pickerButton} type="button" className="recips__pick" aria-haspopup="dialog" aria-expanded={pickerOpen} onClick={() => setPickerOpen((value) => !value)}><AtSign size={12} aria-hidden="true" /> Choose</button>
-          {pickedActive.length ? <button type="button" className="recips__clear" onClick={() => setPicked([])}>Clear selection</button> : null}
+          {picked.length ? <button type="button" className="recips__clear" onClick={() => setPicked([])}>Clear selection</button> : null}
         </div>
         <label htmlFor={`composer-${anchor.id}`} className="sr-only">Message the group</label>
         <textarea
@@ -292,8 +299,8 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
           })}
         </fieldset>
         <div className="recips-pop__foot">
-          <small>{pickedActive.length ? `${pickedActive.length} selected` : `Nothing selected: ${defaultLabel}`}</small>
-          <button type="button" className="link-btn" disabled={!pickedActive.length} onClick={() => setPicked([])}>Clear selection</button>
+          <small>{stalePicked.length ? `${stalePicked.length} unavailable recipient${stalePicked.length === 1 ? '' : 's'} — clear before sending` : pickedActive.length ? `${pickedActive.length} selected` : `Nothing selected: ${defaultLabel}`}</small>
+          <button type="button" className="link-btn" disabled={!picked.length} onClick={() => setPicked([])}>Clear selection</button>
         </div>
       </Popover>
       {footer}
