@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowDown, ArrowRight, FolderPlus } from 'lucide-react';
-import type { GroupDelivery, GroupSnapshot, Message, Session, SessionRun, ToolCall } from '@relay/contracts';
+import type { GroupDelivery, GroupSnapshot, Message, Session, SessionRun, Task, ToolCall } from '@relay/contracts';
 import { useRelay, useProject } from '../../store/store';
 import { clockTime, cx } from '../../lib/format';
 import { DELIVERY_LABEL, activeMembers } from '../../lib/groups';
@@ -17,11 +17,13 @@ import { GroupBar } from './GroupBar';
 import { GroupComposer } from './GroupComposer';
 import { AgentIdentity } from './AgentIdentity';
 import { AgentPresenceRail } from './AgentPresenceRail';
+import { GroupResultSummary } from './GroupResultSummary';
 
 const NO_SESSIONS: Session[] = [];
 const NO_MESSAGES: Message[] = [];
 const NO_RUNS: SessionRun[] = [];
 const NO_CALLS: ToolCall[] = [];
+const NO_TASKS: Task[] = [];
 
 function DeliveryChips({ deliveries, snapshot, sessions }: { deliveries: GroupDelivery[]; snapshot: GroupSnapshot; sessions: readonly Session[] }) {
   if (!deliveries.length) return null;
@@ -126,6 +128,7 @@ function GroupMessageRow({ item, snapshot }: { item: GroupItem; snapshot: GroupS
 export function GroupConversation({ snapshot }: { snapshot: GroupSnapshot }) {
   const project = useProject();
   const sessions = useRelay((s) => s.boot?.sessions ?? NO_SESSIONS);
+  const tasks = useRelay((s) => s.boot?.tasks ?? NO_TASKS);
   const messages = useRelay((s) => s.boot?.messages ?? NO_MESSAGES);
   const streams = useRelay((s) => s.streams);
   const allRuns = useRelay((s) => s.boot?.runs ?? NO_RUNS);
@@ -153,7 +156,7 @@ export function GroupConversation({ snapshot }: { snapshot: GroupSnapshot }) {
   const [away, setAway] = useState(false);
   const contentSig = items.filter((item): item is NativeItem => item.type === 'native').map((item) => `${item.key}:${item.message.content.length}`).join('|');
   const activitySig = runs.map((run) => `${run.id}:${run.status}:${run.toolCount}:${run.changes?.status ?? 'unknown'}:${run.changes?.fileCount ?? ''}`).join('|');
-  const sig = `${snapshot.group.id}|${items.length}|${contentSig}|${pending.length}|${activitySig}|${allCalls.length}|${snapshot.deliveries.map((d) => d.status).join('')}`;
+  const sig = `${snapshot.group.id}|${items.length}|${contentSig}|${pending.length}|${activitySig}|${allCalls.length}|${snapshot.deliveries.map((d) => d.status).join('')}|${tasks.map((task) => `${task.id}:${task.status}`).join(',')}`;
   useEffect(() => { stick.current = true; setAway(false); }, [snapshot.group.id]);
   useLayoutEffect(() => {
     const el = scroller.current;
@@ -268,6 +271,7 @@ export function GroupConversation({ snapshot }: { snapshot: GroupSnapshot }) {
             const speaker = bySession.get(approval.sessionId) ?? byMember.get(approval.sessionId) ?? null;
             return <ApprovalCard key={approval.id} approval={approval} speaker={speaker} provider={sessions.find((session) => session.id === approval.sessionId)?.provider} />;
           })}
+          <GroupResultSummary snapshot={snapshot} sessions={sessions} messages={messages} runs={allRuns} tasks={tasks} />
         </div>
       </div>
       {away ? (
