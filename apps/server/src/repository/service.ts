@@ -367,6 +367,18 @@ export class RepositoryService {
     }
   }
 
+  assertProjectAvailable(projectId: string): void {
+    const project = this.store.getProject(projectId);
+    if (!project) throw notFound('Project not found');
+    if (!this.leases.size) return;
+    const roots = [project.path, ...this.store.listSessions(projectId).map((session) => session.worktreePath)].map((root) => {
+      try { return realpathSync(root); } catch { return path.resolve(root); }
+    });
+    if ([...this.leases].some((lease) => roots.some((root) => isInside(lease.top, root) || isInside(root, lease.top)))) {
+      throw conflict('Wait for the project’s repository operation to finish before removing it.');
+    }
+  }
+
   private async indexSessionTops(top: string): Promise<void> {
     for (const session of this.store.listSessions()) {
       const real = await fsp.realpath(session.worktreePath).catch(() => null);

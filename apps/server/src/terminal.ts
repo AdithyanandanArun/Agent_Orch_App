@@ -31,7 +31,7 @@ interface PtyHandle {
   onExit(cb: (event: { exitCode: number }) => void): void;
 }
 
-interface Terminal { id: string; owner: WebSocket; pty: PtyHandle; exited: boolean; backpressure: NodeJS.Timeout | null }
+interface Terminal { id: string; projectId: string; owner: WebSocket; pty: PtyHandle; exited: boolean; backpressure: NodeJS.Timeout | null }
 
 export type PtySpawner = (shell: string, args: string[], options: { cwd: string; cols: number; rows: number; env: Record<string, string> }) => Promise<PtyHandle>;
 
@@ -47,6 +47,7 @@ export class TerminalManager {
   private readonly terminals = new Map<string, Terminal>();
   private readonly pending = new Map<WebSocket, number>();
   private pendingTotal = 0;
+  private readonly pendingProjects = new Map<string, number>();
   private readonly shell: string;
   private readonly spawner: PtySpawner;
 
@@ -57,6 +58,9 @@ export class TerminalManager {
 
   get count(): number {
     return this.terminals.size;
+  }
+  hasProject(projectId: string): boolean {
+    return (this.pendingProjects.get(projectId) ?? 0) > 0 || [...this.terminals.values()].some((terminal) => terminal.projectId === projectId && !terminal.exited);
   }
 
   handleMessage(socket: WebSocket, raw: string): void {
@@ -120,6 +124,7 @@ export class TerminalManager {
     // Reserve capacity synchronously: multiple starts can be awaiting the native spawner at once.
     this.pending.set(socket, (this.pending.get(socket) ?? 0) + 1);
     this.pendingTotal++;
+    this.pendingProjects.set(project.id, (this.pendingProjects.get(project.id) ?? 0) + 1);
     try {
       pty = await this.spawner(this.shell, process.platform === 'win32' ? [] : ['-i'], { cwd, cols: request.cols, rows: request.rows, env });
     } catch (error) {
@@ -130,8 +135,11 @@ export class TerminalManager {
       if (remaining > 0) this.pending.set(socket, remaining);
       else this.pending.delete(socket);
       this.pendingTotal--;
+      const projectPending = (this.pendingProjects.get(project.id) ?? 1) - 1;
+      if (projectPending > 0) this.pendingProjects.set(project.id, projectPending);
+      else this.pendingProjects.delete(project.id);
     }
-    const terminal: Terminal = { id, owner: socket, pty, exited: false, backpressure: null };
+    const terminal: Terminal = { id, projectId: project.id, owner: socket, pty, exited: false, backpressure: null };
     if (socket.readyState !== socket.OPEN) {
       try { pty.kill(); } catch { /* already gone */ }
       return;

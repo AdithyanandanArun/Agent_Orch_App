@@ -248,6 +248,14 @@ export function buildRouter(s: Services) {
 
   add('POST', '/api/sessions', async (ctx) => new Reply(201, await s.workspace.createSession(await ctx.body(CreateSessionSchema))));
   add('PATCH', '/api/projects/:id', async (ctx) => s.workspace.renameProject(param(ctx, 'id'), (await ctx.body(UpdateProjectSchema)).name));
+  add('DELETE', '/api/projects/:id', async (ctx) => {
+    const id = param(ctx, 'id');
+    if (s.terminals.hasProject(id)) throw conflict('Close the project’s terminals before removing it.');
+    s.repository.assertProjectAvailable(id);
+    const sessions = s.workspace.removeProject(id);
+    const closed = await Promise.allSettled(sessions.map((sessionId) => s.browser.disconnect(sessionId)));
+    return { ok: true, notices: closed.some((result) => result.status === 'rejected') ? ['The project was removed, but a browser connection could not be closed.'] : [] };
+  });
   add('PATCH', '/api/sessions/:id', async (ctx) => {
     const id = param(ctx, 'id');
     const patch = await ctx.body(UpdateSessionSchema);

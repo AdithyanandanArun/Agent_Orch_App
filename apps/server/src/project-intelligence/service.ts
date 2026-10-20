@@ -248,7 +248,7 @@ export class ProjectIntelligenceService {
     const { type } = event;
     // Never react to our own output: that would turn every scan into the trigger for the next one.
     if (type.startsWith('project.context.') || type.startsWith('task.auto.')) return;
-    if (type === 'project.created' || type.startsWith('repository.')) return this.schedule(event.projectId);
+    if (type === 'project.created' || type === 'project.restored' || type.startsWith('repository.')) return this.schedule(event.projectId);
     if (type === 'file.saved' || RUN_FINISHED.test(type)) {
       // Isolated sessions edit their own worktree, so the project folder itself did not change.
       const session = event.sessionId ? this.store.getSession(event.sessionId, true) : undefined;

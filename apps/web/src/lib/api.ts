@@ -113,6 +113,7 @@ export const api = {
   createProjectAt: (input: { name: string; parentPath: string }) => json<Project>('/api/projects/new', 'POST', input),
   cloneProject: (input: { url: string; name: string; parentPath: string }) => json<Project>('/api/projects/clone', 'POST', input),
   renameProject: (id: string, name: string) => json<Project>(`/api/projects/${encodeURIComponent(id)}`, 'PATCH', { name }),
+  removeProject: (id: string) => json<{ ok: boolean; notices: string[] }>(`/api/projects/${encodeURIComponent(id)}`, 'DELETE'),
   listFiles: (projectId: string, path: string, sessionId: string | null) =>
     json<FileEntry[]>(`/api/projects/${encodeURIComponent(projectId)}/files${q({ path, sessionId })}`),
   readFile,
