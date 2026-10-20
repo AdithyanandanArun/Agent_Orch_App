@@ -21,8 +21,8 @@ export function cleanInline(text: string, max = 200): string {
 }
 
 /** Stable identity for a piece of text: independent of case, spacing, markup and line position. */
-export function textKey(text: string): string {
-  const normal = cleanInline(text, 1000).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+export function textKey(text: string, max = 1000): string {
+  const normal = cleanInline(text, max).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
   return createHash('sha1').update(normal).digest('hex').slice(0, 12);
 }
 

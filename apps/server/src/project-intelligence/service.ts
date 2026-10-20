@@ -225,6 +225,7 @@ export class ProjectIntelligenceService {
       ].filter(Boolean);
       this.emit(projectId, null, 'task.auto.repository', `Repository tasks synced: ${parts.join(', ')}`, syncPayload(sync));
     }
+    if (!this.closed) this.ops.flush();
     return this.context(projectId);
   }
 
@@ -297,9 +298,11 @@ export class ProjectIntelligenceService {
         .filter((task) => task.status === 'running' && (!task.source?.runId || this.store.getRun(task.source.runId)?.status !== 'running'));
       const moved = this.store.tx(() => stale.map((task) => this.ops.setStatus(task, 'ready', { blockedFallback: true })).filter((task): task is Task => Boolean(task)));
       if (moved.length) {
+        this.ops.markDirty();
         this.emit(project.id, null, 'task.auto.run', `Run no longer active: ${moved.length} tracked task${moved.length === 1 ? '' : 's'} returned to pending`, { outcome: 'interrupted', tasks: moved.slice(0, 20).map((task) => ({ taskId: task.id, title: task.title, status: task.status })) });
       }
     }
+    this.ops.flush();
   }
 
   // ---- request and plan tracking ---------------------------------------------------------------------------------
@@ -322,7 +325,7 @@ export class ProjectIntelligenceService {
       if (!project || project.isExample || this.closed) return null;
       const classified = classifyPrompt(prompt);
       if (classified.kind === 'ignore') return null;
-      return this.store.tx(() => {
+      const tracked = this.store.tx(() => {
         let task: Task | null = null;
         if (classified.kind === 'continue') {
           task = this.latestUnresolvedRequest(session);
@@ -339,6 +342,8 @@ export class ProjectIntelligenceService {
         }
         return this.resumeRequestTask(task, session, runId);
       });
+      this.ops.flush();
+      return tracked;
     } catch (error) {
       this.log('warn', 'Project intelligence could not track the request', error);
       return explicitTaskId ?? null;
@@ -352,7 +357,9 @@ export class ProjectIntelligenceService {
 
   private latestUnresolvedRequest(session: Session): Task | null {
     const candidates = this.ops.sourced(session.projectId, 'request').filter((task) => task.sessionId === session.id && task.status !== 'done' && !task.source?.missing);
-    return candidates.reduce<Task | null>((best, task) => (!best || task.updatedAt >= best.updatedAt ? task : best), null);
+    // Order by when the request's latest run actually started, so renaming an old request by hand cannot make it "latest".
+    const workedAt = (task: Task) => (task.source?.runId ? this.store.getRun(task.source.runId)?.startedAt : undefined) ?? task.createdAt;
+    return candidates.reduce<Task | null>((best, task) => (!best || workedAt(task) >= workedAt(best) ? task : best), null);
   }
 
   private createRequestTask(session: Session, runId: string, prompt: string, title: string, key: string): string {
@@ -381,6 +388,7 @@ export class ProjectIntelligenceService {
       if (!project || project.isExample || this.closed) return;
       const parentTaskId = this.parentTaskOf(session.projectId, runId);
       const summary = this.store.tx(() => applyProviderPlan(this.store, this.ops, session, runId, plan, parentTaskId));
+      this.ops.flush();
       if (!summary.changed) return;
       const parts = [summary.created.length && `${summary.created.length} new`, summary.updated.length && `${summary.updated.length} updated`, summary.missing.length && `${summary.missing.length} dropped from the plan`].filter(Boolean);
       const brief = (tasks: Task[]) => tasks.slice(0, 20).map((task) => ({ taskId: task.id, title: task.title, status: task.status }));
@@ -418,6 +426,7 @@ export class ProjectIntelligenceService {
         }
         return changed;
       });
+      this.ops.flush();
       if (!moved.length) return;
       const first = moved[0]!;
       const label = outcome === 'completed' ? 'Ready for review' : `Run ${outcome}, left pending`;

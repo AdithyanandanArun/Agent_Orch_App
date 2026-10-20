@@ -5,7 +5,21 @@ import type { TaskService } from '../tasks.ts';
 
 /** Guarded task mutation shared by every automatic writer: manual overrides and real dependencies always win. */
 export class TaskOps {
+  private dirty = false;
+
   constructor(private readonly store: Store, private readonly tasks: TaskService) {}
+
+  /** Records that task or source state changed without a workspace event, so clients still refresh. */
+  markDirty(): void {
+    this.dirty = true;
+  }
+
+  /** Signals one coalesced state change if anything was written since the last flush; call once per top-level operation. */
+  flush(): void {
+    if (!this.dirty) return;
+    this.dirty = false;
+    this.store.touch();
+  }
 
   hasOverride(task: Task, field: TaskOverride): boolean {
     return task.source?.overrides?.includes(field) ?? false;
@@ -38,6 +52,7 @@ export class TaskOps {
     if (JSON.stringify(next) === JSON.stringify(current)) return false;
     this.store.setTaskSource(task.id, next);
     task.source = next;
+    this.dirty = true;
     return true;
   }
 
@@ -55,6 +70,7 @@ export class TaskOps {
     }
     if (target === task.status) return null;
     const updated = this.store.updateTask(task.id, { status: target });
+    this.dirty = true;
     this.tasks.cascade(updated, task.status);
     return this.store.getTask(task.id) ?? updated;
   }
@@ -63,6 +79,7 @@ export class TaskOps {
   retitle(task: Task, title: string): boolean {
     if (this.hasOverride(task, 'title') || task.title === title) return false;
     this.store.updateTask(task.id, { title });
+    this.dirty = true;
     return true;
   }
 }

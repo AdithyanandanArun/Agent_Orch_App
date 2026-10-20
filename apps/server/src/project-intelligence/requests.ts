@@ -25,6 +25,7 @@ export function classifyPrompt(prompt: string): PromptClass {
   if (CONTINUE.test(text)) return { kind: 'continue' };
 
   const stripped = firstLine.replace(POLITE, '').trim();
+  const fullBody = text.replace(POLITE, '').trim();
   const actionable = ACTION.test(stripped);
   const question = INQUIRY.test(stripped) || (/\?\s*$/.test(firstLine) && !actionable);
   if (!actionable && question) return { kind: 'ignore', reason: 'question' };
@@ -35,5 +36,5 @@ export function classifyPrompt(prompt: string): PromptClass {
   const capitalised = sentence ? sentence[0]!.toUpperCase() + sentence.slice(1) : sentence;
   const title = cleanInline(capitalised.replace(/[.:]\s*$/, ''), 120);
   if (title.length < 3) return { kind: 'ignore', reason: 'too-short' };
-  return { kind: 'request', title, fingerprint: textKey(stripped.slice(0, 600)) };
+  return { kind: 'request', title, fingerprint: textKey(fullBody, Infinity) };
 }

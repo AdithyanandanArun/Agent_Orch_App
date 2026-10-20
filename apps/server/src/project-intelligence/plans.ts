@@ -67,7 +67,7 @@ export function applyProviderPlan(store: Store, ops: TaskOps, session: Session, 
       ops.patchSource(task, { runId, providerId: step.id, reportedStatus: step.status, missing: false, ...(parentTaskId && !task.source!.parentTaskId ? { parentTaskId } : {}) });
       let changed = wasMissing;
       if (ops.retitle(task, title)) changed = true;
-      if (description !== undefined && description !== task.description && !ops.hasOverride(task, 'description')) { store.updateTask(task.id, { description }); changed = true; }
+      if (description !== undefined && description !== task.description && !ops.hasOverride(task, 'description')) { store.updateTask(task.id, { description }); ops.markDirty(); changed = true; }
       if (changed) summary.updated.push(task);
     }
     usedIds.add(task.id);
@@ -89,6 +89,7 @@ export function applyProviderPlan(store: Store, ops: TaskOps, session: Session, 
       }
       if (JSON.stringify(accepted) !== JSON.stringify(task.dependsOn)) {
         store.updateTask(task.id, { dependsOn: accepted });
+        ops.markDirty();
         task = store.getTask(task.id)!;
         if (!summary.created.some((item) => item.id === task.id) && !summary.updated.some((item) => item.id === task.id)) summary.updated.push(task);
       }
