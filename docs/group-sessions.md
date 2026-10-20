@@ -20,6 +20,12 @@ Choose an agent recipient or type its handle, such as `@claude1` or `@codex1`. T
 
 Responses, tool activity, approvals, elapsed time and changed files retain the member and native run that produced them. Each member can have only one provider turn at a time. A separate provider process or native conversation is not a second shared context window: Relay sends compact assignments and references, not everyone's full transcript.
 
+Agent names use a consistent individual color, with an OpenAI or Claude mark taken from the associated session's provider. The handle identifies the participant; the provider mark identifies its runtime. Two Codex participants still have separate worktrees, conversations and runs.
+
+When delegated work finishes, Relay queues a results handoff to the assigning agent. If that agent is still working, its follow-up waits for the current turn to finish. The handoff's delivery state describes that follow-up turn; it does not certify that files were integrated or that a task passed review. Read the agent's final response and changed-file summary for the actual outcome. Detailed internal handoff instructions remain available in a disclosure.
+
+Completed files can live in the integrating agent's isolated worktree rather than the original project folder. The checkout control and file links identify that location. Finishing a provider turn neither commits nor publishes those files automatically, and delegated tasks remain in Review until accepted.
+
 ## Agent communication
 
 During a recorded group run, Codex and Claude receive the same host-authenticated team interface:
