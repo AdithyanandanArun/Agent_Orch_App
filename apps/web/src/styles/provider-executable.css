@@ -1,0 +1,11 @@
+.provider-executable { margin-top: 14px; }
+.provider-executable > label { display: block; margin-bottom: 6px; color: var(--fg-1); font-size: 12px; }
+.provider-executable__field { display: flex; align-items: center; gap: 8px; }
+.provider-executable__field .input { flex: 1; min-width: 0; font-size: 12px; }
+.provider-executable__help { display: flex; justify-content: space-between; gap: 12px; margin-top: 7px; color: var(--fg-2); font-size: 11px; line-height: 1.6; }
+.provider-executable__help > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.provider-executable__help code { font-size: inherit; }
+.provider-executable__status { flex-shrink: 0; }
+.provider-executable__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: 6px; font-size: 11px; color: var(--fg-2); }
+.provider-executable__actions .link-btn { font-size: 11px; }
+@media (max-width: 600px) { .provider-executable__field { align-items: stretch; flex-direction: column; } .provider-executable__field .btn { align-self: flex-end; } }

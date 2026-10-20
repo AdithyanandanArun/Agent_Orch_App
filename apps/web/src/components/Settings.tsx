@@ -11,6 +11,8 @@ import { BrowserSettings } from './browser/BrowserSettings';
 import { AgentsSettings } from './AgentsSettings';
 import { defaultProviderModel, usesNativeModelDefault, providerModelChoices, providerModelSetting, PROVIDER_NAMES } from '../lib/providers';
 import { AntigravityRuntimeSetup } from './AntigravityRuntimeSetup';
+import { ProviderExecutableSetting, executableSetting } from './ProviderExecutableSetting';
+import { RemoveProjectButton } from './RemoveProjectDialog';
 
 const CATEGORIES: { id: SettingsSection; name: string }[] = [
   { id: 'general', name: 'General' }, { id: 'project', name: 'Project' }, { id: 'agents', name: 'Agents' }, { id: 'providers', name: 'Providers' }, { id: 'browser', name: 'Browser' }, { id: 'appearance', name: 'Appearance' },
@@ -20,10 +22,11 @@ const serviceTiersFor = (model: ProviderModel | undefined) => [
   { id: 'standard', name: 'Standard', description: 'Standard service tier.' },
   ...(model?.serviceTiers ?? []).filter((tier) => tier.id !== 'standard'),
 ];
-function ProviderStatus({ provider }: { provider: ProviderInfo }) {
+function ProviderStatus({ provider, settings, disabled, onSavePath }: { provider: ProviderInfo; settings: AppSettings; disabled: boolean; onSavePath: (value: string) => Promise<boolean> }) {
   return <section className="settings-provider" aria-label={`${provider.name} status`}>
     <div className="settings-provider__head"><h3>{provider.name}</h3><span className={provider.available ? 'settings-provider__state is-ready' : 'settings-provider__state'}><i aria-hidden="true" />{provider.available ? 'Configured' : 'Setup needed'}</span></div>
     <p className="settings-provider__version">{provider.version ? `Version ${provider.version}` : 'Executable not detected'}</p>
+    <ProviderExecutableSetting provider={provider} settings={settings} disabled={disabled} onSave={onSavePath} />
     {!provider.available ? <p className="settings-provider__reason">{provider.reason}</p> : null}
     <details className="settings-provider__details"><summary>Connection details</summary><p>{provider.reason ?? 'Authentication and model access are checked when a session runs.'}</p>{provider.executable ? <code>{provider.executable}</code> : null}</details>
   </section>;
@@ -36,19 +39,13 @@ export function SettingsPage() {
   const projectId = useRelay((s) => s.settingsProjectId ?? s.activeProjectId);
   const project = boot?.projects.find((item) => item.id === projectId);
   const setCategory = useRelay.getState().setSettingsSection;
-  const [claude, setClaude] = useState(settings?.claudeExecutable ?? '');
-  const [codex, setCodex] = useState(settings?.codexExecutable ?? '');
-  const [antigravity, setAntigravity] = useState(settings?.antigravityExecutable ?? '');
-  const [opencode, setOpencode] = useState(settings?.opencodeExecutable ?? '');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
   const refreshAntigravityAfterInstall = useCallback(async () => {
     await useRelay.getState().refreshNow();
-    const installedExecutable = useRelay.getState().boot?.settings.antigravityExecutable ?? '';
-    setAntigravity((current) => !current.trim() || current.trim() === (settings?.antigravityExecutable ?? '') ? installedExecutable : current);
-  }, [settings?.antigravityExecutable]);
+  }, []);
 
   if (!settings || !boot) return null;
   const update = async (patch: Partial<AppSettings>, key: string) => {
@@ -112,8 +109,7 @@ export function SettingsPage() {
     }
     void update(patch, 'provider');
   };
-  const pathsDirty = claude.trim() !== settings.claudeExecutable || codex.trim() !== settings.codexExecutable || antigravity.trim() !== (settings.antigravityExecutable ?? '') || opencode.trim() !== (settings.opencodeExecutable ?? '');
-  const status = busy === 'providers' ? 'Checking providers…' : busy ? 'Saving…' : error ? 'Could not complete change' : saved ? 'All changes saved' : category === 'project' ? 'Project details' : 'Changes save automatically';
+  const status = busy === 'providers' ? 'Checking providers…' : busy ? 'Saving…' : error ? 'Could not complete change' : category === 'providers' ? 'Provider settings' : saved ? 'All changes saved' : category === 'project' ? 'Project details' : 'Changes save automatically';
 
   return <div className="settings-page" aria-labelledby="settings-title">
     <div className="settings-page__inner">
@@ -151,19 +147,15 @@ export function SettingsPage() {
       {category === 'project' && project ? <ProjectSettings key={`${project.id}:${project.name}`} project={project} /> : null}
       {category === 'providers' ? <div className="settings-page__section">
         <div className="settings-page__section-head settings-page__section-head--actions"><div><h2>Connected agents</h2><p>Local installations and login status.</p></div><Button size="sm" disabled={disabled} busy={busy === 'providers'} onClick={() => void refreshProviders()}><RefreshCw size={12} /> Re-check</Button></div>
-        {boot.providers.map((provider) => <ProviderStatus key={provider.id} provider={provider} />)}
+        <p className="settings-page__hint">Set a full executable path or command name below. Leave it empty for automatic detection.</p>
+        {boot.providers.map((provider) => <ProviderStatus key={provider.id} provider={provider} settings={settings} disabled={disabled} onSavePath={async (value) => {
+          const saved = await update({ [executableSetting(provider.id)]: value }, `path:${provider.id}`);
+          if (saved) await refreshProviders();
+          return saved;
+        }} />)}
         {!boot.providers.length ? <p className="settings-page__hint">Provider information is loading. Re-check to request a fresh status.</p> : null}
         <AntigravityRuntimeSetup providerInfo={boot.providers.find((provider) => provider.id === 'antigravity')} onProviderChanged={refreshAntigravityAfterInstall} />
         <div className="settings-page__login"><p>Sign in on this machine with <code>claude auth login</code> or <code>codex login</code>, then re-check. Antigravity sign-in opens its native Google browser flow. OpenCode uses its own provider logins (<code>opencode providers login</code>) and lists the models it exposes; Relay never reads its credential files.</p><p>Claude uses its existing login. An <code>ANTHROPIC_API_KEY</code> in the server environment takes precedence and uses API billing. Relay stores no credentials.</p></div>
-        <details className="settings-page__advanced"><summary>Executable paths</summary><p className="settings-page__hint">Leave empty to use automatic discovery.</p>
-          <form className="settings-page__paths" onSubmit={(event) => { event.preventDefault(); void update({ claudeExecutable: claude.trim(), codexExecutable: codex.trim(), antigravityExecutable: antigravity.trim(), opencodeExecutable: opencode.trim() }, 'paths').then((ok) => { if (ok) void refreshProviders(); }); }}>
-            <label htmlFor="st-claude">Claude executable</label><input id="st-claude" className="input input--mono" value={claude} disabled={disabled} onChange={(event) => setClaude(event.target.value)} placeholder="claude" spellCheck={false} />
-            <label htmlFor="st-codex">Codex executable</label><input id="st-codex" className="input input--mono" value={codex} disabled={disabled} onChange={(event) => setCodex(event.target.value)} placeholder="codex" spellCheck={false} />
-            <label htmlFor="st-antigravity">Antigravity ACP executable</label><input id="st-antigravity" className="input input--mono" value={antigravity} disabled={disabled} onChange={(event) => setAntigravity(event.target.value)} placeholder="agy_acp_server.par" spellCheck={false} />
-            <label htmlFor="st-opencode">OpenCode executable</label><input id="st-opencode" className="input input--mono" value={opencode} disabled={disabled} onChange={(event) => setOpencode(event.target.value)} placeholder="opencode" spellCheck={false} />
-            <div><Button type="submit" size="sm" disabled={!pathsDirty || disabled} busy={busy === 'paths'}>Save paths and re-check</Button></div>
-          </form>
-        </details>
       </div> : null}
       {category === 'appearance' ? <div className="settings-page__section">
         <div className="settings-page__section-head"><h2>Appearance</h2><p>Simple surfaces, readable text and quiet controls.</p></div>
@@ -237,5 +229,6 @@ function ProjectSettings({ project }: { project: Project }) {
       <div className="settings-project__save"><Button type="submit" size="sm" busy={busy} disabled={busy || !name.trim() || name.trim() === project.name}>Save name</Button></div>
     </form>
     <div className="settings-project__location"><h3>Project folder</h3><div><code>{project.path}</code><Button size="sm" onClick={() => void copyPath()}>Copy path</Button></div></div>
+    <div className="settings-project__remove"><p>Remove this project from Relay. Files stay on disk.</p><RemoveProjectButton project={project} /></div>
   </section>;
 }

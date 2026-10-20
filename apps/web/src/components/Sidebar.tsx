@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Activity, ArrowDownToLine, ChevronsUpDown, FolderOpen, FolderPlus, Kanban, LayoutPanelLeft, MoreHorizontal, Network, Search, Settings, SquarePen, Loader2, Pin } from 'lucide-react';
-import type { Session } from '@relay/contracts';
+import { Activity, ArrowDownToLine, ChevronsUpDown, FolderOpen, FolderPlus, FolderMinus, Kanban, LayoutPanelLeft, MoreHorizontal, Network, Search, Settings, SquarePen, Loader2, Pin } from 'lucide-react';
+import type { Project, Session } from '@relay/contracts';
 import { useRelay, useProject, type View } from '../store/store';
 import { copyText } from '../lib/clipboard';
 import { errorMessage } from '../lib/api';
@@ -8,6 +8,7 @@ import { ContextMenu, type ContextMenuEntry } from './ContextMenu';
 import { cx, relativeTime, useNow } from '../lib/format';
 import { IconButton, Menu, MenuItem, MenuLabel, MenuSeparator, StatusDot } from './ui';
 import { activeMembers, findGroupForSession, groupChildSessionIds, groupSessionStatus } from '../lib/groups';
+import { RemoveProjectDialog } from './RemoveProjectDialog';
 
 const VIEWS: { view: View; label: string; icon: typeof Kanban }[] = [
   { view: 'tasks', label: 'Tasks', icon: Kanban }, { view: 'activity', label: 'Activity', icon: Activity }, { view: 'map', label: 'Agent map', icon: Network },
@@ -30,6 +31,7 @@ export function Sidebar() {
   const { setView, selectSession, selectProject, openDialog, createSession } = useRelay.getState();
   const [menu, setMenu] = useState<{ sessionId: string; x: number; y: number; returnFocus: HTMLElement } | null>(null);
   const [organizing, setOrganizing] = useState<Set<string>>(() => new Set());
+  const [removingProject, setRemovingProject] = useState<Project | null>(null);
   const now = useNow();
   const childSessions = groupChildSessionIds(boot?.groups);
   const sessions = (boot?.sessions ?? []).filter((session) => session.projectId === project?.id && !childSessions.has(session.id)).map((session) => {
@@ -85,7 +87,7 @@ export function Sidebar() {
     ] : []),
   ] : [];
 
-  return <aside className={cx('sidebar', sidebarOpen && 'is-open')} aria-label="Primary">
+  return <><aside className={cx('sidebar', sidebarOpen && 'is-open')} aria-label="Primary">
     <div className="sidebar__brand"><span className="brand-name">Relay</span><span className="sidebar__local">local</span></div>
     <div className="sidebar__toolbar">
       <button type="button" className="sidebar__search" onClick={() => openDialog({ kind: 'palette' })} aria-label="Search sessions and commands"><Search size={15} /><span>Search</span></button>
@@ -99,6 +101,7 @@ export function Sidebar() {
         <MenuLabel>Projects</MenuLabel>
         {(boot?.projects ?? []).map((item) => <MenuItem key={item.id} selected={item.id === project?.id} onSelect={() => selectProject(item.id)} icon={<FolderOpen size={14} />} hint={item.isExample ? 'example' : undefined}>{item.name}</MenuItem>)}
         <MenuSeparator /><MenuItem icon={<ArrowDownToLine size={14} />} onSelect={() => openDialog({ kind: 'import' })}>Import conversation…</MenuItem><MenuItem icon={<FolderPlus size={14} />} onSelect={() => openDialog({ kind: 'project' })}>Open project…</MenuItem>
+        {project ? <><MenuSeparator /><MenuItem icon={<FolderMinus size={14} />} disabled={connection !== 'online'} onSelect={() => setRemovingProject(project)}>Remove project…</MenuItem></> : null}
       </Menu>
     </div>
     <div className="sidebar__sessions">
@@ -143,5 +146,5 @@ export function Sidebar() {
       <span className="spacer" />
       <button type="button" className={cx('sidebar__connection', `sidebar__connection--${connection}`)} onClick={() => useRelay.getState().reconnect()} title={`${connectionLabel} to the local server. Click to reconnect.`}><i aria-hidden="true" /><span className="sr-only">{connectionLabel}</span></button>
     </footer>
-  </aside>;
+  </aside>{removingProject ? <RemoveProjectDialog project={removingProject} onClose={() => setRemovingProject(null)} /> : null}</>;
 }

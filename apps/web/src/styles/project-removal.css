@@ -1,0 +1,5 @@
+.project-removal { color: var(--fg-1); font-size: 13px; line-height: 1.7; }
+.project-removal p { margin: 0 0 14px; }
+.project-removal > code { display: block; margin-bottom: 16px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; overflow-wrap: anywhere; }
+.settings-project__remove { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--line); }
+.settings-project__remove p { margin: 0; font-size: 12px; color: var(--fg-2); }
