@@ -82,6 +82,12 @@ Use the file pane to inspect and edit permitted project files, the changes pane 
 
 State lives in the ignored `.relay/` directory by default. Override it with `RELAY_DATA_DIR`. Worktrees and provider conversation references are retained; deleting application data is not a supported cleanup procedure for repositories with unmerged work.
 
+## Repository controls and automatic tracking
+
+The composer footer shows the actual checkout and branch. Use **Commit** to select files and write a message, or its menu for explicit push and pull request actions. GitHub checks and recent workflow runs are read-only and labelled by commit; Relay does not run or rerun workflows. GitHub access uses your existing `gh` CLI login.
+
+Opening a project scans its structure and explicit checklist/TODO items. Tasks also follow new session work requests and native provider plans. Activity and Agent Map update from real repository and session records, including in a single session. Automatic updates preserve fields you edit; completed provider work goes to Review. See [sources, controls and limits](docs/repository-automation.md).
+
 ## Shared browser and context
 
 Open **Browser** in a session’s context pane to use a Relay-managed Chromium or explicitly connect a running Chromium browser with its existing logins and tabs. Both providers receive tools for that same browser. Take control to browse yourself, then release it to the agent. Configure browser defaults in **Settings → Browser** and automatic context compaction in **Settings → General → Context**. See [setup, controls and current limits](docs/shared-browser.md).
