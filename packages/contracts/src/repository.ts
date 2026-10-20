@@ -17,10 +17,10 @@ export interface GitHubState {
 const sessionId = z.string().min(1).max(100).optional();
 const expectedHead = z.string().regex(/^[0-9a-f]{40,64}$/).nullable();
 const safeText = z.string().refine(v => !/[\0\r\n]/.test(v), 'Contains control characters');
-export const RepositoryCommitSchema = z.object({ sessionId, expectedHead, expectedFingerprint: z.string().max(100), message: z.string().trim().min(1).max(10000), paths: z.array(z.string().min(1).max(4096)).min(1).max(500) }).strict();
+export const RepositoryCommitSchema = z.object({ sessionId, expectedHead, expectedFingerprint: z.string().min(1).max(100), message: z.string().trim().min(1).max(10000).refine(v => !v.includes('\0'), 'Commit message contains a NUL byte'), paths: z.array(z.string().min(1).max(4096)).min(1).max(500) }).strict();
 export const RepositoryPushSchema = z.object({ sessionId, expectedHead, remote: safeText.pipe(z.string().min(1).max(100)).optional() }).strict();
 export const RepositoryBranchSchema = z.object({ sessionId, expectedHead, name: safeText.pipe(z.string().min(1).max(200)), create: z.boolean().default(false) }).strict();
-export const RepositoryPullRequestSchema = z.object({ sessionId, expectedHead, title: z.string().trim().min(1).max(250), body: z.string().max(50000).default(''), base: safeText.pipe(z.string().min(1).max(200)), draft: z.boolean().default(false) }).strict();
+export const RepositoryPullRequestSchema = z.object({ sessionId, expectedHead, title: z.string().trim().min(1).max(250).refine(v => !/[\0\r\n]/.test(v), 'Pull request title contains control characters'), body: z.string().max(50000).default(''), base: safeText.pipe(z.string().min(1).max(200)), draft: z.boolean().default(false) }).strict();
 export type RepositoryCommit = z.infer<typeof RepositoryCommitSchema>;
 export type RepositoryPush = z.infer<typeof RepositoryPushSchema>;
 export type RepositoryBranch = z.infer<typeof RepositoryBranchSchema>;
