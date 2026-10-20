@@ -9,6 +9,7 @@ import { abortError, cleanEnv, errorMessage, isRecord, redactSecrets, TextTail, 
 import { runProbe, settlesWithin, shutdownChild, type ChildLike } from '../process.js';
 import { AcpConnection, AcpRpcError, ACP_METHOD_NOT_FOUND } from './rpc.js';
 import { delegatedBrowserCommand, googleAuthorizationUrl } from './auth-browser.js';
+import { antigravityLinuxLaunch } from './linux-launch.js';
 
 export const ANTIGRAVITY_POLICIES: Policy[] = ['supervised', 'balanced', 'full-access'];
 export const ANTIGRAVITY_DEFAULT: ProviderModel = { id: 'default', name: 'Antigravity default', reasoningEfforts: [{ id: 'none', label: 'Native default' }], defaultReasoningEffort: 'none', policies: ANTIGRAVITY_POLICIES };
@@ -78,7 +79,12 @@ export async function startAntigravity(path: string, companion: string, options:
   const env = options.env ?? process.env;
   const childEnv = antigravityChildEnv(env, companion);
   if (options.onAuthorizationUrl) childEnv.BROWSER = delegatedBrowserCommand();
-  const child = (options.spawn ?? spawnDefault)(path, process.platform === 'linux' ? ['--uid='] : [], { cwd: options.cwd ?? process.cwd(), env: childEnv, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsHide: true });
+  const args = process.platform === 'linux' ? ['--uid='] : [];
+  const cwd = options.cwd ?? process.cwd();
+  const launch = options.spawn ? { file: path, args, stop: undefined, kill: undefined }
+    : await antigravityLinuxLaunch(path, args, { cwd, env: childEnv, unsetEnv: REMOVE_ENV });
+  if (options.signal?.aborted) throw abortError();
+  const child = (options.spawn ?? spawnDefault)(launch.file, launch.args, { cwd, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsHide: true });
   const stderr = new TextTail(20_000);
   const decoder = new StringDecoder('utf8');
   let pendingLine = ''; let discardingLine = false;
@@ -116,6 +122,15 @@ export async function startAntigravity(path: string, companion: string, options:
   });
   let closing: Promise<void> | undefined;
   const close = (): Promise<void> => closing ??= (async () => {
+    // The Linux compatibility service lives outside the proxy's process group. Stop its complete
+    // control group before retiring the proxy so native harness descendants cannot be orphaned.
+    if (launch.stop) {
+      try { child.stdin?.end(); } catch { /* Already closed. */ }
+      if (!await settlesWithin(conn.closed, options.signal?.aborted ? 0 : 350)) {
+        await launch.stop();
+        if (!await settlesWithin(conn.closed, 2500)) await launch.kill?.();
+      }
+    }
     // Windows does not expose POSIX process groups. Terminate the actual child tree before its parent PID disappears.
     if (process.platform === 'win32' && !options.spawn && child.pid) {
       try { child.stdin?.end(); } catch { /* Already closed. */ }
@@ -125,6 +140,9 @@ export async function startAntigravity(path: string, companion: string, options:
       }
     }
     const outcome = await shutdownChild(child, { closed: conn.closed, group: process.platform !== 'win32', graceMs: options.signal?.aborted ? 0 : 350, termMs: 1000, killMs: 1000 });
+    // A canceled service start may race the first stop request. Repeat after its proxy retires;
+    // stdin is already closed, so any later native start also receives EOF rather than a prompt.
+    await launch.stop?.();
     if (outcome === 'unresponsive') {
       if (options.keepLockOnUnresponsive) await conn.closed;
       else throw new Error('Antigravity ACP did not stop after process termination.');
