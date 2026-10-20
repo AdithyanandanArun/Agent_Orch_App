@@ -226,7 +226,7 @@ export function Modal({ title, description, onClose, children, footer, variant =
     <div className={cx('scrim', `scrim--${variant}`)} onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div
         ref={ref} role="dialog" aria-modal="true" aria-labelledby={labelledBy ?? titleId} tabIndex={-1}
-        className={cx('modal', `modal--${variant}`)} style={width ? { width, maxWidth: '100%' } : undefined} onKeyDown={onKeyDown}
+        className={cx('modal', `modal--${variant}`)} style={width ? { width, maxWidth: variant === 'sheet' ? '100vw' : 'calc(100vw - 40px)' } : undefined} onKeyDown={onKeyDown}
       >
         {variant !== 'palette' ? (
           <header className="modal__head">

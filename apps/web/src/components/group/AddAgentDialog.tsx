@@ -95,6 +95,11 @@ export function AddAgentDialog({ sessionId }: { sessionId: string }) {
   const [error, setError] = useState<string | null>(null);
   const motion = useDiagramMotion(motionRoot, mode);
 
+  // Another open window may convert or change this conversation while this dialog is open.
+  useEffect(() => {
+    if (group) { setMode(group.group.mode); setStep('configure'); }
+  }, [group?.group.id, group?.group.mode]);
+
   // A suggested handle follows the chosen provider until the user edits it.
   useEffect(() => {
     if (!handleTouched && agent) setHandle(suggestHandle(agent.provider, takenHandles));
