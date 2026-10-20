@@ -68,6 +68,10 @@ export interface AntigravityInstallState {
 }
 export interface AntigravityAuthState {
   state: 'idle' | 'authenticating' | 'authenticated' | 'error'; error: string | null;
+  phase?: 'starting' | 'waiting-for-browser' | 'loading-models';
+  /** Native Google login URL, held only in memory while browser authentication is pending. */
+  authorizationUrl?: string;
+  browserError?: string;
 }
 export interface ProviderCommand {
   id: string; name: string; description: string; argumentHint?: string;

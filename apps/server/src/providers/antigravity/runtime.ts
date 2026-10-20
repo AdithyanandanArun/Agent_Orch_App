@@ -3,10 +3,12 @@ import { constants } from 'node:fs';
 import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { spawn, type SpawnOptions } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 import type { AppSettings, ProviderInfo, ProviderModel, Policy } from '@relay/contracts';
 import { abortError, cleanEnv, errorMessage, isRecord, redactSecrets, TextTail, truncate } from '../common.js';
 import { runProbe, settlesWithin, shutdownChild, type ChildLike } from '../process.js';
 import { AcpConnection, AcpRpcError, ACP_METHOD_NOT_FOUND } from './rpc.js';
+import { delegatedBrowserCommand, googleAuthorizationUrl } from './auth-browser.js';
 
 export const ANTIGRAVITY_POLICIES: Policy[] = ['supervised', 'balanced', 'full-access'];
 export const ANTIGRAVITY_DEFAULT: ProviderModel = { id: 'default', name: 'Antigravity default', reasoningEfforts: [{ id: 'none', label: 'Native default' }], defaultReasoningEffort: 'none', policies: ANTIGRAVITY_POLICIES };
@@ -70,12 +72,43 @@ export interface AntigravityRuntime { child: ChildLike; conn: AcpConnection; std
 export async function startAntigravity(path: string, companion: string, options: {
   env?: NodeJS.ProcessEnv; spawn?: AntigravitySpawn; timeoutMs?: number; cwd?: string; signal?: AbortSignal; secrets?: readonly (string | undefined)[]; keepLockOnUnresponsive?: boolean;
   notification?: (method: string, params: unknown) => void; request?: (method: string, params: unknown) => Promise<unknown>;
+  onAuthorizationUrl?: (url: string) => void;
 } = {}): Promise<AntigravityRuntime> {
   if (options.signal?.aborted) throw abortError();
   const env = options.env ?? process.env;
-  const child = (options.spawn ?? spawnDefault)(path, process.platform === 'linux' ? ['--uid='] : [], { cwd: options.cwd ?? process.cwd(), env: antigravityChildEnv(env, companion), stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsHide: true });
+  const childEnv = antigravityChildEnv(env, companion);
+  if (options.onAuthorizationUrl) childEnv.BROWSER = delegatedBrowserCommand();
+  const child = (options.spawn ?? spawnDefault)(path, process.platform === 'linux' ? ['--uid='] : [], { cwd: options.cwd ?? process.cwd(), env: childEnv, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsHide: true });
   const stderr = new TextTail(20_000);
-  child.stderr?.on('data', (chunk: string | Buffer) => stderr.push(chunk.toString()));
+  const decoder = new StringDecoder('utf8');
+  let pendingLine = ''; let discardingLine = false;
+  const consumeLine = (line: string) => {
+    const prefix = 'Open the following link to authenticate the ACP server: ';
+    const marker = line.indexOf(prefix);
+    if (marker !== -1) {
+      const url = googleAuthorizationUrl(line.slice(marker + prefix.length).trim());
+      stderr.push('Google browser authentication requested.\n');
+      if (url && !options.signal?.aborted) options.onAuthorizationUrl?.(url);
+    } else stderr.push(`${safeAntigravityText(line, options.secrets)}\n`);
+  };
+  child.stderr?.on('data', (chunk: string | Buffer) => {
+    const text = typeof chunk === 'string' ? chunk : decoder.write(chunk);
+    for (const part of text.match(/[^\n]*\n|[^\n]+$/g) ?? []) {
+      const complete = part.endsWith('\n');
+      if (!discardingLine && pendingLine.length + part.length <= 16_384) pendingLine += part;
+      else { pendingLine = ''; discardingLine = true; }
+      if (complete) {
+        if (discardingLine) stderr.push('[oversized native diagnostic omitted]\n');
+        else consumeLine(pendingLine.trimEnd());
+        pendingLine = ''; discardingLine = false;
+      }
+    }
+  });
+  child.stderr?.on('end', () => {
+    pendingLine += decoder.end();
+    if (!discardingLine && pendingLine) consumeLine(pendingLine.trimEnd());
+    pendingLine = '';
+  });
   const conn = new AcpConnection(child, {
     notification: (method, params) => options.notification?.(method, params),
     request: async (method, params) => { if (options.request) return options.request(method, params); throw new AcpRpcError(ACP_METHOD_NOT_FOUND, `Relay does not provide ACP client request ${method}.`); },
