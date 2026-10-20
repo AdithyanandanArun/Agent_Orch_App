@@ -29,6 +29,8 @@ import { RepositoryService } from './repository/service.ts';
 import { BrowserMcpBridge } from './browser-mcp.ts';
 import { GroupService } from './groups/service.ts';
 import { TeamMcpBridge } from './team-mcp.ts';
+import { closeAntigravityInstall } from './antigravity-install.ts';
+import { closeAntigravityAuth } from './antigravity-auth.ts';
 
 export interface ApplicationOptions extends ConfigOptions {
   /** Provider adapters and detection. Inject a fake in tests; the CLI entry passes ./providers/index.ts. */
@@ -155,6 +157,7 @@ export function createApplication(options: ApplicationOptions): RelayApplication
 
   const handle = async (req: IncomingMessage, res: ServerResponse) => {
     try {
+      if (closing) return send(res, 503, { error: 'Relay is shutting down.' });
       const verdict = security.checkHttp(req);
       if (!verdict.ok) return send(res, 403, { error: verdict.reason ?? 'Forbidden' });
       const url = new URL(req.url ?? '/', 'http://relay.local');
@@ -223,6 +226,7 @@ export function createApplication(options: ApplicationOptions): RelayApplication
     close() {
       closing ??= (async () => {
         if (pendingNotify) clearTimeout(pendingNotify);
+        await Promise.all([closeAntigravityInstall(config.dataDir), closeAntigravityAuth(config.dataDir)]);
         groups.close();
         await runtime.shutdown();
         teamMcp.close();

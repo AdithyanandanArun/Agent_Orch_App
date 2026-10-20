@@ -26,6 +26,7 @@ import type { RepositoryService } from './repository/service.ts';
 import type { GroupService } from './groups/service.ts';
 import type { BrowserService } from './browser/service.ts';
 import { antigravityInstallState, startAntigravityInstall } from './antigravity-install.ts';
+import { antigravityAuthState, cancelAntigravityAuth, startAntigravityAuth } from './antigravity-auth.ts';
 
 export interface Services {
   config: ServerConfig; store: Store; hub: Hub; workspace: WorkspaceService; runtime: SessionRuntime; tasks: TaskService; handoffs: HandoffService;
@@ -358,16 +359,31 @@ export function buildRouter(s: Services) {
       s.store.recordEvent({ type: 'settings.updated', summary: 'Settings updated', payload: { fields: Object.keys(patch) } });
       return updated;
     });
+    if (before.antigravityExecutable !== next.antigravityExecutable) cancelAntigravityAuth(s.config.dataDir);
     if (before.claudeExecutable !== next.claudeExecutable || before.codexExecutable !== next.codexExecutable || before.antigravityExecutable !== next.antigravityExecutable) s.providers.invalidate();
     return next;
   });
   add('GET', '/api/providers', () => s.providers.list());
+  add('GET', '/api/providers/antigravity/auth', () => antigravityAuthState(s.config.dataDir, s.store.getSettings()));
+  add('POST', '/api/providers/antigravity/auth', async (ctx) => {
+    await ctx.body(z.object({}).strict());
+    return startAntigravityAuth(s.config.dataDir, s.store.getSettings(), () => {
+      s.providers.invalidate();
+      touch();
+    });
+  });
+  add('DELETE', '/api/providers/antigravity/auth', () => cancelAntigravityAuth(s.config.dataDir));
   add('GET', '/api/providers/antigravity/install', () => antigravityInstallState(s.config.dataDir));
   add('POST', '/api/providers/antigravity/install', async (ctx) => {
     await ctx.body(z.object({}).strict());
+    const previousExecutable = s.store.getSettings().antigravityExecutable;
     return startAntigravityInstall(s.config.dataDir, (executable) => {
       s.store.tx(() => {
-        s.store.updateSettings({ antigravityExecutable: executable });
+        // A long download must not overwrite a path the user selected in the meantime.
+        if (s.store.getSettings().antigravityExecutable === previousExecutable) {
+          if (previousExecutable !== executable) cancelAntigravityAuth(s.config.dataDir);
+          s.store.updateSettings({ antigravityExecutable: executable });
+        }
         s.store.recordEvent({ type: 'provider.installed', summary: 'Antigravity runtime installed', payload: { provider: 'antigravity', version: '1.4.1' } });
       });
       s.providers.invalidate();
