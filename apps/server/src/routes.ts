@@ -367,12 +367,12 @@ export function buildRouter(s: Services) {
   add('GET', '/api/providers', () => s.providers.list());
   add('GET', '/api/providers/antigravity/auth', () => antigravityAuthState(s.config.dataDir, s.store.getSettings()));
   add('POST', '/api/providers/antigravity/auth', async (ctx) => {
-    await ctx.body(z.object({}).strict());
+    const body = await ctx.body(z.object({ refresh: z.boolean().optional() }).strict());
     if (s.setupSignal.aborted) throw new HttpError(503, 'Relay is shutting down.');
     return startAntigravityAuth(s.config.dataDir, s.store.getSettings(), () => {
       s.providers.invalidate();
       touch();
-    });
+    }, { refresh: body.refresh });
   });
   add('DELETE', '/api/providers/antigravity/auth', () => cancelAntigravityAuth(s.config.dataDir));
   add('GET', '/api/providers/antigravity/install', () => antigravityInstallState(s.config.dataDir));
