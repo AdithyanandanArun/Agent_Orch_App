@@ -4,6 +4,7 @@ import { useRelay } from '../store/store';
 import { api, errorMessage } from '../lib/api';
 import { cx, fuzzy } from '../lib/format';
 import { Kbd, Modal, MOD, ProviderMark } from './ui';
+import { groupChildSessionIds } from '../lib/groups';
 
 interface Cmd { id: string; label: string; group: string; icon: ReactNode; hint?: string; keywords?: string; run: () => void; disabled?: string }
 
@@ -44,7 +45,9 @@ export function Palette() {
         },
       );
     }
+    const groupChildren = groupChildSessionIds(s.boot?.groups);
     for (const x of s.boot?.sessions ?? []) {
+      if (groupChildren.has(x.id)) continue;
       list.push({ id: `s-${x.id}`, group: 'Sessions', label: x.name, hint: x.model, icon: <ProviderMark provider={x.provider} size={16} />, keywords: `${x.provider} ${x.status} session`, run: go(() => st.selectSession(x.id)) });
     }
     for (const p of s.boot?.projects ?? []) {

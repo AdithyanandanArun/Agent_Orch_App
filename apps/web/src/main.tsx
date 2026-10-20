@@ -17,6 +17,7 @@ import './styles/project-picker.css';
 import './styles/browser.css';
 import './styles/git.css';
 import './styles/automation.css';
+import './styles/groups.css';
 import { App } from './App';
 import { Boundary } from './components/ui';
 

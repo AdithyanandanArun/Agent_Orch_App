@@ -7,6 +7,7 @@ import { errorMessage } from '../lib/api';
 import { ContextMenu, type ContextMenuEntry } from './ContextMenu';
 import { cx, relativeTime, useNow } from '../lib/format';
 import { IconButton, Menu, MenuItem, MenuLabel, MenuSeparator, StatusDot } from './ui';
+import { activeMembers, findGroupForSession, groupChildSessionIds, groupSessionStatus } from '../lib/groups';
 
 const VIEWS: { view: View; label: string; icon: typeof Kanban }[] = [
   { view: 'tasks', label: 'Tasks', icon: Kanban }, { view: 'activity', label: 'Activity', icon: Activity }, { view: 'map', label: 'Agent map', icon: Network },
@@ -30,7 +31,15 @@ export function Sidebar() {
   const [menu, setMenu] = useState<{ sessionId: string; x: number; y: number; returnFocus: HTMLElement } | null>(null);
   const [organizing, setOrganizing] = useState<Set<string>>(() => new Set());
   const now = useNow();
-  const sessions = (boot?.sessions ?? []).filter((session) => session.projectId === project?.id);
+  const childSessions = groupChildSessionIds(boot?.groups);
+  const sessions = (boot?.sessions ?? []).filter((session) => session.projectId === project?.id && !childSessions.has(session.id)).map((session) => {
+    const group = findGroupForSession(boot?.groups, session.id);
+    if (!group || group.group.anchorSessionId !== session.id) return session;
+    const members = activeMembers(group);
+    const memberSessions = members.map((member) => boot?.sessions.find((item) => item.id === member.sessionId)).filter((item): item is Session => Boolean(item));
+    const updatedAt = memberSessions.reduce((latest, item) => item.updatedAt > latest ? item.updatedAt : latest, session.updatedAt);
+    return { ...session, status: groupSessionStatus(group, boot?.sessions ?? []), unread: memberSessions.some((item) => item.unread), updatedAt };
+  });
   const connectionLabel = connection === 'online' ? 'Connected' : connection === 'connecting' ? 'Connecting' : 'Disconnected';
 
   const target = sessions.find((session) => session.id === menu?.sessionId);
@@ -40,7 +49,9 @@ export function Sidebar() {
     const focused = document.activeElement;
     const preserveFocus = focused instanceof HTMLElement && focused.closest('.sitem-row')?.getAttribute('data-session-id') === session.id;
     try {
-      await useRelay.getState().organizeSession(session.id, changes);
+      const group = changes.unread === false ? findGroupForSession(boot?.groups, session.id) : undefined;
+      const affected = group ? activeMembers(group).map((member) => boot?.sessions.find((item) => item.id === member.sessionId)).filter((item): item is Session => Boolean(item && item.unread)) : [session];
+      await Promise.all(affected.map((item) => useRelay.getState().organizeSession(item.id, changes)));
       if (preserveFocus && (!document.activeElement || document.activeElement === document.body || document.activeElement === focused)) {
         requestAnimationFrame(() => {
           const row = Array.from(document.querySelectorAll<HTMLElement>('.sitem-row')).find((element) => element.dataset.sessionId === session.id);
@@ -68,8 +79,10 @@ export function Sidebar() {
       { id: 'copy-path', label: target.isolated ? 'Worktree path' : 'Project path', onSelect: () => void copy(target.worktreePath, 'Folder path') },
     ] },
     { id: 'project-settings', label: 'Project settings', onSelect: () => useRelay.getState().openSettings({ section: 'project', projectId: target.projectId }) },
-    { type: 'separator', id: 'archive-section' },
-    { id: 'archive', label: 'Archive session…', disabled: connection !== 'online' || target.status === 'running' || target.status === 'waiting', onSelect: () => openDialog({ kind: 'archive', sessionId: target.id }) },
+    ...(!findGroupForSession(boot?.groups, target.id) ? [
+      { type: 'separator' as const, id: 'archive-section' },
+      { id: 'archive', label: 'Archive session…', disabled: connection !== 'online' || target.status === 'running' || target.status === 'waiting', onSelect: () => openDialog({ kind: 'archive', sessionId: target.id }) },
+    ] : []),
   ] : [];
 
   return <aside className={cx('sidebar', sidebarOpen && 'is-open')} aria-label="Primary">

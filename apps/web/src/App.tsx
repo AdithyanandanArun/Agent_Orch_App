@@ -12,6 +12,8 @@ import { SettingsPage } from './components/Settings';
 import { Palette, ShortcutsDialog } from './components/Palette';
 import { Boundary, Spinner } from './components/ui';
 import { cx } from './lib/format';
+import { AddAgentDialog } from './components/group/AddAgentDialog';
+import { GroupModeDialog, MemberSettingsDialog } from './components/group/GroupDialogs';
 
 const AgentMap = lazy(() => import('./views/AgentMap'));
 
@@ -28,6 +30,9 @@ function Dialogs() {
     case 'archive': return <ArchiveDialog sessionId={dialog.sessionId} />;
     case 'import': return <ImportDialog />;
     case 'shortcuts': return <ShortcutsDialog />;
+    case 'add-agent': return <AddAgentDialog sessionId={dialog.sessionId} />;
+    case 'group-mode': return <GroupModeDialog groupId={dialog.groupId} />;
+    case 'member-settings': return <MemberSettingsDialog groupId={dialog.groupId} memberId={dialog.memberId} />;
   }
 }
 
