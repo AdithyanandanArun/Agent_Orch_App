@@ -52,6 +52,7 @@ export function AgentPresenceRail({
 }) {
   const panel = useRef<HTMLElement>(null);
   const head = useRef<HTMLElement>(null);
+  const list = useRef<HTMLUListElement>(null);
   const listId = useId();
   const preference = useRef<boolean | null>(null);
   const resizeFrame = useRef<number | null>(null);
@@ -128,8 +129,11 @@ export function AgentPresenceRail({
       resizeFrame.current = null;
       if (version !== resizeVersion.current || !panel.current) return;
       const currentCap = Number.parseFloat(window.getComputedStyle(element).maxHeight);
-      const currentLimit = Number.isFinite(currentCap) ? currentCap : element.scrollHeight + 2;
-      const target = next ? Math.min(element.scrollHeight + 2, currentLimit) : collapsedHeight;
+      const currentLimit = Number.isFinite(currentCap) ? currentCap : Number.POSITIVE_INFINITY;
+      // The flex list shrinks inside the frozen outer height. Measure its own
+      // scroll content, rather than the already clipped outer card.
+      const naturalHeight = (head.current?.offsetHeight ?? 34) + (list.current?.scrollHeight ?? 0) + 2;
+      const target = next ? Math.min(naturalHeight, currentLimit) : collapsedHeight;
       element.style.height = `${target}px`;
     });
   };
@@ -151,7 +155,7 @@ export function AgentPresenceRail({
           <span aria-hidden="true">{expanded ? '−' : '+'}</span>
         </button>
       </header>
-      <ul className="agent-presence__list" id={listId} aria-hidden={!expanded} inert={!expanded}>
+      <ul ref={list} className="agent-presence__list" id={listId} aria-hidden={!expanded} inert={!expanded}>
         {members.map((member) => (
           <PresenceRow key={member.id} snapshot={snapshot} member={member} session={sessions.find((item) => item.id === member.sessionId)} runs={runs} approvals={approvals} connection={connection} providers={providers} />
         ))}

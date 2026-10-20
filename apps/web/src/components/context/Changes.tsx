@@ -99,7 +99,7 @@ export function Changes({ active }: { active: boolean }) {
               {filter ? <button type="button" className="link-btn small" onClick={() => setFilter(null)}>Show all</button> : null}
             </div>
             {git.files.length === 0 ? (
-              <EmptyState title="No changes yet">Edits from the session or the editor will show up here as a read-only diff. Mingle has no push or merge actions in this version.</EmptyState>
+              <EmptyState title="No changes yet">Edits from the session or the editor will appear here. Use the Git controls below the composer to commit or push changes.</EmptyState>
             ) : (
               <ul className="flist">
                 {git.files.map((f) => (

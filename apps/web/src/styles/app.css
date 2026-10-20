@@ -97,7 +97,7 @@
 .workspace__main { flex: 1; min-height: 0; position: relative; }
 .workspace__pane { position: absolute; inset: 0; display: flex; flex-direction: column; min-height: 0; }
 .workspace__pane[hidden] { display: none; }
-.workspace__term { flex: none; position: relative; border-top: 1px solid var(--line); background: var(--bg-inset); min-height: 140px; display: flex; flex-direction: column; animation: fade-up var(--motion-ui) var(--ease-out) both; transition: height var(--motion-overlay) var(--ease-out), border-color var(--motion-overlay) var(--ease-out); }
+.workspace__term { flex: none; position: relative; border-top: 1px solid var(--line); background: var(--bg-inset); min-height: 140px; display: flex; flex-direction: column; animation: fade-up var(--motion-ui) var(--ease-out) both; transition: height var(--motion-overlay) var(--ease-out), min-height var(--motion-overlay) var(--ease-out), border-color var(--motion-overlay) var(--ease-out); }
 .workspace__term.is-closing { min-height: 0; overflow: hidden; border-top-color: transparent; pointer-events: none; animation: none; }
 .resizer { position: absolute; left: 0; right: 0; top: -3px; height: 6px; cursor: row-resize; z-index: 5; }
 .resizer:hover, .resizer:focus-visible { background: var(--accent-line); outline: none; }
@@ -498,3 +498,8 @@ a.ibtn.is-disabled { opacity: 0.4; pointer-events: none; }
 .settings__advanced[open] > :not(summary) { margin-top: 14px; }
 .settings .sec__head h3 { text-transform: none; letter-spacing: 0; font-size: var(--text-sm); color: var(--fg-1); }
 .banner--example strong { font-weight: 550; color: var(--fg-1); }
+
+@starting-style {
+  .diff__body-frame { grid-template-rows: 0fr; }
+  .workspace__term { height: 0 !important; min-height: 0; }
+}

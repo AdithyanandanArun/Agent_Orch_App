@@ -153,10 +153,11 @@ function Dialog({ session, onClose, open, closing }: { session: Session; onClose
     if (!open) return;
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     closeRef.current?.focus();
     const keyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') { event.preventDefault(); onCloseRef.current(); return; }
@@ -171,6 +172,7 @@ function Dialog({ session, onClose, open, closing }: { session: Session; onClose
     document.addEventListener('keydown', keyDown);
     return () => {
       document.removeEventListener('keydown', keyDown);
+      if (opener?.isConnected) opener.focus({ preventScroll: true });
     };
   }, [open]);
 
