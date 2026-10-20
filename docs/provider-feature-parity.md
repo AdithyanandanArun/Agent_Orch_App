@@ -35,13 +35,13 @@ OpenCode's native ACP server (`opencode acp`) is the fourth independent provider
 
 The usage dialog separates Relay conversation token/cost totals from account-wide quota windows shared with other apps. It shows percentages remaining and native reset timestamps in the local timezone, with a live countdown. Unknown values and replenishment schedules stay explicitly unreported. Manual refresh is rate limited and concurrent reads are coalesced; no reset redemption is exposed. See [Codex usage mapping](codex-usage-research.md) and [Claude usage mapping](claude-usage-research.md).
 
-The picker supports caret-aware completion, arrow navigation, Enter/Tab selection and Escape dismissal. Deleting a skill marker removes its binding. Manually typed or restored markers resolve against enabled skills; duplicate names require an explicit picker selection. Unsupported model settings fail clearly. Saved inherited settings can adapt when selecting a different model.
+The picker supports caret-aware completion, arrow navigation, Enter/Tab selection and Escape dismissal. In a group composer, address provider actions to one member with `@handle /command arguments` or `@handle $skill arguments`; selection is checked against that member's fresh catalog again at dispatch. Actions stay on the addressed agent and use its saved settings. Codex accepts explicit native skills but does not expose prompt-style slash commands; Antigravity does not offer a Relay-selected skill catalog. Deleting a skill marker removes its binding. Unsupported model settings fail clearly. Saved inherited settings can adapt when selecting a different model.
 
 ## Remaining coverage
 
 Personal Claude settings/skills are not imported. Its SDK couples the user settings source to permission rules and other configuration; Relay currently keeps its project source and disabled hooks. Discovery notices explain this boundary. Fast mode and automatic review remain subject to provider/account policy and availability.
 
-Attachments, file mentions, a dedicated planning interface, interactive provider questions, advanced context inspection, general MCP/plugin management, and additional native command actions need their own client implementations. They are not covered by this release. The existing file editor, terminal, Changes, tasks and activity views remain available.
+File mentions, a dedicated planning interface, interactive provider questions, advanced context inspection, general MCP/plugin management, and additional native command actions need their own client implementations. Attachments and targeted provider actions are covered in [chat attachments and native actions](chat-attachments-and-native-actions.md), including their provider limits. The existing file editor, terminal, Changes, tasks and activity views remain available.
 
 The shared browser and automatic compaction setting are covered in [browser setup and limits](shared-browser.md). General MCP server/plugin management remains separate from Relay’s built-in browser connection.
 
