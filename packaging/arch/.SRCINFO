@@ -39,6 +39,6 @@ pkgbase = mingle-bin
 	options = !strip
 	options = !debug
 	source = mingle-0.1.0-linux-x64.tar.gz::https://github.com/AdithyanandanArun/Agent_Orch_App/releases/download/v0.1.0/mingle-0.1.0-linux-x64.tar.gz
-	sha256sums = 551986c31b0ccdd72c1af903630ca78547040ab6f5cd25da530c3070e44b3ebb
+	sha256sums = f0e8c67aeef3cb322cf7df7f950a21ee34ee42a687cd96b9378f9e01b7f497fb
 
 pkgname = mingle-bin
