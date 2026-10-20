@@ -17,7 +17,9 @@ export function AntigravityRuntimeSetup({ providerInfo, onProviderChanged }: { p
   const installRequestPending = useRef(false);
   const authRequestId = useRef(0);
   const authRequestPending = useRef(false);
+  const authActionPending = useRef(false);
   const completionPending = useRef(false);
+  const completionRequested = useRef(false);
   const authCompletionHandled = useRef(false);
   const installCompletionHandled = useRef(false);
   const authStateRef = useRef<AntigravityAuthState['state']>('idle');
@@ -41,11 +43,14 @@ export function AntigravityRuntimeSetup({ providerInfo, onProviderChanged }: { p
   }, []);
 
   const completeProviderChange = useCallback(async () => {
-    if (completionPending.current) return;
+    if (completionPending.current) { completionRequested.current = true; return; }
     completionPending.current = true;
     try {
-      await api.refreshProviders();
-      await onProviderChanged();
+      do {
+        completionRequested.current = false;
+        await api.refreshProviders();
+        await onProviderChanged();
+      } while (completionRequested.current);
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -65,7 +70,7 @@ export function AntigravityRuntimeSetup({ providerInfo, onProviderChanged }: { p
   }, [completeProviderChange]);
 
   const loadAuth = useCallback(async (signal?: AbortSignal, force = false) => {
-    if (!force && authRequestPending.current) return;
+    if (authActionPending.current || !force && authRequestPending.current) return;
     const requestId = ++authRequestId.current;
     authRequestPending.current = true;
     try {
@@ -119,7 +124,7 @@ export function AntigravityRuntimeSetup({ providerInfo, onProviderChanged }: { p
   }, [auth.state, loadAuth]);
 
   const startInstall = async () => {
-    if (!install?.supported || installBusy || authBusy) return;
+    if (!install?.supported || installBusy || authBusy || install.state === 'installing' || auth.state === 'authenticating') return;
     setInstallBusy(true);
     setError(null);
     installCompletionHandled.current = false;
@@ -138,7 +143,8 @@ export function AntigravityRuntimeSetup({ providerInfo, onProviderChanged }: { p
   };
 
   const startSignIn = async () => {
-    if (authBusy || installBusy) return;
+    if (authBusy || installBusy || install?.state === 'installing') return;
+    authActionPending.current = true;
     authRequestId.current++;
     authRequestPending.current = false;
     setAuthBusy(true);
@@ -152,12 +158,14 @@ export function AntigravityRuntimeSetup({ providerInfo, onProviderChanged }: { p
       setError(message);
       applyAuthState({ state: 'error', error: message }, false);
     } finally {
+      authActionPending.current = false;
       setAuthBusy(false);
     }
   };
 
   const cancelSignIn = async () => {
     if (authBusy) return;
+    authActionPending.current = true;
     authRequestId.current++;
     authRequestPending.current = false;
     setAuthBusy(true);
@@ -167,6 +175,7 @@ export function AntigravityRuntimeSetup({ providerInfo, onProviderChanged }: { p
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
+      authActionPending.current = false;
       setAuthBusy(false);
     }
   };
@@ -176,7 +185,9 @@ export function AntigravityRuntimeSetup({ providerInfo, onProviderChanged }: { p
       : install?.state === 'installed' ? 'Installed'
         : install?.state === 'error' ? 'Installation failed' : 'Checking runtime';
   const canSignIn = Boolean(providerInfo?.executable || install?.state === 'installed');
-  const blocked = installBusy || authBusy || auth.state === 'authenticating';
+  const blocked = installBusy || authBusy || install?.state === 'installing' || auth.state === 'authenticating';
+  const shownAuthError = canSignIn && auth.state === 'error' ? auth.error : null;
+  const shownInstallError = install?.error ?? null;
 
   return <section className="agy-runtime" aria-labelledby="agy-runtime-title">
     <div className="agy-runtime__head"><div><h3 id="agy-runtime-title">Antigravity runtime</h3><p>Install the managed ACP runtime used by Relay.</p></div>
@@ -186,19 +197,19 @@ export function AntigravityRuntimeSetup({ providerInfo, onProviderChanged }: { p
     {install ? <>
       <p className="agy-runtime__meta"><strong>{stateLabel}</strong>{install.version ? ` · ${install.version}` : ''}</p>
       {install.executable ? <code className="agy-runtime__path">{install.executable}</code> : null}
-      {install.state === 'error' && install.error ? <p className="agy-runtime__error" role="alert">{install.error}</p> : null}
+      {install.error ? <p className="agy-runtime__error" role="alert">{install.error}</p> : null}
       {!install.supported ? <p className="agy-runtime__meta">Managed installation is not supported on this platform.</p> : null}
-      {install.state === 'not-installed' || install.state === 'error' ? <Button size="sm" busy={installBusy} disabled={!install.supported || blocked} onClick={() => void startInstall()}>{install.state === 'error' ? 'Retry installation' : 'Install Antigravity runtime'}</Button> : null}
+      {install.state === 'not-installed' || install.state === 'error' || install.error ? <Button size="sm" busy={installBusy} disabled={!install.supported || blocked} onClick={() => void startInstall()}>{install.state === 'installed' ? 'Retry setup' : install.state === 'error' ? 'Retry installation' : 'Install Antigravity runtime'}</Button> : null}
       {install.state === 'installing' ? <p className="agy-runtime__meta" role="status">Installing locally. This may take a few minutes.</p> : null}
     </> : null}
     {canSignIn ? <div className="agy-runtime__auth">
-      {auth.state === 'authenticated' ? <p className="agy-runtime__meta" role="status">Google sign-in completed. Relay uses the models and capabilities reported by Antigravity.</p>
+      {auth.state === 'authenticated' ? <><p className="agy-runtime__meta" role="status">Google sign-in completed. Relay uses the models and capabilities reported by Antigravity.</p><Button size="sm" disabled={blocked} busy={authBusy} onClick={() => void startSignIn()}>Reconnect Google</Button></>
         : auth.state === 'authenticating' ? <><p className="agy-runtime__meta" role="status">Continue in your browser to sign in with Google.</p><Button size="sm" disabled={installBusy || authBusy} busy={authBusy} onClick={() => void cancelSignIn()}>Cancel sign-in</Button></>
           : <Button size="sm" disabled={blocked} busy={authBusy} onClick={() => void startSignIn()}>Sign in with Google</Button>}
       {auth.state === 'error' && auth.error ? <p className="agy-runtime__error" role="alert">{auth.error}</p> : null}
       {auth.state === 'idle' ? <p className="agy-runtime__meta">No active sign-in flow is reported. Antigravity may still have a cached account.</p> : null}
     </div> : null}
-    {error ? <InlineError onRetry={install?.state === 'installing' || auth.state === 'authenticating' ? undefined : () => { setLoading(true); void loadInstall(); void loadAuth(); }}>{error}</InlineError> : null}
+    {error && error !== shownAuthError && error !== shownInstallError ? <InlineError onRetry={install?.state === 'installing' || auth.state === 'authenticating' ? undefined : () => { setLoading(true); void loadInstall(); void loadAuth(); }}>{error}</InlineError> : null}
     {install?.state === 'installed' ? <p className="agy-runtime__meta">Runtime installation is separate from authentication.</p> : null}
   </section>;
 }
