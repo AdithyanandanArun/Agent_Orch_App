@@ -12,7 +12,7 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString
 /** Human-readable diff between two contexts for the Activity feed; payload carries bounded details. */
 export function describeContextChange(previous: ProjectContext | undefined, next: ProjectContext): { summary: string; payload: Record<string, unknown> } {
   const payload: Record<string, unknown> = { head: next.head, branch: next.branch, fileCount: next.fileCount, components: next.components.length };
-  if (!previous || previous.status === 'error' && !previous.scannedAt) {
+  if (!previous || (previous.status === 'error' && !previous.scannedAt)) {
     return { summary: `Project indexed: ${plural(next.fileCount, 'file')}, ${plural(next.components.length, 'component')}${next.isRepo ? '' : ' (not a Git repository)'}`, payload };
   }
   const parts: string[] = [];

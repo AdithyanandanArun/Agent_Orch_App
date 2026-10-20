@@ -60,7 +60,8 @@ export function syncRepositoryTasks(store: Store, ops: TaskOps, projectId: strin
   for (const task of existing) {
     const source = task.source!;
     if (seen.has(source.key) || source.missing) continue;
-    const gone = Boolean(source.path) && (scan.covered.has(source.path!) || (scan.fileSet !== null && !scan.fileSet.has(source.path!)));
+    const scope = source.key.startsWith('repo:checklist:') ? scan.complete.checklist : source.key.startsWith('repo:comment:') ? scan.complete.comments : false;
+    const gone = scope && Boolean(source.path) && (scan.covered.has(source.path!) || (scan.fileSet !== null && !scan.fileSet.has(source.path!)));
     if (!gone) continue;
     ops.patchSource(task, { missing: true });
     // Never invent completion: unstarted work goes to review so a person decides whether it was done, dropped or moved.

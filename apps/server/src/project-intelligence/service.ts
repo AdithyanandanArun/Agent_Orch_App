@@ -314,7 +314,7 @@ export class ProjectIntelligenceService {
       if (explicitTaskId) {
         const explicit = this.store.getTask(explicitTaskId);
         if (explicit && explicit.projectId === session.projectId) {
-          this.runParents.set(runId, { taskId: explicit.id, explicit: true });
+          this.rememberRun(runId, { taskId: explicit.id, explicit: true });
           return explicit.id;
         }
       }
@@ -345,6 +345,11 @@ export class ProjectIntelligenceService {
     }
   }
 
+  private rememberRun(runId: string, parent: { taskId: string; explicit: boolean }): void {
+    if (this.runParents.size >= 500) this.runParents.delete(this.runParents.keys().next().value!);
+    this.runParents.set(runId, parent);
+  }
+
   private latestUnresolvedRequest(session: Session): Task | null {
     const candidates = this.ops.sourced(session.projectId, 'request').filter((task) => task.sessionId === session.id && task.status !== 'done' && !task.source?.missing);
     return candidates.reduce<Task | null>((best, task) => (!best || task.updatedAt >= best.updatedAt ? task : best), null);
@@ -356,7 +361,7 @@ export class ProjectIntelligenceService {
       sessionId: session.id, dependsOn: [], status: 'running',
     });
     this.store.setTaskSource(created.id, { kind: 'request', key, runId, reportedStatus: 'in_progress' });
-    this.runParents.set(runId, { taskId: created.id, explicit: false });
+    this.rememberRun(runId, { taskId: created.id, explicit: false });
     this.emit(session.projectId, session.id, 'task.auto.created', `Request tracked: ${created.title}`, { taskId: created.id, runId, kind: 'request' });
     return created.id;
   }
@@ -364,7 +369,7 @@ export class ProjectIntelligenceService {
   private resumeRequestTask(task: Task, session: Session, runId: string): string {
     this.ops.patchSource(task, { runId, reportedStatus: 'in_progress', missing: false });
     const moved = this.ops.setStatus(task, 'running');
-    this.runParents.set(runId, { taskId: task.id, explicit: false });
+    this.rememberRun(runId, { taskId: task.id, explicit: false });
     if (moved) this.emit(session.projectId, session.id, 'task.auto.running', `Request resumed: ${task.title}`, { taskId: task.id, runId });
     return task.id;
   }
@@ -407,7 +412,8 @@ export class ProjectIntelligenceService {
           if (task.id === parent?.taskId && parent.explicit) continue;
           if (task.source!.kind === 'request') this.ops.patchSource(task, { reportedStatus: outcome === 'completed' ? 'completed' : 'pending' });
           if (task.status !== 'running') continue;
-          const next = this.ops.setStatus(task, task.source!.kind === 'request' && outcome === 'completed' ? 'review' : 'ready', { blockedFallback: true });
+          // A step still in progress when a turn succeeds needs a person's look (review); after a failure or interruption it is pending again.
+          const next = this.ops.setStatus(task, outcome === 'completed' ? 'review' : 'ready', { blockedFallback: true });
           if (next) changed.push(next);
         }
         return changed;

@@ -72,6 +72,52 @@ export function extractChecklist(text: string): ChecklistItem[] {
 }
 
 const NEWLINE = '\n';
+const countLines = (text: string) => text.split(NEWLINE).length - 1;
+
+/**
+ * HTML comments only where they are certainly markup: not inside tag attributes, nor in script, style or textarea
+ * bodies where `<!--` can be string data. Template syntaxes with embedded expressions are not mined at all.
+ */
+function htmlCommentMarkers(text: string, emit: (raw: string, line: number, strip: RegExp) => void): void {
+  const n = text.length;
+  let i = 0;
+  let line = 1;
+  while (i < n) {
+    const ch = text[i]!;
+    if (ch === NEWLINE) { line++; i++; continue; }
+    if (text.startsWith('<!--', i)) {
+      const close = text.indexOf('-->', i + 4);
+      const end = close < 0 ? n : close;
+      const body = text.slice(i + 4, end);
+      body.split(NEWLINE).forEach((part, offset) => emit(part, line + offset, /^[\s*]+/));
+      line += countLines(body);
+      i = close < 0 ? n : end + 3;
+      continue;
+    }
+    if (ch === '<' && /[A-Za-z]/.test(text[i + 1] ?? '')) {
+      const name = /^<([A-Za-z][\w:-]*)/.exec(text.slice(i, i + 64))![1]!.toLowerCase();
+      let j = i + 1;
+      let quote: string | null = null;
+      for (; j < n; j++) {
+        const c = text[j]!;
+        if (c === NEWLINE) line++;
+        if (quote) { if (c === quote) quote = null; } else if (c === '"' || c === "'") quote = c; else if (c === '>') break;
+      }
+      const selfClosing = text[j - 1] === '/';
+      i = j + 1;
+      if (!selfClosing && (name === 'script' || name === 'style' || name === 'textarea')) {
+        const closer = new RegExp(`</${name}\\b`, 'ig');
+        closer.lastIndex = i;
+        const found = closer.exec(text);
+        const stop = found ? found.index : n;
+        line += countLines(text.slice(i, stop));
+        i = stop;
+      }
+      continue;
+    }
+    i++;
+  }
+}
 
 /**
  * Marker comments (TODO/FIXME/HACK/XXX written in upper case at the start of a comment). The lexer tracks string and
@@ -87,36 +133,41 @@ export function extractCommentMarkers(text: string, style: CommentStyle): Commen
     if (body.length < 3) return;
     found.push({ marker: match[1]!, text: cleanInline(body), line });
   };
+  if (style === 'html') { htmlCommentMarkers(text, emit); return found; }
   const n = text.length;
   let i = 0;
   let line = 1;
+  // A lone "/" earlier on the line may open a regular expression or be a division; a later "//" is then not trusted as a comment.
+  let slashOnLine = false;
   const lineStart = () => i === 0 || text[i - 1] === NEWLINE;
   const afterSpace = () => i === 0 || /\s/.test(text[i - 1]!);
   while (i < n) {
     const ch = text[i]!;
     const next = text[i + 1];
-    if (ch === NEWLINE) { line++; i++; continue; }
+    if (ch === NEWLINE) { line++; i++; slashOnLine = false; continue; }
     // line comments
     const lineComment = style === 'c' ? ch === '/' && next === '/' : style === 'sql' ? ch === '-' && next === '-' : style === 'hash' ? ch === '#' && afterSpace() && !(lineStart() && next === '!') : false;
     if (lineComment) {
       let end = text.indexOf(NEWLINE, i);
       if (end < 0) end = n;
+      // Conservative: an ambiguous "//" (after a lone slash, or in "scheme://") is skipped, so a marker may be missed but never invented.
+      if (style === 'c' && (slashOnLine || text[i - 1] === ':')) { i = end; continue; }
       emit(text.slice(i + (style === 'hash' ? 1 : 2), end), line, /^[\s/!#\-]+/);
       i = end;
       continue;
     }
     // block comments
-    const blockOpen = (style === 'c' || style === 'sql') && ch === '/' && next === '*' ? '*/' : style === 'html' && text.startsWith('<!--', i) ? '-->' : null;
+    const blockOpen = (style === 'c' || style === 'sql') && ch === '/' && next === '*' ? '*/' : null;
     if (blockOpen) {
       let end = text.indexOf(blockOpen, i + 2);
       if (end < 0) end = n;
-      const body = text.slice(i + (blockOpen === '-->' ? 4 : 2), end);
+      const body = text.slice(i + 2, end);
       body.split(NEWLINE).forEach((part, offset) => emit(part, line + offset, /^[\s*]+/));
       line += body.split(NEWLINE).length - 1;
       i = Math.min(n, end + blockOpen.length);
       continue;
     }
-    if (style !== 'html' && (ch === '"' || ch === "'" || ch === '`')) {
+    if ((ch === '"' || ch === "'" || ch === '`')) {
       const triple = style === 'hash' && ch !== '`' && text.startsWith(ch.repeat(3), i);
       const multiline = ch === '`' || triple;
       const closer = triple ? ch.repeat(3) : ch;
@@ -130,6 +181,7 @@ export function extractCommentMarkers(text: string, style: CommentStyle): Commen
       i = Math.max(j, i + 1);
       continue;
     }
+    if (ch === '/') slashOnLine = true;
     i++;
   }
   return found;
@@ -139,7 +191,7 @@ const EXT_STYLE: Record<string, CommentStyle> = {};
 for (const ext of ['js', 'jsx', 'mjs', 'cjs', 'ts', 'tsx', 'mts', 'cts', 'java', 'kt', 'kts', 'go', 'rs', 'c', 'h', 'cc', 'cpp', 'cxx', 'hpp', 'cs', 'swift', 'scala', 'dart', 'php', 'scss', 'less']) EXT_STYLE[ext] = 'c';
 for (const ext of ['py', 'rb', 'sh', 'bash', 'zsh', 'yaml', 'yml', 'toml', 'pl', 'r']) EXT_STYLE[ext] = 'hash';
 for (const ext of ['sql', 'lua']) EXT_STYLE[ext] = 'sql';
-for (const ext of ['html', 'htm', 'vue', 'svelte']) EXT_STYLE[ext] = 'html';
+for (const ext of ['html', 'htm']) EXT_STYLE[ext] = 'html';
 
 const GENERATED = /(?:\.min\.|\.d\.ts$|\.d\.mts$|\.d\.cts$|\.generated\.|\.gen\.|_pb2?\.|\.pb\.go$|\.test\.|\.spec\.|-lock\.|\.lock$)/i;
 

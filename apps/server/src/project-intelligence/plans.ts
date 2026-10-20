@@ -2,14 +2,23 @@ import type { ProviderTaskPlan, Session, Task, TaskStatus } from '@relay/contrac
 import { findCycle } from '../dag.ts';
 import type { Store } from '../store.ts';
 import { redactSecrets } from '../util.ts';
-import { textKey } from './extract.ts';
 import type { TaskOps } from './taskops.ts';
 
 export interface PlanSummary { created: Task[]; updated: Task[]; missing: Task[]; changed: boolean }
 
 type Step = ProviderTaskPlan['steps'][number];
 
-const planPrefix = (session: Session, planId: string) => `provider:${session.id}:${planId}:`;
+/**
+ * Source-key prefix of one plan. Native task lists (`claude-tasks…`) carry persistent provider task IDs, so their keys
+ * are scoped to the session only (`provider:<session>:<planId>:<nativeId>`, with source.providerId = the native ID).
+ * Every other plan (Codex plans, Claude todo lists) identifies steps by title, so the same title in an unrelated request
+ * must not reuse an old task: those keys are anchored to the parent request task, or to the run when there is none.
+ * Continuation runs of the same parent keep their identity.
+ */
+export function planPrefix(session: Session, planId: string, parentTaskId: string | undefined, runId: string): string {
+  if (planId.startsWith('claude-tasks')) return `provider:${session.id}:${planId}:`;
+  return `provider:${session.id}:${parentTaskId ? `parent:${parentTaskId}` : `run:${runId}`}:${planId}:`;
+}
 
 /** What Relay shows for a provider-reported step. Completed means "ready for a person to review", never done. */
 function desiredStatus(reported: Step['status'], runActive: boolean): TaskStatus {
@@ -27,7 +36,7 @@ function desiredStatus(reported: Step['status'], runActive: boolean): TaskStatus
 export function applyProviderPlan(store: Store, ops: TaskOps, session: Session, runId: string, plan: ProviderTaskPlan, parentTaskId: string | undefined): PlanSummary {
   const summary: PlanSummary = { created: [], updated: [], missing: [], changed: false };
   const projectId = session.projectId;
-  const prefix = planPrefix(session, plan.planId);
+  const prefix = planPrefix(session, plan.planId, parentTaskId, runId);
   const keyOf = (stepId: string) => `${prefix}${stepId}`;
   const runActive = store.getRun(runId)?.status === 'running';
   const steps: Step[] = [];
@@ -40,8 +49,6 @@ export function applyProviderPlan(store: Store, ops: TaskOps, session: Session, 
 
   const providerTasks = ops.sourced(projectId, 'provider');
   const byKey = new Map(providerTasks.map((task) => [task.source!.key, task]));
-  // A provider that re-sends the same plan under a fresh plan id within one run keeps its steps by title.
-  const byTitleInRun = new Map(providerTasks.filter((task) => task.source!.runId === runId && !task.source!.missing).map((task) => [textKey(task.title), task]));
   const taskByStep = new Map<string, Task>();
   const usedIds = new Set<string>();
 
@@ -50,10 +57,6 @@ export function applyProviderPlan(store: Store, ops: TaskOps, session: Session, 
     const title = redactSecrets(step.title).slice(0, 200);
     const description = step.description === undefined ? undefined : redactSecrets(step.description).slice(0, 4000);
     let task = byKey.get(keyOf(step.id));
-    if (!task) {
-      const sameTitle = byTitleInRun.get(textKey(title));
-      if (sameTitle && !usedIds.has(sameTitle.id) && !sameTitle.source!.key.startsWith(prefix)) task = sameTitle;
-    }
     if (!task) {
       const created = store.insertTask({ projectId, title, description: description ?? '', acceptanceCriteria: '', sessionId: session.id, dependsOn: [], status: 'backlog' });
       store.setTaskSource(created.id, { kind: 'provider', key: keyOf(step.id), runId, providerId: step.id, ...(parentTaskId ? { parentTaskId } : {}), reportedStatus: step.status });
@@ -87,7 +90,7 @@ export function applyProviderPlan(store: Store, ops: TaskOps, session: Session, 
       if (JSON.stringify(accepted) !== JSON.stringify(task.dependsOn)) {
         store.updateTask(task.id, { dependsOn: accepted });
         task = store.getTask(task.id)!;
-        if (!summary.created.includes(task) && !summary.updated.some((item) => item.id === task.id)) summary.updated.push(task);
+        if (!summary.created.some((item) => item.id === task.id) && !summary.updated.some((item) => item.id === task.id)) summary.updated.push(task);
       }
     }
     if (task.status !== 'done') {

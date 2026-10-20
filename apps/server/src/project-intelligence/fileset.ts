@@ -27,11 +27,11 @@ export const isExcludedPath = (rel: string): boolean => rel.split('/').some(isEx
 /** Example/test locations: scanned for languages and components, never mined for tasks. */
 export const isSamplePath = (rel: string): boolean => rel.split('/').slice(0, -1).some((part) => SAMPLE_DIRS.has(part.toLowerCase()));
 
-async function listWithGit(root: string): Promise<{ paths: string[]; deleted: Set<string> } | null> {
+async function listWithGit(root: string, budget: Budget): Promise<{ paths: string[]; deleted: Set<string> } | null> {
   try {
     const [listed, deleted] = await Promise.all([
-      git(root, ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', '.'], { timeoutMs: 15_000, maxBuffer: 48 * 1024 * 1024 }),
-      git(root, ['ls-files', '-z', '--deleted', '--', '.'], { timeoutMs: 15_000, maxBuffer: 16 * 1024 * 1024 }),
+      git(root, ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', '.'], { timeoutMs: budget.gitTimeout(15_000), maxBuffer: 48 * 1024 * 1024 }),
+      git(root, ['ls-files', '-z', '--deleted', '--', '.'], { timeoutMs: budget.gitTimeout(15_000), maxBuffer: 16 * 1024 * 1024 }),
     ]);
     const split = (out: string) => out.split('\0').filter(Boolean);
     return { paths: split(listed.stdout), deleted: new Set(split(deleted.stdout)) };
@@ -79,7 +79,7 @@ async function walk(root: string, budget: Budget): Promise<FileListing> {
 /** Enumerates eligible files. Git projects honour .gitignore; other folders skip dependency/build/secret directories and all symlinks. */
 export async function listFiles(root: string, info: RepoInfo, budget: Budget): Promise<FileListing> {
   if (info.isRepo) {
-    const listed = await listWithGit(root);
+    const listed = await listWithGit(root, budget);
     if (listed) {
       const seen = new Set<string>();
       const files: string[] = [];

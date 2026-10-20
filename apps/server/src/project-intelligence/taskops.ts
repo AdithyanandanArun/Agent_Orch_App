@@ -42,13 +42,14 @@ export class TaskOps {
   }
 
   /**
-   * Moves a task to `next` unless the user overrode its status. Ready/review/done require finished dependencies; with
+   * Moves a task to `next` unless the user overrode its status. Ready/running/review/done require finished dependencies; with
    * `blockedFallback` a task that cannot honestly be ready is shown blocked instead. Returns the updated task or null.
    */
   setStatus(task: Task, next: TaskStatus, options: { blockedFallback?: boolean } = {}): Task | null {
     if (this.hasOverride(task, 'status')) return null;
     let target = next;
-    if ((target === 'ready' || target === 'review' || target === 'done') && this.unfinished(task) > 0) {
+    // Nothing becomes ready, running, in review or done past unfinished prerequisites; observed provider state stays in source.reportedStatus.
+    if ((target === 'ready' || target === 'running' || target === 'review' || target === 'done') && this.unfinished(task) > 0) {
       if (!options.blockedFallback) return null;
       target = 'blocked';
     }

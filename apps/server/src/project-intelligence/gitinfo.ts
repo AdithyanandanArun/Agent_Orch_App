@@ -5,17 +5,18 @@ import { isDeniedName } from '../paths.ts';
 import { redactSecrets, errorMessage } from '../util.ts';
 import { cleanInline } from './extract.ts';
 import { isExcludedPath } from './fileset.ts';
+import type { Budget } from './limits.ts';
 import { LIMITS } from './limits.ts';
 
 export interface GitFacts { recentCommits: ProjectContext['recentCommits']; changedPaths: string[]; notices: string[] }
 
 /** Read-only recent history and actual working-tree changes, scoped to the project folder; argv-only Git, no hooks. */
-export async function readGitFacts(root: string, info: RepoInfo): Promise<GitFacts> {
+export async function readGitFacts(root: string, info: RepoInfo, budget: Budget): Promise<GitFacts> {
   const facts: GitFacts = { recentCommits: [], changedPaths: [], notices: [] };
   if (!info.isRepo) return facts;
   if (info.hasHead) {
     try {
-      const log = await git(root, ['log', `-n${LIMITS.maxCommits}`, '--no-color', '--format=%H%x1f%aI%x1f%s%x1e', '--', '.'], { timeoutMs: 10_000, extraConfig: ['log.showSignature=false'] });
+      const log = await git(root, ['log', `-n${LIMITS.maxCommits}`, '--no-color', '--format=%H%x1f%aI%x1f%s%x1e', '--', '.'], { timeoutMs: budget.gitTimeout(10_000), extraConfig: ['log.showSignature=false'] });
       for (const record of log.stdout.split('\x1e')) {
         const [sha, authoredAt, ...title] = record.trim().split('\x1f');
         if (sha && /^[0-9a-f]{40,64}$/.test(sha) && authoredAt) facts.recentCommits.push({ sha, authoredAt, title: cleanInline(redactSecrets(title.join(' ')), 200) });
@@ -27,9 +28,9 @@ export async function readGitFacts(root: string, info: RepoInfo): Promise<GitFac
   try {
     let status;
     try {
-      status = await git(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', '.'], { timeoutMs: 15_000, maxBuffer: 8 * 1024 * 1024 });
+      status = await git(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', '.'], { timeoutMs: budget.gitTimeout(15_000), maxBuffer: 8 * 1024 * 1024 });
     } catch {
-      status = await git(root, ['status', '--porcelain=v1', '-z', '--untracked-files=normal', '--', '.'], { timeoutMs: 15_000, maxBuffer: 8 * 1024 * 1024 });
+      status = await git(root, ['status', '--porcelain=v1', '-z', '--untracked-files=normal', '--', '.'], { timeoutMs: budget.gitTimeout(15_000), maxBuffer: 8 * 1024 * 1024 });
       facts.notices.push('Untracked directories are listed as a single path because the full untracked listing exceeded its limit.');
     }
     const prefix = info.prefix ? `${info.prefix}/` : '';

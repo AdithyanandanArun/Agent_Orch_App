@@ -19,6 +19,11 @@ export interface ScanResult {
   covered: Set<string>;
   /** Every eligible path, or null when the listing was incomplete (absence then proves nothing). */
   fileSet: Set<string> | null;
+  /**
+   * Whether the whole candidate set of each source kind was read. Items may only be flagged as vanished from a kind whose
+   * scan was complete: any cap, time-out, unreadable file or incomplete listing disables it for that kind.
+   */
+  complete: { checklist: boolean; comments: boolean };
 }
 
 const DOC = /^(?:readme|todo|roadmap|backlog|tasks)(?:\.(?:md|markdown|txt))?$/i;
@@ -39,7 +44,7 @@ export async function scanProject(projectPath: string, stop?: () => boolean, bud
   const listing = await listFiles(root, info, budget);
   const { files } = listing;
 
-  const notices = [`Static scan limits: ${fmt(LIMITS.maxFiles)} files, ${LIMITS.maxDocs} checklist documents, ${LIMITS.maxSourceFiles} source files (${LIMITS.maxSourceBytes / 1024} KiB each) and ${LIMITS.scanBudgetMs / 1000} s. Project scripts are never run and no model is called.`];
+  const notices = [`Static scan limits: ${fmt(LIMITS.maxFiles)} files, ${LIMITS.maxDocs} checklist documents, ${LIMITS.maxSourceFiles} source files (${LIMITS.maxSourceBytes / 1024} KiB each, ${LIMITS.maxSourceTotalBytes / 1024 / 1024} MiB total) and a cooperative ${LIMITS.scanBudgetMs / 1000} s reading budget; each Git command also has its own timeout. Project scripts are never run and no model is called. Tracked items are only flagged as missing from a source that was read completely.`];
   notices.push(...listing.notices);
   if (listing.excluded) notices.push(`${fmt(listing.excluded)} dependency, build, ignored or secret paths were skipped.`);
   if (listing.symlinks) notices.push(`${fmt(listing.symlinks)} symbolic links were not followed.`);
@@ -53,10 +58,12 @@ export async function scanProject(projectPath: string, stop?: () => boolean, bud
   }
   const languages = [...languageCounts].map(([name, count]) => ({ name, files: count })).sort((a, b) => b.files - a.files || a.name.localeCompare(b.name)).slice(0, 12);
 
-  const [analysis, gitFacts] = await Promise.all([analyseComponents(root, files, budget), readGitFacts(root, info)]);
+  const [analysis, gitFacts] = await Promise.all([analyseComponents(root, files, budget), readGitFacts(root, info, budget)]);
   notices.push(...analysis.notices, ...gitFacts.notices);
 
   const covered = new Set<string>();
+  let checklistComplete = listing.complete;
+  let commentsComplete = listing.complete;
   const items: RepoItem[] = [];
   const seenKeys = new Map<string, number>();
   const uniqueKey = (base: string) => {
@@ -67,11 +74,12 @@ export async function scanProject(projectPath: string, stop?: () => boolean, bud
 
   const docs = files.filter((rel) => DOC.test(rel.slice(rel.lastIndexOf('/') + 1)) && rel.split('/').length <= MAX_DOC_DEPTH && !isSamplePath(rel))
     .sort((a, b) => a.split('/').length - b.split('/').length || a.localeCompare(b));
+  if (docs.length > LIMITS.maxDocs) checklistComplete = false;
   if (docs.length > LIMITS.maxDocs) notices.push(`Checklists were read from the first ${LIMITS.maxDocs} of ${docs.length} README/TODO/ROADMAP documents.`);
   for (const rel of docs.slice(0, LIMITS.maxDocs)) {
-    if (budget.expired()) { notices.push('The scan time budget ended before every document was read; unread documents keep their tracked tasks.'); break; }
+    if (budget.expired()) { checklistComplete = false; notices.push('The scan time budget ended before every document was read; no checklist item was flagged as missing.'); break; }
     const outcome = await readBoundedText(root, rel, LIMITS.maxDocBytes);
-    if (!('text' in outcome)) continue;
+    if (!('text' in outcome)) { if (outcome.skipped !== 'missing') checklistComplete = false; continue; }
     covered.add(rel);
     for (const entry of extractChecklist(outcome.text)) {
       const title = clean(entry.text);
@@ -83,16 +91,17 @@ export async function scanProject(projectPath: string, stop?: () => boolean, bud
   }
 
   const sources = files.filter((rel) => commentStyleFor(rel) && !isSamplePath(rel));
+  if (sources.length > LIMITS.maxSourceFiles) commentsComplete = false;
   if (sources.length > LIMITS.maxSourceFiles) notices.push(`Marker comments were read from the first ${LIMITS.maxSourceFiles} of ${fmt(sources.length)} source files.`);
   let sourceBytes = 0;
   let budgetEnded = false;
   for (const rel of sources.slice(0, LIMITS.maxSourceFiles)) {
     if (budget.expired()) { budgetEnded = true; break; }
-    if (sourceBytes >= LIMITS.maxSourceTotalBytes) { notices.push('The total source-reading limit was reached; unread files keep their tracked tasks.'); break; }
+    if (sourceBytes >= LIMITS.maxSourceTotalBytes) { commentsComplete = false; notices.push('The total source-reading limit was reached; no marker comment was flagged as missing.'); break; }
     const outcome = await readBoundedText(root, rel, LIMITS.maxSourceBytes);
-    if (!('text' in outcome)) continue;
-    sourceBytes += outcome.text.length;
-    if (outcome.text.split('\n', 4000).some((line) => line.length > MAX_LINE)) continue; // minified or generated
+    if (!('text' in outcome)) { if (outcome.skipped !== 'missing') commentsComplete = false; continue; }
+    sourceBytes += Buffer.byteLength(outcome.text, 'utf8');
+    if (outcome.text.split('\n', 4000).some((line) => line.length > MAX_LINE)) { commentsComplete = false; continue; } // minified or generated
     const style = commentStyleFor(rel)!;
     covered.add(rel);
     for (const marker of extractCommentMarkers(outcome.text, style)) {
@@ -102,13 +111,13 @@ export async function scanProject(projectPath: string, stop?: () => boolean, bud
       });
     }
   }
-  if (budgetEnded) notices.push('The scan time budget ended before every source file was read; unread files keep their tracked tasks.');
+  if (budgetEnded) { commentsComplete = false; notices.push('The scan time budget ended before every source file was read; no marker comment was flagged as missing.'); }
 
   return {
     context: {
       projectId: '', root: projectPath, isRepo: info.isRepo, branch: info.branch, head: info.head, fileCount: listing.total, components: analysis.components, languages,
       recentCommits: gitFacts.recentCommits, changedPaths: gitFacts.changedPaths, notices,
     },
-    items, covered, fileSet: listing.complete ? new Set(files) : null,
+    items, covered, fileSet: listing.complete ? new Set(files) : null, complete: { checklist: checklistComplete, comments: commentsComplete },
   };
 }

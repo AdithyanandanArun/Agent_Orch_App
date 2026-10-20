@@ -37,4 +37,6 @@ export class Budget {
   private readonly deadline: number;
   constructor(ms: number, private readonly stop: () => boolean = () => false) { this.deadline = Date.now() + ms; }
   expired(): boolean { return Date.now() > this.deadline || this.stop(); }
+  /** A Git command may use what is left of the budget, but never less than a few seconds or more than its own ceiling. */
+  gitTimeout(ceilingMs: number): number { return Math.min(ceilingMs, Math.max(3_000, this.deadline - Date.now())); }
 }
