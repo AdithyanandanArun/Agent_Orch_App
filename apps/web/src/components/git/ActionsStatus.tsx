@@ -15,8 +15,9 @@ function headline(repo: RepositoryState, github: GitHubState | null, error: stri
   if (github.status === 'unsupported') return { tone: 'neutral', label: 'Not a GitHub remote' };
   if (github.status === 'unavailable') return { tone: 'warn', label: 'GitHub unavailable' };
   if (!githubMatches(github, repo)) return { tone: 'busy', label: loading ? 'Updating…' : 'Checks out of date' };
-  if (github.checks.length === 0) return { tone: 'neutral', label: 'No checks reported' };
+  if (github.checks.length === 0) return github.checksComplete === false ? { tone: 'warn', label: 'Checks unavailable' } : { tone: 'neutral', label: 'No checks reported' };
   const summary = summarizeChecks(github.checks);
+  if (github.checksComplete === false && summary.tone !== 'err') return { tone: 'warn', label: 'Checks incomplete' };
   return { tone: summary.tone, label: `Actions · ${summary.label}` };
 }
 
@@ -79,7 +80,8 @@ export function ActionsStatus({ repo, github, error, loading, onRefresh }: {
             <section className="ghpop__sec">
               <h4>Checks for <code>{shortSha(repo.head)}</code> (current HEAD)</h4>
               {!exact ? <p className="ghpop__note">These results are for <code>{shortSha(github.head)}</code>{github.branch !== repo.branch ? ` on ${github.branch ?? 'another branch'}` : ''}, not the current checkout. Refreshing…</p> : null}
-              {exact && github.checks.length === 0 ? (
+              {exact && github.checksComplete === false ? <p className="ghpop__note">Some checks could not be read. These results are incomplete; see the notes below.</p> : null}
+              {exact && github.checks.length === 0 && github.checksComplete !== false ? (
                 <p className="ghpop__note">GitHub reported no checks for this commit.</p>
               ) : null}
               {exact ? github.checks.map((check) => {
@@ -100,6 +102,7 @@ export function ActionsStatus({ repo, github, error, loading, onRefresh }: {
 
             <section className="ghpop__sec">
               <h4>Workflow runs by commit</h4>
+              {github.workflowsComplete === false ? <p className="ghpop__note">Showing the workflow runs available from a partial or bounded read.</p> : null}
               {workflows.length === 0 ? <p className="ghpop__note">No recent workflow runs were reported.</p> : (
                 <>
                   {workflows.slice(0, 8).map((run) => {
