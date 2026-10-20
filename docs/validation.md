@@ -167,3 +167,15 @@ Implemented SQLite migration 6, original repository controls, read-only GitHub c
 - The intelligence worker used disposable SQLite/Git smoke scripts; those files were deleted and no test files were added. Repository command sequences were inspected in disposable local repositories. Subsequent changes used type checks and static review.
 
 No push, pull request creation, workflow mutation, new Relay provider inference turn, desktop package rebuild or installation was performed. Native plan-to-runtime integration was not exercised by a live paid turn. Windows/macOS execution, signing-key interaction and remote publishing remain unexercised. Exact bounds and external Git concurrency limitations are documented in repository-automation.md.
+
+## Antigravity provider — 2026-10-20
+
+Added Google Antigravity as an independent provider, including explicit runtime installation and Google sign-in, model/effort/permission settings, group identities/routing, scoped browser/team MCP, tool activity, native resume and guarded native quota reporting.
+
+- Workspace TypeScript checks and the production web build passed. No tests were added or run, and no Antigravity inference or Google sign-in was started.
+- The actual adapter discovery code connected to the cached official Linux ACP 1.4.1 binary using only `initialize`. It returned runtime availability, the native-default model placeholder and an explicit unverified-sign-in notice. It neither created a native session nor submitted a prompt.
+- Google's six platform archives were downloaded/read outside tracked source to record local SHA-256 pins. Registry metadata and the public API definitions shipped in the official archive established protocol behavior; this does not constitute a live authenticated run.
+- The native T3 preview loaded the Providers settings page from an isolated, clearly labeled example workspace with the production CSP. The Antigravity card reported Setup needed, the installer reported Not installed, and no browser console errors were observed. Install/sign-in actions were not clicked.
+- Review corrected ACP prompt completion, permission reply structure, configuration confirmation, metadata workspace isolation, per-run capability redaction, cancellation and shutdown races. Existing project/session data requires no database migration.
+
+Live authenticated tool execution, model/effort changes, approvals, group delegation, browser use, resume and quota retrieval remain unexercised. Windows/macOS runtime execution is also unverified. Native history import, explicit skill attachment and custom compaction thresholds are intentionally unavailable for this provider. See provider-antigravity.md for exact boundaries.
