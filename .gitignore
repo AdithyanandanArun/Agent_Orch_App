@@ -11,3 +11,7 @@ dist-electron/
 release/
 coverage/
 .DS_Store
+
+# Supabase CLI local runtime/cache state
+supabase/.temp/
+supabase/.branches/
