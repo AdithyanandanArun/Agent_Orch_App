@@ -42,7 +42,8 @@ it('returns early worker results to a busy Cowork planner and retains its native
       await releasePlanner.promise;
       emit({ type: 'text', text: 'The page and stylesheet are integrated.' });
     } else {
-      expect(options.prompt).toContain('Delegated work from your latest batch has finished');
+      expect(options.prompt).toContain('Your latest delegation batch has returned.');
+      expect(options.prompt).toContain('they do not certify implementation, integration or human acceptance');
       expect(options.prompt).toContain('The stylesheet is ready for integration.');
       emit({ type: 'text', text: 'Reviewed the handoff. The website is complete.' });
     }
