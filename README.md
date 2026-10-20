@@ -94,9 +94,9 @@ Use **Add agent** in a session to choose **Cowork**, **Orchestrated** with a sep
 
 A shared timeline keeps each member's responses, tools, timing, approvals and file changes distinct. Use `@claude1`, `@codex1`, `@antigravity1`, `@opencode1` or the recipient picker to address a member. Without a recipient, Cowork lets one peer split the request before the others edit; either coordinated mode sends it to its orchestrator. Providers receive scoped team tools for actual assignments, peer questions, progress and verified artifact references. Tasks follow those assignments automatically.
 
-**Settings → Agents & orchestration** saves coordinator/worker defaults and delegation bounds. **Members** opens per-agent settings, queue state, stop/resume and mode/limit controls. Pause holds new scheduling; Stop also interrupts active runs. Queued work stays paused after a server restart until explicitly resumed. Native project skills remain available to providers, but attaching a selected skill through the group composer is not yet supported; independent sessions retain their skill picker.
+**Settings → Agents & orchestration** saves coordinator/worker defaults and delegation bounds. **Members** opens per-agent settings, queue state, stop/resume and mode/limit controls. Pause holds new scheduling; Stop also interrupts active runs. Queued work stays paused after a server restart until explicitly resumed. Target a supported provider command or skill with `@handle /command arguments` or `@handle $skill arguments`; Relay validates it against that member's current native catalog before dispatch. See [chat attachments and native actions](docs/chat-attachments-and-native-actions.md) for provider limits.
 
-See [group setup, communication and recovery](docs/group-sessions.md). Live multi-provider integration has not yet been demonstrated; source implementation and local checks are recorded separately from that remaining proof.
+See [group setup, communication and recovery](docs/group-sessions.md). A [live Codex/OpenCode integration proof](docs/group-session-live-proof.md) demonstrated automatic delivery of a committed contract, dependent work, integration and checks. This is evidence for one local Linux task; Claude interoperability and broader recovery remain unverified.
 
 ## Repository controls and automatic tracking
 

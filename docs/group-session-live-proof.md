@@ -58,13 +58,13 @@ Relay's final request record is **completed, 5 of 16 turns**, with five complete
 | Lead's reply to a worker question — `run_c4979f3a7b6045b2` | OpenCode `openai/gpt-6-luna` High | 29,462 ms |
 | Lead result/integration report — `run_9bc240563ee34d2b` | OpenCode `openai/gpt-6-luna` High | 19,035 ms |
 
-Request acceptance to final delivery completion spanned approximately **8 minutes 38 seconds** (`15:22:55.841Z`–`15:31:33.837Z`). Summed run durations are not wall time because backend and frontend work overlapped. Relay reported no USD cost for these sessions; no cost comparison or savings claim is made.
+Request acceptance to final delivery completion spanned approximately **8 minutes 38 seconds** (`15:22:55.841Z`–`15:31:33.837Z`). Summed run durations are not wall time: the lead's initial run overlapped the worker runs. Backend and frontend ran sequentially because the frontend needed the backend artifact. Setup, external supervision and independent verification are outside this request duration. Relay reported no USD cost for these sessions; no cost comparison or savings claim is made.
 
 ## Verification evidence
 
 **Worker-reported checks:** Codex reported 4/4 backend tests; OpenCode frontend reported 3/3 UI tests plus `node --check app.js` and `git diff --check`.
 
-**Lead-reported checks:** The lead reported `npm test` 8/8, syntax checks for `server.js`, `app.js`, and both tests, `git diff --check`, and an actual browser form exercise. Its detailed tool record shows these checks preceded its later static-routing correction, so they are not treated as final post-correction verification.
+**Lead checks observed in native tool records:** The lead applied the static-routing correction at `15:28:13.353Z`–`15:28:20.359Z`, ran `npm test` at `15:28:25.344Z`, exercised the form in Relay's browser from `15:28:46.854Z`, and committed the correction at `15:29:55.682Z`. Thus its automated and browser checks followed the code correction and preceded the commit. The lead reported 8/8 tests, syntax checks for `server.js`, `app.js`, and both tests, and `git diff --check`. Saved browser snapshots show success feedback after submission and a field-level error for an invalid email.
 
 **Independent post-correction checks run in the final lead checkout:**
 
@@ -77,16 +77,18 @@ Request acceptance to final delivery completion spanned approximately **8 minute
 
 The example defines no build script; the production-style start command and Node syntax checks were used instead.
 
+**Primary orchestrator verification:** Independently reran the eight example tests, server/UI syntax checks and `git diff --check` at final commit `39f72e4`; all passed and the checkout was clean. Relay's focused `handoffs`, `group-handoff` and `group-identities` tests passed (7 tests), and workspace `pnpm typecheck` passed. Native T3 preview DOM inspection at 1280×800 confirmed the final Team result showed **Ready for your review**, three agents, both assignments needing review, the lead outcome and individual reports, with no horizontal overflow. The saved screenshot was blurred, so no screenshot-based visual assessment is claimed.
+
 Two initial independent Playwright harness attempts failed before interacting with the app (incorrect module resolution, then a missing default headless-shell executable). The verifier corrected the harness to use the installed Chromium executable; the final browser check passed. One read-only status-monitor command also timed out after a PID file was mistakenly used as a URL; it changed no files and did not affect the Relay runtime or proof state.
 
-No Relay source fix was needed. The integration correction was confined to the disposable example. The Relay repository received only this proof documentation and the supported roadmap/evidence update.
+No Relay runtime fix was needed. The integration correction was confined to the disposable example. Before the live request, the primary orchestrator corrected an outdated expected sentence in the existing coordinator handoff regression (`a1fa21a`); it now checks the current result guidance and its explicit distinction between completed turns and human acceptance. Repository changes also record this proof and update the supported feature status.
 
 ## Remaining limits and retained runtime
 
 - This was one local Linux run. It does not establish cross-platform, distributed, repeated-task, exhaustive failure-recovery, or production-security behavior.
 - Claude was not used; Codex/Claude interoperability remains untested. No fixed cost reduction is inferred.
 - All related tasks are still **Review**; no task was marked Done or accepted.
-- No code was pushed, published, installed, or added to Relay's contact-form product.
+- The contact form remains a disposable validation example outside Relay's product source. Nothing from this task was pushed, published or installed.
 - The private runtime, SQLite database, example repository, worker worktrees, and artifact commits are preserved under `/home/adithyan/.cache/relay-workers/team-proof`. The isolated Relay server is stopped after proof completion. To restart it from the Relay repository root, run:
 
   ```sh

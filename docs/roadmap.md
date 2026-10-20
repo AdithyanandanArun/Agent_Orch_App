@@ -38,7 +38,8 @@ These items record implemented work and previously requested capabilities still 
 - [x] Populate project components, languages and Git context from an existing repository or local folder.
 - [x] Track repository checklists, session work requests and native provider plans automatically, preserving manual edits.
 - [x] Populate Activity and Agent Map from actual repository, session, task and provider records.
-- [ ] Add composer attachments and file mentions.
+- [x] Add composer file attachments and clipboard images; see [attachments and native actions](chat-attachments-and-native-actions.md) for implementation and provider limits.
+- [ ] Add file mentions.
 - [ ] Add native interactive questions and full planning controls.
 - [ ] Add personal Claude skill discovery and general MCP/plugin management.
 - [ ] Complete AUR publication and desktop update distribution after owner-approved release preparation.
