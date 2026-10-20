@@ -28,7 +28,7 @@ import type { BrowserService } from './browser/service.ts';
 import { antigravityInstallState, startAntigravityInstall } from './antigravity-install.ts';
 import { antigravityAuthState, cancelAntigravityAuth, startAntigravityAuth } from './antigravity-auth.ts';
 import type { AttachmentService } from './attachments/service.ts';
-import { nativeActionCommands, nativeActionSkills, unsupportedActionNotes } from '@relay/contracts';
+import { ATTACHMENT_LIMITS, NativeActionCatalogQuerySchema, nativeActionCommands, nativeActionSkills, unsupportedActionNotes } from '@relay/contracts';
 
 export interface Services {
   setupSignal: AbortSignal;
@@ -238,13 +238,20 @@ export function buildRouter(s: Services) {
   const emptyGroupBody = z.object({}).strict();
   add('POST', '/api/groups', async (ctx) => new Reply(201, await s.groups.create(await ctx.body(CreateGroupSchema))));
   add('GET', '/api/groups/:id/members/:memberId/catalog', async (ctx) => {
+    const query = NativeActionCatalogQuerySchema.parse(Object.fromEntries(ctx.url.searchParams));
     const group = s.groups.get(param(ctx, 'id'));
     const memberId = param(ctx, 'memberId');
     const member = group.members.find((row) => row.id === memberId && !row.removedAt);
     if (!member) throw notFound('Active group agent not found');
     const session = s.store.getSession(member.sessionId);
     if (!session) throw notFound('Agent session not found');
-    const catalog = await s.providers.catalog(session, ctx.url.searchParams.get('refresh') === 'true');
+    const catalog = await s.providers.catalog(session, query.refresh === 'true');
+    const latestGroup = s.groups.get(group.group.id);
+    const latestMember = latestGroup.members.find((row) => row.id === memberId && !row.removedAt);
+    const latestSession = latestMember ? s.store.getSession(latestMember.sessionId) : undefined;
+    if (!latestMember || !latestSession || latestSession.id !== session.id || latestSession.provider !== session.provider || latestSession.model !== session.model || latestSession.worktreePath !== session.worktreePath) {
+      throw conflict('This agent or its settings changed while loading its actions. Refresh the catalog.');
+    }
     const info = s.providers.cached()?.find((row) => row.id === session.provider);
     return {
       sessionId: session.id, provider: session.provider, model: session.model,
@@ -253,7 +260,7 @@ export function buildRouter(s: Services) {
       attachments: { images: (() => {
         const model = info?.models.find((candidate) => candidate.id === session.model || candidate.aliases?.includes(session.model));
         return model?.inputModalities ? model.inputModalities.includes('image') : info?.promptCapabilities?.image === true;
-      })(), files: true, imageBytes: 10 * 1024 * 1024,
+      })(), files: true, imageBytes: session.provider === 'claude' ? ATTACHMENT_LIMITS.claudeImageBytes : ATTACHMENT_LIMITS.imageBytes,
         ...(session.provider === 'opencode' ? { note: 'OpenCode native commands cannot carry attachments.' } : {}) },
     };
   });

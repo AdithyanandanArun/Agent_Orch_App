@@ -60,6 +60,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
   const [usageSession, setUsageSession] = useState<Session | null>(null);
   const [nativeCatalog, setNativeCatalog] = useState<NativeActionCatalog | null>(null);
   const [nativeCatalogError, setNativeCatalogError] = useState<string | null>(null);
+  const [catalogRevision, setCatalogRevision] = useState(0);
   const [selectedNativeAction, setSelectedNativeAction] = useState<{ kind: 'command' | 'skill'; id: string; name: string } | null>(null);
   const attachmentDraft = useAttachmentDraft({ kind: 'group', id: snapshot.group.id }, attachments, setAttachments, setError);
 
@@ -104,11 +105,11 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
     const controller = new AbortController();
     setNativeCatalog(null); setNativeCatalogError(null);
     if (!actionTargetId || connection !== 'online') return () => controller.abort();
-    void api.groupActionCatalog(snapshot.group.id, actionTargetId, controller.signal).then((value) => {
+    void api.groupActionCatalog(snapshot.group.id, actionTargetId, controller.signal, catalogRevision > 0).then((value) => {
       if (!controller.signal.aborted) setNativeCatalog(value);
     }).catch((cause) => { if (!controller.signal.aborted) setNativeCatalogError(errorMessage(cause)); });
     return () => controller.abort();
-  }, [snapshot.group.id, actionCatalogKey, connection]);
+  }, [snapshot.group.id, actionCatalogKey, connection, catalogRevision]);
   useEffect(() => { setSelectedNativeAction(null); }, [actionCatalogKey]);
 
   useEffect(() => {
@@ -137,8 +138,8 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
     if (mentionMatch) {
       const query = mentionMatch[1]!.toLowerCase();
       const matching = members.filter((member) => member.handle.toLowerCase().startsWith(query));
-      // Provider aliases (@antigravity, @opencode) address the only agent of that provider; several agents list their handles instead.
-      const aliasProviders = ['antigravity', 'opencode'] as const satisfies readonly Provider[];
+      // Provider aliases address the sole matching agent; several agents list their individual handles instead.
+      const aliasProviders = ['claude', 'codex', 'antigravity', 'opencode'] as const satisfies readonly Provider[];
       const matched = aliasProviders.flatMap((aliasProvider) => {
         const same = members.filter((member) => sessionOf(member.sessionId)?.provider === aliasProvider);
         const matchesAlias = Boolean(query && aliasProvider.startsWith(query)) && !matching.some((member) => member.handle.toLowerCase() === aliasProvider);
@@ -234,8 +235,9 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
     const ids = (targets.length ? targets : defaults).map((member) => member.id);
     const content = draft.trim();
     const actionMatch = /^\s*(?:@([A-Za-z0-9_-]+)\s+)?([/$])([A-Za-z0-9][A-Za-z0-9_.:-]*)(?:\s+([\s\S]*))?$/.exec(content);
-    const actionToken = /(?:^|\s)([/$])([A-Za-z0-9][A-Za-z0-9_.:-]*)(?:\s|$)/.exec(content);
-    const nativeIntent = Boolean(actionMatch && (actionMatch[2] === '$' || !local)) || Boolean(actionToken && (actionToken[1] === '$' || !local));
+    // Prose may contain paths or shell variables; only leading syntax, optionally after mentions, is an action.
+    const actionToken = /^\s*(?:@[A-Za-z0-9_-]+(?:\s*,\s*|\s+))*([/$])([A-Za-z0-9][A-Za-z0-9_.:-]*)(?:\s|$)/.exec(content);
+    const nativeIntent = Boolean(actionToken);
     let invocation: import('@relay/contracts').NativeInvocationInput | undefined;
     if (actionMatch && actionTargetId && nativeCatalog) {
       const symbol = actionMatch[2];
@@ -316,11 +318,19 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
           role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded={open}
           aria-controls={open ? pickerId : undefined} aria-activedescendant={open ? `${pickerId}-option-${active}` : undefined}
           placeholder="Message the group — use @handle to address one agent…"
-          onChange={(event) => { setCaret(event.target.selectionStart ?? event.target.value.length); setDraft(event.target.value); }}
+          onChange={(event) => {
+            const next = event.target.value;
+            setCaret(event.target.selectionStart ?? next.length); setDraft(next);
+            if (selectedNativeAction) {
+              const escaped = selectedNativeAction.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              const marker = selectedNativeAction.kind === 'skill' ? '\\$' : '/';
+              if (!new RegExp(`(?:^|\\s)${marker}${escaped}(?=\\s|$)`).test(maskNonActionable(next))) setSelectedNativeAction(null);
+            }
+          }}
           onFocus={(event) => { setFocused(true); setCaret(event.currentTarget.selectionStart ?? 0); }}
           onSelect={(event) => setCaret(event.currentTarget.selectionStart ?? 0)}
           onPaste={attachmentDraft.onPaste}
-          onBlur={() => setFocused(false)}
+          onBlur={(event) => { if (!(event.relatedTarget instanceof Element && event.relatedTarget.closest('.composer-picker-empty'))) setFocused(false); }}
           onKeyDown={(event) => {
             if (open && !event.nativeEvent.isComposing) {
               if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setActive((i) => (i + (event.key === 'ArrowDown' ? 1 : -1) + suggestions.length) % suggestions.length); return; }
@@ -349,6 +359,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
               : !nativeCatalog ? 'Loading this agent’s actions…'
                 : skillTrigger ? nativeCatalog.skills.length ? 'No matching skill.' : nativeCatalog.unsupported.join(' ')
                   : nativeCatalog.commands.length ? 'No matching command.' : nativeCatalog.unsupported.join(' ')}
+          {actionTargetId && (nativeCatalog || nativeCatalogError) ? <> <button type="button" className="link-btn" onMouseDown={(event) => event.preventDefault()} onClick={() => { setCatalogRevision((value) => value + 1); ref.current?.focus(); }}>Refresh</button></> : null}
         </div> : null}
         <div className="composer__bar">
           <div className="composer__controls">
