@@ -111,11 +111,19 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
       const matching = members.filter((member) => member.handle.toLowerCase().startsWith(query));
       const antigravity = members.filter((member) => sessionOf(member.sessionId)?.provider === 'antigravity');
       const isAntigravityAlias = Boolean(query && 'antigravity'.startsWith(query));
-      const alias = isAntigravityAlias && antigravity.length === 1 ? [{
-        key: `provider:antigravity:${antigravity[0]!.id}`, token: '@antigravity', description: `Antigravity agent · @${antigravity[0]!.handle}`, group: 'Providers', identityKey: antigravity[0]!.sessionId, provider: 'antigravity' as Provider,
+      const exactHandle = matching.find((member) => member.handle.toLowerCase() === 'antigravity');
+      const alias = isAntigravityAlias && antigravity.length === 1 && !exactHandle ? [{
+        key: `provider:antigravity:${antigravity[0]!.id}`, memberId: antigravity[0]!.id, token: '@antigravity', description: `Antigravity agent · @${antigravity[0]!.handle}`, group: 'Providers', identityKey: antigravity[0]!.sessionId, provider: 'antigravity' as Provider,
       }] : [];
       const aliasChoices = isAntigravityAlias && antigravity.length > 1 ? antigravity : [];
-      return [...alias, ...aliasChoices, ...matching].slice(0, 8).map((member) => {
+      const seen = new Set<string>();
+      const choices = [...alias, ...aliasChoices, ...matching].filter((member) => {
+        const id = 'memberId' in member ? member.memberId : member.id;
+        if (seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      });
+      return choices.slice(0, 8).map((member) => {
         if ('token' in member) return member;
         const session = sessionOf(member.sessionId);
         return { key: `m:${member.id}`, token: `@${member.handle}`, description: `${ROLE_LABEL[member.role]}${session ? ` · ${providerName(session.provider)} ${session.model}` : ''}`, group: 'Agents', identityKey: member.sessionId, provider: session?.provider };

@@ -21,7 +21,7 @@ export function defaultProviderModel(provider: Provider, settings: AppSettings):
 
 /** Uses only discovered native models; Antigravity's sentinel delegates selection to agy. */
 export function providerModelChoices(info: ProviderInfo | undefined, current?: string): ProviderModel[] {
-  const models = info?.models ?? [];
+  const models = (info?.models ?? []).map((model) => info?.id === 'antigravity' && model.id === 'default' ? { ...model, name: 'Antigravity default' } : model);
   const choices = [...models];
   if (info?.id === 'antigravity' && choices.length === 0) choices.push({ id: 'default', name: 'Antigravity default' });
   if (current && !choices.some((model) => model.id === current || model.aliases?.includes(current))) {

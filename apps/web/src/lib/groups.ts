@@ -121,15 +121,16 @@ const defaultModelFor = defaultProviderModel;
 export function normalizeConfig(config: AgentConfiguration, providers: readonly ProviderInfo[], settings: AppSettings): AgentConfiguration {
   const info = providers.find((provider) => provider.id === config.provider);
   const configuredDefault = defaultModelFor(config.provider, settings);
-  const nativeDefault = config.provider === 'antigravity' && config.model === 'default';
-  const model = nativeDefault ? undefined : modelOf(info, config.model) ?? modelOf(info, configuredDefault)
-    ?? (config.provider === 'antigravity' && configuredDefault === 'default' ? undefined : info?.models[0]);
+  const reportedCurrent = modelOf(info, config.model);
+  const preserveNativeDefault = config.provider === 'antigravity' && config.model === 'default' && !reportedCurrent;
+  const model = reportedCurrent ?? (preserveNativeDefault ? undefined : modelOf(info, configuredDefault))
+    ?? (config.provider === 'antigravity' && (config.model === 'default' || configuredDefault === 'default') ? undefined : info?.models[0]);
   const efforts = effortChoices(model);
   const tiers = tierChoices(model);
   const policies = policyChoices(info, model);
   return {
     provider: config.provider,
-    model: model?.id ?? (config.provider === 'antigravity' && (nativeDefault || configuredDefault === 'default' && !modelOf(info, config.model)) ? 'default' : config.model),
+    model: model?.id ?? (config.provider === 'antigravity' && (preserveNativeDefault || configuredDefault === 'default' && !reportedCurrent) ? 'default' : config.model),
     effort: efforts.some((item) => item.id === config.effort) ? config.effort : model?.defaultReasoningEffort ?? efforts[0]?.id ?? config.effort,
     policy: policies.includes(config.policy) ? config.policy : policies.includes(settings.defaultPolicy) ? settings.defaultPolicy : policies[0] ?? config.policy,
     serviceTier: tiers.some((item) => item.id === config.serviceTier) ? config.serviceTier : model?.defaultServiceTier ?? 'standard',
@@ -160,7 +161,12 @@ export function configSummary(config: Pick<AgentConfiguration, 'model' | 'effort
   const info = providers.find((item) => item.id === provider);
   const model = modelOf(info, config.model);
   const tier = config.serviceTier === 'standard' ? '' : ` · ${tierLabel(config.serviceTier, model?.serviceTiers?.find((item) => item.id === config.serviceTier)?.name)}`;
-  return { model: model?.name ?? config.model, detail: `${effortLabel(config.effort)}${tier} · ${policyLabel(config.policy)}` };
+  const effort = model?.reasoningEfforts
+    ? model.reasoningEfforts.find((item) => item.id === config.effort)?.label ?? 'Not available'
+    : 'Native/default';
+  const policies = policyChoices(info, model);
+  const policy = policies.includes(config.policy) ? policyLabel(config.policy) : policies.length ? 'Not available' : 'Native/default';
+  return { model: model?.name ?? config.model, detail: `${effort}${tier} · ${policy}` };
 }
 
 export function providerAvailability(providers: readonly ProviderInfo[], provider: Provider): { available: boolean; reason: string | null } {

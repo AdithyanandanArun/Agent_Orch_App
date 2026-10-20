@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import type { AppSettings, Project, ProviderInfo } from '@relay/contracts';
 import { useRelay, type SettingsSection } from '../store/store';
@@ -10,6 +10,7 @@ import { SettingRow } from './SettingRow';
 import { BrowserSettings } from './browser/BrowserSettings';
 import { AgentsSettings } from './AgentsSettings';
 import { defaultProviderModel, providerModelChoices, providerModelSetting, PROVIDER_NAMES } from '../lib/providers';
+import { AntigravityRuntimeSetup } from './AntigravityRuntimeSetup';
 
 const CATEGORIES: { id: SettingsSection; name: string }[] = [
   { id: 'general', name: 'General' }, { id: 'project', name: 'Project' }, { id: 'agents', name: 'Agents' }, { id: 'providers', name: 'Providers' }, { id: 'browser', name: 'Browser' }, { id: 'appearance', name: 'Appearance' },
@@ -38,6 +39,12 @@ export function SettingsPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+
+  const refreshAntigravityAfterInstall = useCallback(async () => {
+    await useRelay.getState().refreshNow();
+    const installedExecutable = useRelay.getState().boot?.settings.antigravityExecutable ?? '';
+    setAntigravity((current) => !current.trim() || current.trim() === (settings?.antigravityExecutable ?? '') ? installedExecutable : current);
+  }, [settings?.antigravityExecutable]);
 
   if (!settings || !boot) return null;
   const update = async (patch: Partial<AppSettings>, key: string) => {
@@ -95,7 +102,7 @@ export function SettingsPage() {
           <SelectMenu id="st-model" label="Default model" value={selectedModelId} disabled={disabled || models.length === 0} options={models.map((m) => ({ value: m.id, label: m.name }))} onChange={updateDefaultModel} />
         </SettingRow>
         <SettingRow title="Reasoning effort" description="How much reasoning to use for a response." htmlFor="st-effort">
-          <SelectMenu id="st-effort" label="Default effort" value={settings.defaultEffort} disabled={disabled || efforts.length === 0} options={efforts.map((item) => ({ value: item.id, label: `${effortName(item.id, item.label)}${item.id === selectedModel?.defaultReasoningEffort ? ' · Default' : ''}`, description: item.description }))} onChange={(value) => void update({ defaultEffort: value }, 'effort')} />
+          <SelectMenu id="st-effort" label="Default effort" value={settings.defaultEffort} displayValue={efforts.length ? efforts.some((item) => item.id === settings.defaultEffort) ? undefined : 'Not available' : 'Native/default'} disabled={disabled || efforts.length === 0} options={efforts.map((item) => ({ value: item.id, label: `${effortName(item.id, item.label)}${item.id === selectedModel?.defaultReasoningEffort ? ' · Default' : ''}`, description: item.description }))} onChange={(value) => void update({ defaultEffort: value }, 'effort')} />
         </SettingRow>
         <SettingRow title="Service tier" description="Request speed for the default model." htmlFor="st-tier">
           <SelectMenu id="st-tier" label="Default service tier" value={settings.defaultServiceTier ?? 'standard'} disabled={disabled} options={tiers.map((item) => ({ value: item.id, label: `${item.id === 'priority' ? 'Fast' : item.name}${item.id === (selectedModel?.defaultServiceTier ?? 'standard') ? ' · Default' : ''}`, description: item.description }))} onChange={(value) => void update({ defaultServiceTier: value }, 'tier')} />
@@ -107,7 +114,7 @@ export function SettingsPage() {
           <SelectMenu id="st-workspace" label="Default workspace" value={settings.defaultIsolated ? 'worktree' : 'project'} disabled={disabled} options={[{ value: 'worktree', label: 'Isolated worktree' }, { value: 'project', label: 'Project folder' }]} onChange={(value) => void update({ defaultIsolated: value === 'worktree' }, 'workspace')} />
         </SettingRow>
         <SettingRow title="Approval policy" description="Supervised asks before changes. Balanced allows edits with fewer prompts." htmlFor="st-policy">
-          <SelectMenu id="st-policy" label="Default approval policy" value={settings.defaultPolicy} disabled={disabled || policies.length === 0} options={policies.map((value) => ({ value, label: value === 'balanced' ? 'Auto-accept edits' : value === 'full-access' ? 'Full access' : value[0]!.toUpperCase() + value.slice(1), description: value === 'supervised' ? 'Ask before taking actions that change files or run commands.' : value === 'balanced' ? 'Allow file edits while keeping command approvals.' : value === 'auto' ? 'Allow common actions automatically with safety checks.' : 'Allow all actions without approval prompts.' }))} onChange={(value) => void update({ defaultPolicy: value as AppSettings['defaultPolicy'] }, 'policy')} />
+          <SelectMenu id="st-policy" label="Default approval policy" value={settings.defaultPolicy} displayValue={policies.length ? policies.includes(settings.defaultPolicy) ? undefined : 'Not available' : 'Native/default'} disabled={disabled || policies.length === 0} options={policies.map((value) => ({ value, label: value === 'balanced' ? 'Auto-accept edits' : value === 'full-access' ? 'Full access' : value[0]!.toUpperCase() + value.slice(1), description: value === 'supervised' ? 'Ask before taking actions that change files or run commands.' : value === 'balanced' ? 'Allow file edits while keeping command approvals.' : value === 'auto' ? 'Allow common actions automatically with safety checks.' : 'Allow all actions without approval prompts.' }))} onChange={(value) => void update({ defaultPolicy: value as AppSettings['defaultPolicy'] }, 'policy')} />
         </SettingRow>
       </div> : null}
       {category === 'agents' ? <AgentsSettings settings={settings} providers={boot.providers} disabled={disabled} update={update} /> : null}
@@ -117,12 +124,13 @@ export function SettingsPage() {
         <div className="settings-page__section-head settings-page__section-head--actions"><div><h2>Connected agents</h2><p>Local installations and login status.</p></div><Button size="sm" disabled={disabled} busy={busy === 'providers'} onClick={() => void refreshProviders()}><RefreshCw size={12} /> Re-check</Button></div>
         {boot.providers.map((provider) => <ProviderStatus key={provider.id} provider={provider} />)}
         {!boot.providers.length ? <p className="settings-page__hint">Provider information is loading. Re-check to request a fresh status.</p> : null}
-        <div className="settings-page__login"><p>Sign in on this machine with <code>claude auth login</code> or <code>codex login</code>, then re-check. For Antigravity, run <code>agy</code> interactively once to establish its cached credentials.</p><p>Claude uses its existing login. An <code>ANTHROPIC_API_KEY</code> in the server environment takes precedence and uses API billing. Relay stores no credentials.</p></div>
+        <AntigravityRuntimeSetup onInstalled={refreshAntigravityAfterInstall} />
+        <div className="settings-page__login"><p>Sign in on this machine with <code>claude auth login</code> or <code>codex login</code>, then re-check. For Antigravity, install the Antigravity runtime, then follow its reported authentication instructions.</p><p>Claude uses its existing login. An <code>ANTHROPIC_API_KEY</code> in the server environment takes precedence and uses API billing. Relay stores no credentials.</p></div>
         <details className="settings-page__advanced"><summary>Executable paths</summary><p className="settings-page__hint">Leave empty to use automatic discovery.</p>
           <form className="settings-page__paths" onSubmit={(event) => { event.preventDefault(); void update({ claudeExecutable: claude.trim(), codexExecutable: codex.trim(), antigravityExecutable: antigravity.trim() }, 'paths').then((ok) => { if (ok) void refreshProviders(); }); }}>
             <label htmlFor="st-claude">Claude executable</label><input id="st-claude" className="input input--mono" value={claude} disabled={disabled} onChange={(event) => setClaude(event.target.value)} placeholder="claude" spellCheck={false} />
             <label htmlFor="st-codex">Codex executable</label><input id="st-codex" className="input input--mono" value={codex} disabled={disabled} onChange={(event) => setCodex(event.target.value)} placeholder="codex" spellCheck={false} />
-            <label htmlFor="st-antigravity">Antigravity executable</label><input id="st-antigravity" className="input input--mono" value={antigravity} disabled={disabled} onChange={(event) => setAntigravity(event.target.value)} placeholder="agy" spellCheck={false} />
+            <label htmlFor="st-antigravity">Antigravity ACP executable</label><input id="st-antigravity" className="input input--mono" value={antigravity} disabled={disabled} onChange={(event) => setAntigravity(event.target.value)} placeholder="agy_acp_server.par" spellCheck={false} />
             <div><Button type="submit" size="sm" disabled={!pathsDirty || disabled} busy={busy === 'paths'}>Save paths and re-check</Button></div>
           </form>
         </details>

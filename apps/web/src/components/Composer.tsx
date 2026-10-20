@@ -345,6 +345,7 @@ export function Composer({ session }: { session: Session }) {
               options={combinedOptions}
               onChange={(value) => { const [kind, option] = value.split(':'); if (kind === 'effort') void configure({ effort: option }); else if (kind === 'tier') void configure({ serviceTier: option }); }} placement="top" />
             <SelectMenu triggerRef={policyControl} openRequest={policyOpenRequest} className="composer__select composer__select--policy" label="Approval policy" value={session.policy} disabled={disabled || policyChoices.length === 0}
+              displayValue={policyChoices.length ? policyChoices.includes(session.policy) ? undefined : 'Not available' : 'Native/default'}
               options={policyChoices.map((value) => ({ value, label: policyLabels[value]?.[0] ?? value, description: policyLabels[value]?.[1] }))}
               onChange={(value) => void configure({ policy: value as Session['policy'] })} placement="top" />
           </div>

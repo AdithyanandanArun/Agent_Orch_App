@@ -7,6 +7,7 @@ import { AlertTriangle, Check, Loader2, X } from 'lucide-react';
 import type { Provider, SessionStatus } from '@relay/contracts';
 import { cx } from '../lib/format';
 import { PROVIDER_NAMES } from '../lib/providers';
+import { AntigravityMark } from './AntigravityMark';
 
 /* ——— Brand ——— */
 export function RelayGlyph({ size = 18 }: { size?: number }) {
@@ -34,9 +35,7 @@ export function ProviderMark({ provider, size = 16 }: { provider: Provider; size
           <path d="M8 2v12M2.8 5l10.4 6M13.2 5 2.8 11" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
         </svg>
       ) : (
-        <svg viewBox="0 0 16 16" width={size * 0.72} height={size * 0.72} fill="none" aria-hidden="true">
-          <path d="M2.5 13.5 7.2 3.2a.9.9 0 0 1 1.6 0l4.7 10.3M4.3 9.5h7.4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
+        <AntigravityMark size={size * 0.76} />
       )}
     </span>
   );

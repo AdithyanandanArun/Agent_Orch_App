@@ -1,5 +1,5 @@
 import type {
-  AddGroupAgent, Approval, AppSettings, Bootstrap, BrowserAction, BrowserConnect, BrowserDiscovery, BrowserSessionState, BrowserTab, CreateGroup, DirectoryListing, ExternalConversationDetails, ExternalConversationList, FileEntry, GitHubState, GitStatus, GroupMode, GroupSnapshot, ImportConversationResult, Project, ProjectContext, ProviderCatalog, ProviderInfo,
+  AddGroupAgent, AntigravityInstallState, Approval, AppSettings, Bootstrap, BrowserAction, BrowserConnect, BrowserDiscovery, BrowserSessionState, BrowserTab, CreateGroup, DirectoryListing, ExternalConversationDetails, ExternalConversationList, FileEntry, GitHubState, GitStatus, GroupMode, GroupSnapshot, ImportConversationResult, Project, ProjectContext, ProviderCatalog, ProviderInfo,
   RepositoryBranch, RepositoryCommit, RepositoryMutationResult, RepositoryPullRequest, RepositoryPush, RepositoryState, RunChanges, SendGroupMessage, Session, SessionUsage, ToolCall, Task, TaskStatus, WorkspaceEvent,
 } from '@relay/contracts';
 export type { ProviderCatalog } from '@relay/contracts';
@@ -169,6 +169,8 @@ export const api = {
   decideApproval: (id: string, decision: 'approved' | 'denied') => json<Approval>(`/api/approvals/${encodeURIComponent(id)}`, 'POST', { decision }),
   updateSettings: (patch: Partial<AppSettings>) => json<AppSettings>('/api/settings', 'PATCH', patch),
   refreshProviders: () => json<ProviderInfo[]>('/api/providers/refresh', 'POST'),
+  antigravityInstallState: (signal?: AbortSignal) => json<AntigravityInstallState>('/api/providers/antigravity/install', 'GET', undefined, signal),
+  installAntigravityRuntime: () => json<AntigravityInstallState>('/api/providers/antigravity/install', 'POST', {}),
   browserDiscovery: (signal?: AbortSignal) => json<BrowserDiscovery>('/api/browser/discovery', 'GET', undefined, signal),
   /** Downloads the managed Chromium; can take up to about two minutes. */
   installBrowser: () => json<BrowserDiscovery>('/api/browser/install', 'POST', {}),

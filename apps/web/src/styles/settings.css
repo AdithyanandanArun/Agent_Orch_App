@@ -33,6 +33,13 @@
 .settings-provider__details summary:hover { color: var(--fg-0); }
 .settings-provider__details p, .settings-provider__reason { margin-top: 10px; line-height: 1.7; color: var(--fg-2); overflow-wrap: anywhere; }
 .settings-provider__details code { display: block; margin-top: 10px; overflow-wrap: anywhere; font-size: 11px; color: var(--fg-1); }
+.agy-runtime { display: grid; justify-items: start; gap: 9px; margin: 22px 0; padding: 15px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-inset); }
+.agy-runtime__head { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 14px; }
+.agy-runtime__head h3 { margin: 0; color: var(--fg-0); font-size: 13px; font-weight: 550; }
+.agy-runtime__head p, .agy-runtime__meta, .agy-runtime__error { margin: 4px 0 0; color: var(--fg-2); font-size: 11px; line-height: 1.6; }
+.agy-runtime__meta strong { color: var(--fg-1); font-weight: 550; }
+.agy-runtime__path { max-width: 100%; color: var(--fg-1); font-size: 11px; overflow-wrap: anywhere; }
+.agy-runtime__error { color: var(--err); }
 .settings-page__login { margin: 24px 0; color: var(--fg-2); font-size: 12px; line-height: 1.75; }
 .settings-page__login p + p { margin-top: 12px; }
 .settings-page__login code { color: var(--fg-1); font-size: 11px; }
