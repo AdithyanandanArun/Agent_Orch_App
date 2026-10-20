@@ -42,3 +42,14 @@ These items record implemented work and previously requested capabilities still 
 - [ ] Add native interactive questions and full planning controls.
 - [ ] Add personal Claude skill discovery and general MCP/plugin management.
 - [ ] Complete AUR publication and desktop update distribution after owner-approved release preparation.
+
+
+## Phase 2 — Updated group-session direction
+
+The owner's updated direction is recorded in [Group sessions and an orchestrator](phase-2-group-sessions.md). The next proof combines a shared conversation with independent provider sessions, explicit agent mentions, an orchestrator selected from Settings and effective structured communication.
+
+- [ ] Add group membership and a shared timeline while preserving existing provider conversations.
+- [ ] Add agent configuration previews and deterministic routing for @agent mentions.
+- [ ] Add orchestrator defaults and an optional model/effort adjustment for the current agent when forming a group.
+- [ ] Add bounded automatic assignments, durable peer requests/replies and compact artifact/context exchange.
+- [ ] Demonstrate an integrated Codex/Claude feature through Relay without manually copying the contract.

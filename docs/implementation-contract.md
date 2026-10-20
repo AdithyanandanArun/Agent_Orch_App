@@ -94,3 +94,8 @@ The server owns `BrowserService` separately from provider runtimes and the UI. M
 `POST .../repository/commit`, `/push`, `/branch` and `/pull-request` accept shared strict schemas and the displayed expected HEAD. Commit also requires selected paths and an expected status fingerprint. Mutations reject busy workspaces, unsafe paths and stale state; they never auto-push, reset, discard or merge. GitHub failures remain visible independently of local Git operations.
 
 `GET /api/projects/:id/context` returns a durable bounded static project snapshot; `POST .../context/refresh {}` refreshes it. Project onboarding and ongoing file, repository and run observations refresh Tasks, Activity and Agent Map without paid background inference. SQLite migration 6 stores task sources and project context. Native provider plans report task steps; provider completion means Review. Actual manual field edits become per-field overrides. No dependency is inferred from plan ordering and no missing source is treated as completion. See repository-automation.md for data sources, behavior and limits.
+
+
+## Next phase: group sessions
+
+The owner's group-session and orchestrator direction is specified in phase-2-group-sessions.md. It is proposed work, not part of the currently implemented HTTP/provider contract. Preserve existing provider sessions as independent execution units beneath a new shared conversation/membership layer. Group routing, team tools, delivery persistence and automatic dispatch require explicit new typed contracts and additive migrations before implementation.
