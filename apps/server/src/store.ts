@@ -1,5 +1,5 @@
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
-import type { AppSettings, Approval, Message, Policy, Project, Provider, RunChanges, RunChangesSummary, Session, SessionStatus, SessionRun, ToolCall, ToolCategory, RunStatus, Task, TaskStatus, WorkspaceEvent } from '@relay/contracts';
+import type { TaskSource, ProjectContext, AppSettings, Approval, Message, Policy, Project, Provider, RunChanges, RunChangesSummary, Session, SessionStatus, SessionRun, ToolCall, ToolCategory, RunStatus, Task, TaskStatus, WorkspaceEvent } from '@relay/contracts';
 import { SCHEMA_VERSION } from './db.ts';
 import { newId, nowIso } from './util.ts';
 
@@ -142,8 +142,8 @@ export class Store {
       : this.all('SELECT * FROM sessions WHERE archived_at IS NULL ORDER BY created_at ASC, rowid ASC');
     return rows.map(mapSession);
   }
-  updateSession(id: string, patch: Partial<Pick<Session, 'name' | 'provider' | 'model' | 'effort' | 'policy' | 'serviceTier' | 'status' | 'error' | 'providerSessionId' | 'inputTokens' | 'outputTokens' | 'costUsd' | 'pinned' | 'unread'>>): Session {
-    const columns: Record<string, string> = { name: 'name', provider: 'provider', model: 'model', effort: 'effort', policy: 'policy', serviceTier: 'service_tier', status: 'status', error: 'error', providerSessionId: 'provider_session_id', inputTokens: 'input_tokens', outputTokens: 'output_tokens', costUsd: 'cost_usd', pinned: 'pinned', unread: 'unread' };
+  updateSession(id: string, patch: Partial<Pick<Session, 'name' | 'provider' | 'model' | 'effort' | 'policy' | 'serviceTier' | 'status' | 'error' | 'providerSessionId' | 'inputTokens' | 'outputTokens' | 'costUsd' | 'pinned' | 'unread' | 'branch'>>): Session {
+    const columns: Record<string, string> = { branch: 'branch', name: 'name', provider: 'provider', model: 'model', effort: 'effort', policy: 'policy', serviceTier: 'service_tier', status: 'status', error: 'error', providerSessionId: 'provider_session_id', inputTokens: 'input_tokens', outputTokens: 'output_tokens', costUsd: 'cost_usd', pinned: 'pinned', unread: 'unread' };
     // Organizing a session does not count as conversation activity or change its recency.
     const activityChanged = Object.entries(patch).some(([key, value]) => value !== undefined && key !== 'pinned' && key !== 'unread');
     const sets: string[] = activityChanged ? ['updated_at = ?'] : [];
@@ -353,8 +353,28 @@ export class Store {
     return {
       id: r.id as string, projectId: r.project_id as string, title: r.title as string, description: r.description as string,
       acceptanceCriteria: r.acceptance_criteria as string, sessionId: (r.session_id as string | null) ?? null, dependsOn: this.depsOf(r.id as string),
-      status: r.status as TaskStatus, createdAt: r.created_at as string, updatedAt: r.updated_at as string,
+      source: this.getTaskSource(r.id as string), status: r.status as TaskStatus, createdAt: r.created_at as string, updatedAt: r.updated_at as string,
     };
+  }
+  getTaskSource(taskId: string): TaskSource | undefined {
+    const row = this.get('SELECT data FROM task_sources WHERE task_id = ?', taskId);
+    return row ? JSON.parse(row.data as string) as TaskSource : undefined;
+  }
+  findSourcedTask(projectId: string, key: string): Task | undefined {
+    const row = this.get('SELECT t.* FROM tasks t JOIN task_sources s ON s.task_id = t.id WHERE s.project_id = ? AND s.source_key = ?', projectId, key);
+    return row ? this.mapTask(row) : undefined;
+  }
+  setTaskSource(taskId: string, source: TaskSource): void {
+    const task = this.getTask(taskId);
+    if (!task) throw new Error('Task not found');
+    this.run('INSERT INTO task_sources(task_id,project_id,source_key,data) VALUES (?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET source_key=excluded.source_key,data=excluded.data', taskId, task.projectId, source.key, JSON.stringify(source));
+  }
+  getProjectContext(projectId: string): ProjectContext | undefined {
+    const row = this.get('SELECT data FROM project_context WHERE project_id = ?', projectId);
+    return row ? JSON.parse(row.data as string) as ProjectContext : undefined;
+  }
+  setProjectContext(projectId: string, context: ProjectContext): void {
+    this.run('INSERT INTO project_context(project_id,data) VALUES (?,?) ON CONFLICT(project_id) DO UPDATE SET data=excluded.data', projectId, JSON.stringify(context));
   }
   insertTask(input: NewTask): Task {
     const id = input.id ?? newId('tsk');

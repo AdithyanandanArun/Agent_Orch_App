@@ -51,7 +51,7 @@ export interface ToolActivity {
   cwd?: string | null; exitCode?: number | null; processId?: string | null; durationMs?: number | null;
 }
 export interface Message { id: string; sessionId: string; role: 'user' | 'assistant' | 'system' | 'tool'; content: string; createdAt: string; kind?: string; runId?: string }
-export interface Task { id: string; projectId: string; title: string; description: string; acceptanceCriteria: string; sessionId: string | null; dependsOn: string[]; status: TaskStatus; createdAt: string; updatedAt: string }
+export interface Task { id: string; projectId: string; title: string; description: string; acceptanceCriteria: string; sessionId: string | null; dependsOn: string[]; status: TaskStatus; createdAt: string; updatedAt: string; source?: import('./project-context').TaskSource }
 export interface WorkspaceEvent { id: number; projectId: string | null; sessionId: string | null; type: string; summary: string; payload: Record<string, unknown>; createdAt: string }
 export interface Approval { id: string; sessionId: string; tool: string; description: string; input: Record<string, unknown>; status: 'pending' | 'approved' | 'denied'; createdAt: string }
 export interface ProviderModel {
@@ -177,6 +177,7 @@ export const ApprovalDecisionSchema = z.object({ decision: z.enum(['approved', '
 // Provider boundary: implemented independently from persistence and transport.
 export interface RunOptions { session: Session; prompt: string; skills?: ProviderSkill[]; browserMcp?: import('./browser').BrowserMcpConnection; signal: AbortSignal; onEvent: (event: AdapterEvent) => void; requestApproval: (request: { tool: string; description: string; input: Record<string, unknown> }) => Promise<boolean>; settings: AppSettings }
 export type AdapterEvent =
+  | ({ type: 'task.plan' } & import('./project-context').ProviderTaskPlan)
   | { type: 'session'; providerSessionId: string }
   | { type: 'text'; text: string }
   | { type: 'tool'; name: string; content: string }
@@ -192,3 +193,6 @@ export interface AgentAdapter { run(options: RunOptions): Promise<void> }
  */
 export { mergeTextDelta } from './stream';
 export * from './browser';
+
+export * from './repository';
+export * from './project-context';

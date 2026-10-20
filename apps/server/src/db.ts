@@ -59,6 +59,11 @@ const MIGRATIONS: string[] = [
   `ALTER TABLE session_runs ADD COLUMN changes_summary TEXT;
    ALTER TABLE session_runs ADD COLUMN changes_diff TEXT;
    ALTER TABLE session_runs ADD COLUMN changes_diff_truncated INTEGER NOT NULL DEFAULT 0;`,
+  `CREATE TABLE task_sources (
+     task_id TEXT PRIMARY KEY REFERENCES tasks(id), project_id TEXT NOT NULL REFERENCES projects(id),
+     source_key TEXT NOT NULL, data TEXT NOT NULL, UNIQUE(project_id, source_key)
+   );
+   CREATE TABLE project_context (project_id TEXT PRIMARY KEY REFERENCES projects(id), data TEXT NOT NULL);`,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
