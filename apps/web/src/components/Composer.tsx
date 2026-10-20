@@ -9,7 +9,7 @@ import { SelectMenu } from './SelectMenu';
 import { UsagePanel } from './UsagePanel';
 import { GitBar } from './git/GitBar';
 import { providerModelChoices } from '../lib/providers';
-import { AttachmentDrafts, useAttachmentDraft } from './AttachmentDrafts';
+import { AttachmentDrafts, AttachmentTray, useAttachmentDraft } from './AttachmentDrafts';
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const hasSkillMarker = (text: string, name: string) => new RegExp(`(?:^|\\s)\\$${escapeRegExp(name)}(?=\\s|$)`).test(text);
@@ -306,6 +306,7 @@ export function Composer({ session }: { session: Session }) {
     <div className="composer-wrap">
       <div className={cx('composer', blocker && 'is-blocked')}>
         <label htmlFor={`composer-${session.id}`} className="sr-only">Message {session.name}</label>
+        <AttachmentTray attachments={attachments} busy={attachmentDraft.busy} uploads={attachmentDraft.uploads} onRetry={attachmentDraft.retry} onForget={attachmentDraft.forget} loading={attachmentDraft.loading} loadError={attachmentDraft.loadError} onReload={attachmentDraft.reload} onRemove={(id) => void attachmentDraft.remove(id)} disabled={sending || updating || Boolean(blocker)} />
         <textarea
           id={`composer-${session.id}`} ref={ref} className="composer__input" rows={1} value={draft}
           role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded={Boolean(suggestion && suggestions.length)}
@@ -362,7 +363,7 @@ export function Composer({ session }: { session: Session }) {
               onChange={(value) => void configure({ policy: value as Session['policy'] })} placement="top" />
           </div>
           <div className="composer__send">
-            <AttachmentDrafts scope={{ kind: 'session', id: session.id }} attachments={attachments} busy={attachmentDraft.busy} uploads={attachmentDraft.uploads} onRetry={attachmentDraft.retry} onForget={attachmentDraft.forget} loading={attachmentDraft.loading} loadError={attachmentDraft.loadError} onReload={attachmentDraft.reload} onFiles={attachmentDraft.addFiles} onRemove={(id) => void attachmentDraft.remove(id)} disabled={sending || updating || Boolean(blocker)} />
+            <AttachmentDrafts scope={{ kind: 'session', id: session.id }} busy={attachmentDraft.busy} onFiles={attachmentDraft.addFiles} disabled={sending || updating || Boolean(blocker)} />
             {running && !['usage', 'import'].includes(localDraftCommand?.[1]?.toLowerCase() ?? '') ? (
               <button type="button" className="sendbtn sendbtn--stop" onClick={stop} aria-label="Interrupt run" title="Interrupt run"><Square size={12} fill="currentColor" /></button>
             ) : (

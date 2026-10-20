@@ -147,31 +147,37 @@ export function useAttachmentDraft(scope: Scope, attachments: AttachmentRef[], o
   return { ...visible, addFiles, remove, retry, forget, reload, sent, isBusy, onPaste };
 }
 
-export function AttachmentDrafts({ scope, attachments, disabled, busy, onFiles, onRemove, uploads = [], onRetry, onForget, loading, loadError, onReload }: {
-  scope: Scope; attachments: AttachmentRef[]; disabled?: boolean; busy: boolean;
-  onFiles: (files: FileList | File[]) => void; onRemove: (id: string) => void;
-  uploads?: DraftUpload[]; onRetry?: (id: string) => void; onForget?: (id: string) => void;
-  loading?: boolean; loadError?: string | null; onReload?: () => void;
+export function AttachmentDrafts({ scope, disabled, busy, onFiles }: {
+  scope: Scope; disabled?: boolean; busy: boolean;
+  onFiles: (files: FileList | File[]) => void;
 }) {
   const inputId = useId();
   const input = useRef<HTMLInputElement>(null);
-  const showTray = attachments.length > 0 || uploads.length > 0 || Boolean(loadError);
   return <div className="attachment-drafts" data-scope={scope.id}>
     <input ref={input} id={inputId} type="file" multiple className="sr-only" onChange={(event) => { onFiles(event.currentTarget.files ?? []); event.currentTarget.value = ''; }} />
     <button type="button" className="attachment-drafts__button" aria-label="Attach files" title="Attach files" disabled={disabled || busy} onClick={() => input.current?.click()}><Paperclip size={15} aria-hidden="true" /></button>
-    {showTray ? <div className="attachment-drafts__list" aria-label="Message attachments">
-      {attachments.map((file) => <div className={cx('attachment-drafts__item', file.kind === 'image' && 'is-image')} key={file.id} title={file.name}>
-        {file.kind === 'image' ? <img src={api.attachmentUrl(file.id)} alt={file.name} /> : <span className="attachment-drafts__file">{file.name}</span>}
-        <button type="button" aria-label={`Remove ${file.name}`} title="Remove attachment" disabled={disabled || busy} onClick={() => onRemove(file.id)}><X size={12} aria-hidden="true" /></button>
-      </div>)}
-      {uploads.map((item) => <div className={cx('attachment-drafts__upload', item.status === 'failed' && 'has-error')} key={item.id}>
-        {item.previewUrl ? <img src={item.previewUrl} alt="" /> : null}
-        <div><span className="attachment-drafts__file" title={item.name}>{item.name}</span><span className="attachment-drafts__state" role="status">{item.status === 'failed' ? item.error || 'Upload failed' : item.status === 'uploading' ? 'Uploading…' : 'Queued'}</span></div>
-        {item.status === 'failed' && onRetry ? <button type="button" className="attachment-drafts__button" disabled={disabled} aria-label={`Retry ${item.name}`} title="Retry upload" onClick={() => onRetry(item.id)}><RotateCcw size={13} aria-hidden="true" /></button> : null}
-        {onForget ? <button type="button" className="attachment-drafts__button" disabled={disabled || item.status === 'uploading'} aria-label={`Remove ${item.name}`} title="Remove attachment" onClick={() => onForget(item.id)}><X size={13} aria-hidden="true" /></button> : null}
-      </div>)}
-      {loading ? <span className="attachment-drafts__state" role="status">Loading attachments…</span> : busy && !uploads.length ? <span className="attachment-drafts__state" role="status">Updating attachments…</span> : null}
-      {loadError ? <div className="attachment-drafts__load-error"><span>Could not restore attachments.</span>{onReload ? <button type="button" className="link-btn" disabled={disabled || busy} onClick={onReload}>Retry</button> : null}</div> : null}
-    </div> : null}
   </div>;
+}
+
+export function AttachmentTray({ attachments, disabled, busy, uploads = [], onRemove, onRetry, onForget, loading, loadError, onReload }: {
+  attachments: AttachmentRef[]; disabled?: boolean; busy: boolean;
+  onRemove: (id: string) => void;
+  uploads?: DraftUpload[]; onRetry?: (id: string) => void; onForget?: (id: string) => void;
+  loading?: boolean; loadError?: string | null; onReload?: () => void;
+}) {
+  const showTray = attachments.length > 0 || uploads.length > 0 || Boolean(loadError);
+  return showTray ? <div className="attachment-tray" aria-label="Message attachments">
+    {attachments.map((file) => <div className={cx('attachment-drafts__item', file.kind === 'image' && 'is-image')} key={file.id} title={file.name}>
+      {file.kind === 'image' ? <img src={api.attachmentUrl(file.id)} alt={file.name} /> : <span className="attachment-drafts__file">{file.name}</span>}
+      <button type="button" aria-label={`Remove ${file.name}`} title="Remove attachment" disabled={disabled || busy} onClick={() => onRemove(file.id)}><X size={12} aria-hidden="true" /></button>
+    </div>)}
+    {uploads.map((item) => <div className={cx('attachment-drafts__upload', item.status === 'failed' && 'has-error')} key={item.id}>
+      {item.previewUrl ? <img src={item.previewUrl} alt="" /> : null}
+      <div><span className="attachment-drafts__file" title={item.name}>{item.name}</span><span className="attachment-drafts__state" role="status">{item.status === 'failed' ? item.error || 'Upload failed' : item.status === 'uploading' ? 'Uploading…' : 'Queued'}</span></div>
+      {item.status === 'failed' && onRetry ? <button type="button" className="attachment-drafts__button" disabled={disabled} aria-label={`Retry ${item.name}`} title="Retry upload" onClick={() => onRetry(item.id)}><RotateCcw size={13} aria-hidden="true" /></button> : null}
+      {onForget ? <button type="button" className="attachment-drafts__button" disabled={disabled || item.status === 'uploading'} aria-label={`Remove ${item.name}`} title="Remove attachment" onClick={() => onForget(item.id)}><X size={13} aria-hidden="true" /></button> : null}
+    </div>)}
+    {loading ? <span className="attachment-drafts__state" role="status">Loading attachments…</span> : busy && !uploads.length ? <span className="attachment-drafts__state" role="status">Updating attachments…</span> : null}
+    {loadError ? <div className="attachment-drafts__load-error"><span>Could not restore attachments.</span>{onReload ? <button type="button" className="link-btn" disabled={disabled || busy} onClick={onReload}>Retry</button> : null}</div> : null}
+  </div> : null;
 }

@@ -12,7 +12,7 @@ import { MOD } from '../ui';
 import { Popover } from '../git/Popover';
 import { UsagePanel } from '../UsagePanel';
 import { AgentIdentity } from './AgentIdentity';
-import { AttachmentDrafts, useAttachmentDraft } from '../AttachmentDrafts';
+import { AttachmentDrafts, AttachmentTray, useAttachmentDraft } from '../AttachmentDrafts';
 
 const COMMANDS = [
   { name: 'new', description: 'Create a new session' },
@@ -313,6 +313,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
           {picked.length ? <button type="button" className="recips__clear" onClick={() => setPicked([])}>Clear selection</button> : null}
         </div>
         <label htmlFor={`composer-${anchor.id}`} className="sr-only">Message the group</label>
+        <AttachmentTray attachments={attachments} busy={attachmentDraft.busy} uploads={attachmentDraft.uploads} onRetry={attachmentDraft.retry} onForget={attachmentDraft.forget} loading={attachmentDraft.loading} loadError={attachmentDraft.loadError} onReload={attachmentDraft.reload} onRemove={(id) => void attachmentDraft.remove(id)} disabled={sending || Boolean(blocker)} />
         <textarea
           id={`composer-${anchor.id}`} ref={ref} className="composer__input" rows={1} value={draft}
           role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded={open}
@@ -368,7 +369,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
             </button>
           </div>
           <div className="composer__send">
-            <AttachmentDrafts scope={{ kind: 'group', id: snapshot.group.id }} attachments={attachments} busy={attachmentDraft.busy} uploads={attachmentDraft.uploads} onRetry={attachmentDraft.retry} onForget={attachmentDraft.forget} loading={attachmentDraft.loading} loadError={attachmentDraft.loadError} onReload={attachmentDraft.reload} onFiles={attachmentDraft.addFiles} onRemove={(id) => void attachmentDraft.remove(id)} disabled={sending || Boolean(blocker)} />
+            <AttachmentDrafts scope={{ kind: 'group', id: snapshot.group.id }} busy={attachmentDraft.busy} onFiles={attachmentDraft.addFiles} disabled={sending || Boolean(blocker)} />
             {anyBusy && !local ? (
               <button type="button" className="sendbtn sendbtn--stop" onClick={() => void stop()} disabled={stopping || connection !== 'online'} aria-label="Pause group and interrupt running members" title="Pause group and interrupt running members"><Square size={12} fill="currentColor" /></button>
             ) : null}
