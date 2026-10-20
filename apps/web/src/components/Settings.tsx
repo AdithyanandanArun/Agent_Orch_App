@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
-import type { AppSettings, Project, ProviderInfo } from '@relay/contracts';
+import type { AppSettings, Project, ProviderInfo, ProviderModel } from '@relay/contracts';
 import { useRelay, type SettingsSection } from '../store/store';
 import { api, errorMessage } from '../lib/api';
 import { Button, InlineError } from './ui';
@@ -14,6 +14,11 @@ import { AntigravityRuntimeSetup } from './AntigravityRuntimeSetup';
 
 const CATEGORIES: { id: SettingsSection; name: string }[] = [
   { id: 'general', name: 'General' }, { id: 'project', name: 'Project' }, { id: 'agents', name: 'Agents' }, { id: 'providers', name: 'Providers' }, { id: 'browser', name: 'Browser' }, { id: 'appearance', name: 'Appearance' },
+];
+const effortName = (id: string, label: string) => ({ low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra High', 'extra-high': 'Extra High', max: 'Max', ultra: 'Ultra' } as Record<string, string>)[id.toLowerCase()] ?? label;
+const serviceTiersFor = (model: ProviderModel | undefined) => [
+  { id: 'standard', name: 'Standard', description: 'Standard service tier.' },
+  ...(model?.serviceTiers ?? []).filter((tier) => tier.id !== 'standard'),
 ];
 function ProviderStatus({ provider }: { provider: ProviderInfo }) {
   return <section className="settings-provider" aria-label={`${provider.name} status`}>
@@ -69,7 +74,7 @@ export function SettingsPage() {
   const selectedModel = models.find((m) => m.id === defaultModel || m.aliases?.includes(defaultModel));
   const selectedModelId = selectedModel?.id ?? defaultModel;
   const efforts = selectedModel?.reasoningEfforts ?? [];
-  const tiers = selectedModel?.serviceTiers ?? [];
+  const tiers = serviceTiersFor(selectedModel);
   const policies = selectedModel?.policies ?? boot.providers.find((p) => p.id === settings.defaultProvider)?.policies ?? [];
   const updateDefaultModel = (value: string) => {
     const nextModel = models.find((model) => model.id === value);
@@ -77,7 +82,7 @@ export function SettingsPage() {
     const patch: Partial<AppSettings> = { [modelKey]: value };
     const nextEfforts = nextModel.reasoningEfforts ?? [];
     if (nextEfforts.length && !nextEfforts.some((item) => item.id === settings.defaultEffort)) patch.defaultEffort = nextModel.defaultReasoningEffort ?? nextEfforts[0]!.id;
-    const nextTiers = nextModel.serviceTiers ?? [];
+    const nextTiers = serviceTiersFor(nextModel);
     if (nextTiers.length && !nextTiers.some((item) => item.id === (settings.defaultServiceTier ?? 'standard'))) patch.defaultServiceTier = nextModel.defaultServiceTier ?? nextTiers[0]!.id;
     void update(patch, 'model');
   };
@@ -99,7 +104,7 @@ export function SettingsPage() {
     if (policies.length && !policies.includes(settings.defaultPolicy)) {
       patch.defaultPolicy = policies.includes('supervised') ? 'supervised' : policies[0]!;
     }
-    const tiers = model?.serviceTiers ?? [];
+    const tiers = serviceTiersFor(model);
     if (tiers.length && !tiers.some((item) => item.id === (settings.defaultServiceTier ?? 'standard'))) {
       patch.defaultServiceTier = model?.defaultServiceTier && tiers.some((item) => item.id === model.defaultServiceTier)
         ? model.defaultServiceTier : tiers[0]!.id;
@@ -125,7 +130,7 @@ export function SettingsPage() {
           <SelectMenu id="st-model" label="Default model" value={selectedModelId} disabled={disabled || models.length === 0} options={models.map((m) => ({ value: m.id, label: m.name }))} onChange={updateDefaultModel} />
         </SettingRow>
         <SettingRow title="Reasoning effort" description="How much reasoning to use for a response." htmlFor="st-effort">
-          <SelectMenu id="st-effort" label="Default effort" value={settings.defaultEffort} displayValue={efforts.length ? efforts.some((item) => item.id === settings.defaultEffort) ? undefined : 'Not available' : 'Native/default'} disabled={disabled || efforts.length === 0} options={efforts.map((item) => ({ value: item.id, label: `${item.label}${item.id === selectedModel?.defaultReasoningEffort ? ' · Default' : ''}`, description: item.description }))} onChange={(value) => void update({ defaultEffort: value }, 'effort')} />
+          <SelectMenu id="st-effort" label="Default effort" value={settings.defaultEffort} displayValue={efforts.length ? efforts.some((item) => item.id === settings.defaultEffort) ? undefined : 'Not available' : settings.defaultProvider === 'antigravity' ? 'Native/default' : effortName(settings.defaultEffort, settings.defaultEffort)} disabled={disabled || efforts.length === 0} options={efforts.map((item) => ({ value: item.id, label: `${effortName(item.id, item.label)}${item.id === selectedModel?.defaultReasoningEffort ? ' · Default' : ''}`, description: item.description }))} onChange={(value) => void update({ defaultEffort: value }, 'effort')} />
         </SettingRow>
         <SettingRow title="Service tier" description="Request speed for the default model." htmlFor="st-tier">
           <SelectMenu id="st-tier" label="Default service tier" value={settings.defaultServiceTier ?? 'standard'} displayValue={tiers.length ? tiers.some((item) => item.id === (settings.defaultServiceTier ?? 'standard')) ? undefined : 'Not available' : 'Native/default'} disabled={disabled || tiers.length === 0} options={tiers.map((item) => ({ value: item.id, label: `${item.id === 'priority' ? 'Fast' : item.name}${item.id === selectedModel?.defaultServiceTier ? ' · Default' : ''}`, description: item.description }))} onChange={(value) => void update({ defaultServiceTier: value }, 'tier')} />
@@ -185,7 +190,7 @@ function AutoCompactSetting({ settings, disabled, update }: { settings: AppSetti
   return <>
     <SettingRow
       title="Auto-compact" htmlFor="st-compact"
-      description="Summarise older conversation automatically as it nears the model’s context limit. The provider’s own reserve may compact earlier, and Codex needs the model to report its context size. Running sessions use a change on their next turn."
+      description="Summarise older conversation automatically as it nears the model’s context limit. The provider’s own reserve may compact earlier, and Codex needs the model to report its context size. Antigravity uses its native compaction threshold. Running sessions use a change on their next turn."
     >
       <SelectMenu id="st-compact" label="Auto-compact" value={mode} disabled={disabled} options={[{ value: 'default', label: 'Provider default' }, { value: 'custom', label: 'Custom percent' }]} onChange={(next) => {
         if (next === 'default') { setMode('default'); if (saved !== null) void update({ autoCompactPercent: null }, 'compact'); }
