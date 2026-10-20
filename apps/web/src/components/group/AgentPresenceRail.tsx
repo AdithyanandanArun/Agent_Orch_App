@@ -76,13 +76,22 @@ export function AgentPresenceRail({
       // Follow the visible transcript, including when a growing composer consumes more height.
       const availableHeight = Math.max(0, (transcript?.clientHeight ?? container.clientHeight) - 24);
       panel.current?.style.setProperty('--agent-presence-max-height', `${Math.min(280, availableHeight)}px`);
+    };
+    const updateDefault = () => {
+      const availableHeight = Math.max(0, (transcript?.clientHeight ?? container.clientHeight) - 24);
       if (preference.current === null) setExpanded(container.clientWidth >= 960 && availableHeight >= 240);
     };
     update();
+    updateDefault();
+    // Context pane width transitions must not switch the bubble's expansion midway through its fade.
+    window.addEventListener('resize', updateDefault);
     const observer = new ResizeObserver(update);
     observer.observe(container);
     if (transcript) observer.observe(transcript);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', updateDefault);
+    };
   }, []);
 
   const toggle = () => {
