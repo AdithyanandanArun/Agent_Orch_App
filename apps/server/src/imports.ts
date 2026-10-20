@@ -113,13 +113,20 @@ export class ImportService {
       if (existing) {
         if (this.runtime.isActive(existing.id) || existing.status === 'running' || existing.status === 'waiting') throw conflict('This conversation is already running in Relay.');
         if (existing.worktreePath !== directory) throw conflict('This conversation already belongs to a Relay session in a different folder. Open that session to continue.');
+        if (!this.store.getProject(existing.projectId)) {
+          const restored = this.store.restoreProject(existing.projectId);
+          this.store.recordEvent({ projectId: restored.id, type: 'project.restored', summary: `Project reopened: ${restored.name}`, payload: { projectId: restored.id } });
+        }
         const archived = !this.store.getSession(existing.id);
         const session = archived ? this.store.restoreSession(existing.id) : existing;
         const project = this.store.getProject(session.projectId)!;
         if (archived) this.store.recordEvent({ projectId: project.id, sessionId: session.id, type: 'session.restored', summary: `Session restored: ${session.name}`, payload: {} });
         return { session, project, alreadyImported: true, notices: ['Opened the existing Relay session; its settings and transcript were kept.'] };
       }
-      const project = this.store.getProjectByPath(directory) ?? this.store.insertProject({ name: path.basename(directory).slice(0, 100) || 'Imported project', path: directory });
+      const prior = this.store.getProjectByPath(directory, true);
+      const removed = prior && !this.store.getProject(prior.id);
+      const project = prior ? this.store.restoreProject(prior.id) : this.store.insertProject({ name: path.basename(directory).slice(0, 100) || 'Imported project', path: directory });
+      if (removed) this.store.recordEvent({ projectId: project.id, type: 'project.restored', summary: `Project reopened: ${project.name}`, payload: { projectId: project.id } });
       const created = this.store.insertSession({ projectId: project.id, name: redactSecrets(details.conversation.title).trim().slice(0, 100) || 'Imported conversation',
         provider, model, effort: config.effort, policy: 'supervised', serviceTier: 'standard', isolated: false, worktreePath: directory, branch: info.isRepo ? info.branch : null });
       const session = this.store.updateSession(created.id, { providerSessionId: id });

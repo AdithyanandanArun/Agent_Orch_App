@@ -34,8 +34,16 @@ export class WorkspaceService {
     const stat = await fsp.stat(real);
     if (!stat.isDirectory()) throw badRequest('Project path is not a directory');
     if (real === path.parse(real).root) throw badRequest('Refusing to open the filesystem root as a project');
-    const existing = this.store.getProjectByPath(real);
-    if (existing) return { project: existing, created: false };
+    const existing = this.store.getProjectByPath(real, true);
+    if (existing) {
+      if (this.store.getProject(existing.id)) return { project: existing, created: false };
+      const project = this.store.tx(() => {
+        const restored = this.store.restoreProject(existing.id);
+        this.store.recordEvent({ projectId: restored.id, type: 'project.restored', summary: `Project reopened: ${restored.name}`, payload: { projectId: restored.id } });
+        return restored;
+      });
+      return { project, created: false };
+    }
     const project = this.store.tx(() => {
       const created = this.store.insertProject({ name: input.name, path: real });
       this.store.recordEvent({ projectId: created.id, type: 'project.created', summary: `Project opened: ${created.name}`, payload: { projectId: created.id } });
@@ -53,6 +61,23 @@ export class WorkspaceService {
       this.store.recordEvent({ projectId: id, type: 'project.renamed', summary: `Project renamed: ${project.name} → ${name}`, payload: { from: project.name, to: name } });
       return updated;
     });
+  }
+
+  /** Removes the project from Relay. Sessions, native history, repository files and worktrees remain intact. */
+  removeProject(id: string): string[] {
+    const project = this.store.getProject(id);
+    if (!project) throw notFound('Project not found');
+    const sessions = this.store.listSessions(id);
+    if (sessions.some((session) => this.runtime.isActive(session.id) || session.status === 'running' || session.status === 'waiting')) {
+      throw conflict('Stop the project’s agents before removing it.');
+    }
+    const dispatching = this.store.db.prepare("SELECT 1 FROM group_deliveries d JOIN conversation_groups g ON g.id = d.group_id WHERE g.project_id = ? AND d.status = 'running' LIMIT 1").get(id);
+    if (dispatching) throw conflict('Stop the project’s team work before removing it.');
+    this.store.tx(() => {
+      this.store.removeProject(id);
+      this.store.recordEvent({ type: 'project.removed', summary: `Project removed from Relay: ${project.name}`, payload: { projectId: id, filesKept: true } });
+    });
+    return sessions.map((session) => session.id);
   }
 
   async createSession(input: CreateSession): Promise<Session> {

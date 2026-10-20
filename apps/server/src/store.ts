@@ -5,6 +5,8 @@ import { newId, nowIso } from './util.ts';
 
 type Row = Record<string, unknown>;
 const RUN_FIELDS = 'id, session_id, user_message_id, provider, model, status, started_at, finished_at, duration_ms, changes_summary';
+const VISIBLE_PROJECTS = 'SELECT id FROM projects WHERE archived_at IS NULL';
+const VISIBLE_SESSIONS = `SELECT id FROM sessions WHERE archived_at IS NULL AND project_id IN (${VISIBLE_PROJECTS})`;
 
 export const DEFAULT_SETTINGS: AppSettings = {
   defaultProvider: 'codex', defaultCodexModel: 'gpt-6.1-sol', defaultClaudeModel: 'claude-sonnet-5-5', defaultAntigravityModel: 'default', defaultOpencodeModel: 'default', defaultEffort: 'high', defaultIsolated: true,
@@ -110,16 +112,24 @@ export class Store {
     this.run('UPDATE projects SET name = ? WHERE id = ?', name, id);
     return this.getProject(id)!;
   }
-  getProject(id: string): Project | undefined {
-    const row = this.get('SELECT * FROM projects WHERE id = ?', id);
+  getProject(id: string, includeRemoved = false): Project | undefined {
+    const row = this.get(`SELECT * FROM projects WHERE id = ?${includeRemoved ? '' : ' AND archived_at IS NULL'}`, id);
     return row ? mapProject(row) : undefined;
   }
-  getProjectByPath(path: string): Project | undefined {
-    const row = this.get('SELECT * FROM projects WHERE path = ?', path);
+  getProjectByPath(path: string, includeRemoved = false): Project | undefined {
+    const row = this.get(`SELECT * FROM projects WHERE path = ?${includeRemoved ? '' : ' AND archived_at IS NULL'}`, path);
     return row ? mapProject(row) : undefined;
   }
   listProjects(): Project[] {
-    return this.all('SELECT * FROM projects ORDER BY is_example ASC, created_at ASC').map(mapProject);
+    return this.all('SELECT * FROM projects WHERE archived_at IS NULL ORDER BY is_example ASC, created_at ASC').map(mapProject);
+  }
+  restoreProject(id: string): Project {
+    this.run('UPDATE projects SET archived_at = NULL WHERE id = ?', id);
+    return this.getProject(id)!;
+  }
+  removeProject(id: string): void {
+    this.run('UPDATE projects SET archived_at = ? WHERE id = ?', nowIso(), id);
+    this.run('UPDATE conversation_groups SET paused = 1, pause_reason = ?, updated_at = ? WHERE project_id = ?', 'Project removed from Relay. Resume explicitly after reopening it.', nowIso(), id);
   }
 
   // sessions
@@ -134,13 +144,13 @@ export class Store {
     return this.getSession(id)!;
   }
   getSession(id: string, includeArchived = false): Session | undefined {
-    const row = this.get(`SELECT * FROM sessions WHERE id = ?${includeArchived ? '' : ' AND archived_at IS NULL'}`, id);
+    const row = this.get(`SELECT * FROM sessions WHERE id = ? AND project_id IN (${VISIBLE_PROJECTS})${includeArchived ? '' : ' AND archived_at IS NULL'}`, id);
     return row ? mapSession(row) : undefined;
   }
   listSessions(projectId?: string): Session[] {
     const rows = projectId
-      ? this.all('SELECT * FROM sessions WHERE archived_at IS NULL AND project_id = ? ORDER BY created_at ASC, rowid ASC', projectId)
-      : this.all('SELECT * FROM sessions WHERE archived_at IS NULL ORDER BY created_at ASC, rowid ASC');
+      ? this.all(`SELECT * FROM sessions WHERE id IN (${VISIBLE_SESSIONS}) AND project_id = ? ORDER BY created_at ASC, rowid ASC`, projectId)
+      : this.all(`SELECT * FROM sessions WHERE id IN (${VISIBLE_SESSIONS}) ORDER BY created_at ASC, rowid ASC`);
     return rows.map(mapSession);
   }
   updateSession(id: string, patch: Partial<Pick<Session, 'name' | 'provider' | 'model' | 'effort' | 'policy' | 'serviceTier' | 'status' | 'error' | 'providerSessionId' | 'inputTokens' | 'outputTokens' | 'costUsd' | 'pinned' | 'unread' | 'branch'>>): Session {
@@ -170,7 +180,7 @@ export class Store {
     return this.getSession(id)!;
   }
   sessionsInStatus(statuses: SessionStatus[]): Session[] {
-    return this.all(`SELECT * FROM sessions WHERE archived_at IS NULL AND status IN (${statuses.map(() => '?').join(',')})`, ...statuses).map(mapSession);
+    return this.all(`SELECT * FROM sessions WHERE id IN (${VISIBLE_SESSIONS}) AND status IN (${statuses.map(() => '?').join(',')})`, ...statuses).map(mapSession);
   }
 
   // durable runs and tool invocations
@@ -205,7 +215,7 @@ export class Store {
     return { summary: JSON.parse(row.changes_summary as string) as RunChangesSummary, diff: (row.changes_diff as string | null) ?? '', diffTruncated: row.changes_diff_truncated === 1 };
   }
   bootstrapRuns(limit = 200): SessionRun[] {
-    return this.all(`SELECT ${RUN_FIELDS.split(', ').map(field => `r.${field}`).join(', ')} FROM session_runs r JOIN sessions s ON s.id = r.session_id WHERE s.archived_at IS NULL
+    return this.all(`SELECT ${RUN_FIELDS.split(', ').map(field => `r.${field}`).join(', ')} FROM session_runs r JOIN sessions s ON s.id = r.session_id WHERE s.id IN (${VISIBLE_SESSIONS})
       ORDER BY (r.status = 'running') DESC, r.rowid DESC LIMIT ?`, limit).map((row) => this.mapRun(row));
   }
   putToolCall(call: ToolCall): void {
@@ -264,7 +274,7 @@ export class Store {
   /** Most recent `perSession` messages of every active session, oldest first within each session. */
   bootstrapMessages(perSession: number): Message[] {
     const rows = this.all(
-      `SELECT m.* FROM messages m JOIN sessions s ON s.id = m.session_id AND s.archived_at IS NULL
+      `SELECT m.* FROM messages m JOIN sessions s ON s.id = m.session_id AND s.id IN (${VISIBLE_SESSIONS})
        WHERE m.seq IN (SELECT seq FROM messages m2 WHERE m2.session_id = m.session_id ORDER BY seq DESC LIMIT ?) ORDER BY m.seq ASC`,
       perSession,
     );
@@ -296,12 +306,12 @@ export class Store {
     const limit = Math.min(Math.max(options.limit ?? 1000, 1), 5000);
     const after = options.after ?? 0;
     const rows = options.projectId
-      ? this.all('SELECT * FROM events WHERE id > ? AND (project_id = ? OR project_id IS NULL) ORDER BY id ASC LIMIT ?', after, options.projectId, limit)
-      : this.all('SELECT * FROM events WHERE id > ? ORDER BY id ASC LIMIT ?', after, limit);
+      ? this.all(`SELECT * FROM events WHERE id > ? AND (project_id IS NULL OR project_id IN (${VISIBLE_PROJECTS})) AND (project_id = ? OR project_id IS NULL) ORDER BY id ASC LIMIT ?`, after, options.projectId, limit)
+      : this.all(`SELECT * FROM events WHERE id > ? AND (project_id IS NULL OR project_id IN (${VISIBLE_PROJECTS})) ORDER BY id ASC LIMIT ?`, after, limit);
     return rows.map(mapEvent);
   }
   recentEvents(limit: number): WorkspaceEvent[] {
-    return this.all('SELECT * FROM events ORDER BY id DESC LIMIT ?', limit).reverse().map(mapEvent);
+    return this.all(`SELECT * FROM events WHERE project_id IS NULL OR project_id IN (${VISIBLE_PROJECTS}) ORDER BY id DESC LIMIT ?`, limit).reverse().map(mapEvent);
   }
 
   // approvals
@@ -320,13 +330,13 @@ export class Store {
   }
   pendingApprovals(sessionId?: string): Approval[] {
     const rows = sessionId
-      ? this.all("SELECT * FROM approvals WHERE status = 'pending' AND session_id = ? ORDER BY created_at ASC, rowid ASC", sessionId)
-      : this.all("SELECT * FROM approvals WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC");
+      ? this.all(`SELECT * FROM approvals WHERE status = 'pending' AND session_id IN (${VISIBLE_SESSIONS}) AND session_id = ? ORDER BY created_at ASC, rowid ASC`, sessionId)
+      : this.all(`SELECT * FROM approvals WHERE status = 'pending' AND session_id IN (${VISIBLE_SESSIONS}) ORDER BY created_at ASC, rowid ASC`);
     return rows.map(mapApproval);
   }
   bootstrapApprovals(resolvedLimit: number): Approval[] {
     const pending = this.pendingApprovals();
-    const resolved = this.all("SELECT * FROM approvals WHERE status <> 'pending' ORDER BY rowid DESC LIMIT ?", resolvedLimit).reverse().map(mapApproval);
+    const resolved = this.all(`SELECT * FROM approvals WHERE status <> 'pending' AND session_id IN (${VISIBLE_SESSIONS}) ORDER BY rowid DESC LIMIT ?`, resolvedLimit).reverse().map(mapApproval);
     return [...resolved, ...pending];
   }
 
@@ -385,11 +395,11 @@ export class Store {
     return this.getTask(id)!;
   }
   getTask(id: string): Task | undefined {
-    const row = this.get('SELECT * FROM tasks WHERE id = ?', id);
+    const row = this.get(`SELECT * FROM tasks WHERE id = ? AND project_id IN (${VISIBLE_PROJECTS})`, id);
     return row ? this.mapTask(row) : undefined;
   }
   listTasks(projectId?: string): Task[] {
-    const rows = projectId ? this.all('SELECT * FROM tasks WHERE project_id = ? ORDER BY created_at ASC, rowid ASC', projectId) : this.all('SELECT * FROM tasks ORDER BY created_at ASC, rowid ASC');
+    const rows = projectId ? this.all(`SELECT * FROM tasks WHERE project_id = ? AND project_id IN (${VISIBLE_PROJECTS}) ORDER BY created_at ASC, rowid ASC`, projectId) : this.all(`SELECT * FROM tasks WHERE project_id IN (${VISIBLE_PROJECTS}) ORDER BY created_at ASC, rowid ASC`);
     return rows.map((r) => this.mapTask(r));
   }
   updateTask(id: string, patch: { title?: string; description?: string; acceptanceCriteria?: string; sessionId?: string | null; status?: TaskStatus; dependsOn?: string[] }): Task {
@@ -409,10 +419,10 @@ export class Store {
     return this.getTask(id)!;
   }
   dependentsOf(taskId: string): Task[] {
-    return this.all('SELECT t.* FROM tasks t JOIN task_deps d ON d.task_id = t.id WHERE d.depends_on = ? ORDER BY t.rowid ASC', taskId).map((r) => this.mapTask(r));
+    return this.all(`SELECT t.* FROM tasks t JOIN task_deps d ON d.task_id = t.id WHERE d.depends_on = ? AND t.project_id IN (${VISIBLE_PROJECTS}) ORDER BY t.rowid ASC`, taskId).map((r) => this.mapTask(r));
   }
   tasksInStatus(status: TaskStatus): Task[] {
-    return this.all('SELECT * FROM tasks WHERE status = ?', status).map((r) => this.mapTask(r));
+    return this.all(`SELECT * FROM tasks WHERE status = ? AND project_id IN (${VISIBLE_PROJECTS})`, status).map((r) => this.mapTask(r));
   }
   unassignTasksOfSession(sessionId: string): Task[] {
     const tasks = this.all('SELECT * FROM tasks WHERE session_id = ?', sessionId).map((r) => this.mapTask(r));
@@ -423,11 +433,11 @@ export class Store {
   counts(): { projects: number; sessions: number; tasks: number; events: number; pendingApprovals: number } {
     const n = (sql: string) => Number((this.get(sql) as Row).n);
     return {
-      projects: n('SELECT COUNT(*) AS n FROM projects'),
-      sessions: n('SELECT COUNT(*) AS n FROM sessions WHERE archived_at IS NULL'),
-      tasks: n('SELECT COUNT(*) AS n FROM tasks'),
+      projects: n('SELECT COUNT(*) AS n FROM projects WHERE archived_at IS NULL'),
+      sessions: n(`SELECT COUNT(*) AS n FROM sessions WHERE id IN (${VISIBLE_SESSIONS})`),
+      tasks: n(`SELECT COUNT(*) AS n FROM tasks WHERE project_id IN (${VISIBLE_PROJECTS})`),
       events: n('SELECT COUNT(*) AS n FROM events'),
-      pendingApprovals: n("SELECT COUNT(*) AS n FROM approvals WHERE status = 'pending'"),
+      pendingApprovals: n(`SELECT COUNT(*) AS n FROM approvals WHERE status = 'pending' AND session_id IN (${VISIBLE_SESSIONS})`),
     };
   }
 

@@ -150,6 +150,8 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
     const restore = db.prepare('UPDATE group_assignment_inputs SET artifact_id = ? WHERE assignment_id = ? AND task_id = ? AND path = ?');
     for (const link of links) restore.run(link.artifact_id, link.assignment_id, link.task_id, link.path);
   },
+  `ALTER TABLE projects ADD COLUMN archived_at TEXT;
+   CREATE INDEX projects_visible ON projects(archived_at);`,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
