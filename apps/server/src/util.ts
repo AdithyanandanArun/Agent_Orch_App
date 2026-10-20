@@ -28,6 +28,8 @@ export function errorMessage(error: unknown): string {
 const SECRET_PATTERNS: RegExp[] = [
   /sk-ant-[A-Za-z0-9_-]{8,}/g,
   /sk-[A-Za-z0-9_-]{20,}/g,
+  /AIza[A-Za-z0-9_-]{30,}/g,
+  /ya29\.[A-Za-z0-9._~-]{16,}/g,
   /(Bearer\s+)[A-Za-z0-9._~+/=-]{16,}/gi,
   /(gh[pousr]_)[A-Za-z0-9]{20,}/g,
   /(api[_-]?key["'=:\s]+)[A-Za-z0-9._-]{16,}/gi,
@@ -36,7 +38,7 @@ const SECRET_PATTERNS: RegExp[] = [
 /** Best-effort scrubbing of well-known credential shapes before text is persisted or logged. */
 export function redactSecrets(text: string): string {
   let out = text;
-  for (const key of ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'CODEX_API_KEY']) {
+  for (const key of ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'CODEX_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY']) {
     const value = process.env[key];
     if (value && value.length >= 8) out = out.split(value).join('[redacted]');
   }
