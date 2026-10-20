@@ -54,6 +54,19 @@ export function AgentPresenceRail({
   const listId = useId();
   const preference = useRef<boolean | null>(null);
   const [expanded, setExpanded] = useState(true);
+  const presence = members.map((member) => memberPresence({
+    snapshot, member, session: sessions.find((session) => session.id === member.sessionId), runs, approvals, connection,
+  }));
+  const workingCount = presence.filter((state) => state.working).length;
+  const queuedCount = presence.reduce((total, state) => total + state.queuedCount, 0);
+  const needsApproval = presence.some((state) => state.state === 'approval');
+  const otherState = presence.find((state) => ['error', 'unavailable', 'paused', 'interrupted'].includes(state.state));
+  const activity = needsApproval ? 'Needs approval'
+    : workingCount ? `${workingCount} working${queuedCount ? ` · ${queuedCount} queued` : ''}`
+      : queuedCount ? `${queuedCount} queued`
+        : otherState?.label ?? (members.length ? 'All idle' : 'No agents');
+  const caption = connection === 'connecting' ? 'Reconnecting' : connection === 'offline' ? 'Offline'
+    : expanded ? members.length : activity;
 
   useLayoutEffect(() => {
     const container = panel.current?.parentElement;
@@ -81,7 +94,7 @@ export function AgentPresenceRail({
     <aside ref={panel} className={`agent-presence${expanded ? ' is-expanded' : ' is-collapsed'}${hidden ? ' is-hidden' : ''}`} aria-label="Agent presence" aria-hidden={hidden} inert={hidden}>
       <header className="agent-presence__head">
         <strong>Agents</strong>
-        <span>{connection === 'online' ? members.length : connection === 'connecting' ? 'Reconnecting' : 'Offline'}</span>
+        <span>{caption}</span>
         <button type="button" className="agent-presence__toggle" aria-label={expanded ? 'Collapse agent presence' : 'Expand agent presence'} aria-expanded={expanded} aria-controls={listId} onClick={toggle}>
           <span aria-hidden="true">{expanded ? '−' : '+'}</span>
         </button>
