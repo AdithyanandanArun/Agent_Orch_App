@@ -1,13 +1,18 @@
 import { tmpdir } from 'node:os';
 import { chmod, mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { AppSettings, ProviderInfo, ProviderModel } from '@relay/contracts';
+import type { AntigravityAuthState, AppSettings, ProviderInfo, ProviderModel } from '@relay/contracts';
 import { abortError, isRecord } from '../common.js';
 import { closeAntigravity, markAntigravityAuthenticated, rememberAntigravityMetadata, resolveAntigravity, safeAntigravityError, startAntigravity, type AntigravityRuntime } from './runtime.js';
 import { choices, configuration, object, parseAntigravityMetadata } from './metadata.js';
 
 const AUTH_TIMEOUT = 5 * 60_000;
-async function refresh(settings: AppSettings, authenticate: boolean, signal?: AbortSignal): Promise<ProviderInfo> {
+interface AuthOptions {
+  signal?: AbortSignal;
+  onProgress?: (progress: Pick<AntigravityAuthState, 'phase' | 'authorizationUrl'>) => void;
+}
+async function refresh(settings: AppSettings, authenticate: boolean, options: AuthOptions = {}): Promise<ProviderInfo> {
+  const { signal } = options;
   const found = await resolveAntigravity(settings);
   if (!found.ok) return { id: 'antigravity', name: 'Google Antigravity', available: false, version: null, executable: null, reason: found.reason, models: [] };
   const timeout = new AbortController();
@@ -24,6 +29,7 @@ async function refresh(settings: AppSettings, authenticate: boolean, signal?: Ab
     workspace = await mkdtemp(join(tmpdir(), 'relay-antigravity-metadata-'));
     if (process.platform !== 'win32') await chmod(workspace, 0o700);
     runtime = await startAntigravity(found.executable.path, found.executable.companion, { cwd: workspace, timeoutMs: remaining(12_000), signal: combined,
+      ...(authenticate ? { onAuthorizationUrl: (authorizationUrl: string) => options.onProgress?.({ phase: 'waiting-for-browser', authorizationUrl }) } : {}),
       notification: (method, params) => {
         const data = object(params); const update = object(data.update);
         if (method === 'session/update' && (!sessionId || data.sessionId === sessionId) && update.sessionUpdate === 'available_commands_update' && Array.isArray(update.availableCommands)) commands = update.availableCommands.slice(0, 100);
@@ -31,6 +37,7 @@ async function refresh(settings: AppSettings, authenticate: boolean, signal?: Ab
     });
     if (authenticate) await runtime.conn.request('authenticate', { methodId: 'oauth-personal' }, remaining(AUTH_TIMEOUT));
     if (combined.aborted) throw abortError();
+    options.onProgress?.({ phase: 'loading-models' });
     const response: unknown = await runtime.conn.request('session/new', { cwd: workspace, mcpServers: [] }, remaining(60_000));
     if (!isRecord(response) || typeof response.sessionId !== 'string' || !response.sessionId) throw new Error('Antigravity did not return an authenticated metadata session.');
     sessionId = response.sessionId;
@@ -64,7 +71,7 @@ async function refresh(settings: AppSettings, authenticate: boolean, signal?: Ab
     if (workspace && runtime) await rm(workspace, { recursive: true, force: true }).catch(() => {});
   }
 }
-/** Explicit Settings action: Google's runtime opens the browser and stores its own credentials. */
-export function authenticateAntigravity(settings: AppSettings, options: { signal?: AbortSignal } = {}): Promise<ProviderInfo> { return refresh(settings, true, options.signal); }
+/** Explicit Settings action: Google owns authentication; Relay launches its native link on the host. */
+export function authenticateAntigravity(settings: AppSettings, options: AuthOptions = {}): Promise<ProviderInfo> { return refresh(settings, true, options); }
 /** Explicit action only: native session setup may reopen Google sign-in if its credentials expired. */
-export function probeAuthenticatedAntigravity(settings: AppSettings, options: { signal?: AbortSignal } = {}): Promise<ProviderInfo> { return refresh(settings, false, options.signal); }
+export function probeAuthenticatedAntigravity(settings: AppSettings, options: { signal?: AbortSignal } = {}): Promise<ProviderInfo> { return refresh(settings, false, options); }

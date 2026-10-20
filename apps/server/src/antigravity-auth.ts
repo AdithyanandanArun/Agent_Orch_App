@@ -1,6 +1,7 @@
 import type { AntigravityAuthState, AppSettings } from '@relay/contracts';
 import { authenticateAntigravity } from './providers/index.ts';
 import { errorMessage, redactSecrets, truncate } from './util.ts';
+import { openGoogleAuthorization } from './providers/antigravity/auth-browser.js';
 
 interface AuthJob {
   executable: string; controller: AbortController; status: AntigravityAuthState; settled?: Promise<void>;
@@ -27,9 +28,19 @@ export function startAntigravityAuth(dataDir: string, settings: AppSettings, onA
   const executable = settings.antigravityExecutable ?? '';
   if (previous?.status.state === 'authenticating' && previous.executable === executable) return { ...previous.status };
   previous?.controller.abort();
-  const job: AuthJob = { executable, controller: new AbortController(), status: { state: 'authenticating', error: null } };
+  const job: AuthJob = { executable, controller: new AbortController(), status: { state: 'authenticating', phase: 'starting', error: null } };
   jobs.set(dataDir, job);
-  job.settled = authenticateAntigravity(settings, { signal: job.controller.signal }).then((provider) => {
+  job.settled = authenticateAntigravity(settings, { signal: job.controller.signal, onProgress: (progress) => {
+    if (jobs.get(dataDir) !== job || job.controller.signal.aborted || job.status.state !== 'authenticating') return;
+    const previousUrl = job.status.authorizationUrl;
+    job.status = { state: 'authenticating', error: null, ...progress };
+    const url = progress.authorizationUrl;
+    if (url && url !== previousUrl) void openGoogleAuthorization(url, job.controller.signal).catch(() => {
+      if (jobs.get(dataDir) === job && !job.controller.signal.aborted && job.status.authorizationUrl === url) {
+        job.status.browserError = 'The default browser could not be opened. Use Open Google sign-in below.';
+      }
+    });
+  } }).then((provider) => {
     if (jobs.get(dataDir) !== job || job.controller.signal.aborted) return;
     if (!provider.available) throw new Error(provider.reason ?? 'Antigravity sign-in did not complete.');
     job.status = { state: 'authenticated', error: null };
