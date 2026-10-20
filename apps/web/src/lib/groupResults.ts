@@ -311,16 +311,16 @@ export function buildGroupResultModel({ snapshot, sessions, messages, runs, task
     summary = `${plural(activeTurns, 'turn')} running or queued. What follows is partial until they finish.`;
   } else if (failed) {
     status = 'failed'; title = 'A turn failed';
-    summary = 'Work did not complete. See the agent details for the recorded failure.';
+    summary = 'A request turn failed. See the agent details for the recorded error.';
   } else if (stopped) {
     status = 'stopped'; title = 'Stopped before finishing';
-    summary = 'A turn was interrupted or cancelled, so this work may be incomplete.';
+    summary = 'A request turn was interrupted or cancelled. Task statuses and reports are shown below.';
   } else if (blocked) {
     status = 'blocked'; title = 'Blocked';
     summary = `${plural(blocked, 'task')} reported as blocked.`;
   } else if (unfinished) {
     status = 'follow-up'; title = 'Follow-up needed';
-    summary = `${plural(unfinished, 'task')} still ${unfinished === 1 ? 'is' : 'are'} backlog, ready or running although the turns have ended.`;
+    summary = `${plural(unfinished, 'assigned task')} still ${unfinished === 1 ? 'needs' : 'need'} follow-up.`;
   } else if (request.status === 'active') {
     status = 'finalizing'; title = 'Finalizing request';
     summary = 'All turns have ended, but the request is not recorded as completed yet.';
