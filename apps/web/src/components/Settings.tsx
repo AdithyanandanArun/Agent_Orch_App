@@ -8,6 +8,7 @@ import { copyText } from '../lib/clipboard';
 import { SelectMenu } from './SelectMenu';
 import { SettingRow } from './SettingRow';
 import { BrowserSettings } from './browser/BrowserSettings';
+import { AccountSettings } from './AccountSettings';
 import { AgentsSettings } from './AgentsSettings';
 import { defaultProviderModel, usesNativeModelDefault, providerModelChoices, providerModelSetting, PROVIDER_NAMES } from '../lib/providers';
 import { AntigravityRuntimeSetup } from './AntigravityRuntimeSetup';
@@ -15,7 +16,7 @@ import { ProviderExecutableSetting, executableSetting } from './ProviderExecutab
 import { RemoveProjectButton } from './RemoveProjectDialog';
 
 const CATEGORIES: { id: SettingsSection; name: string }[] = [
-  { id: 'general', name: 'General' }, { id: 'project', name: 'Project' }, { id: 'agents', name: 'Agents' }, { id: 'providers', name: 'Providers' }, { id: 'browser', name: 'Browser' }, { id: 'appearance', name: 'Appearance' },
+  { id: 'general', name: 'General' }, { id: 'account', name: 'Account' }, { id: 'project', name: 'Project' }, { id: 'agents', name: 'Agents' }, { id: 'providers', name: 'Providers' }, { id: 'browser', name: 'Browser' }, { id: 'appearance', name: 'Appearance' },
 ];
 const effortName = (id: string, label: string) => ({ low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra High', 'extra-high': 'Extra High', max: 'Max', ultra: 'Ultra' } as Record<string, string>)[id.toLowerCase()] ?? label;
 const serviceTiersFor = (model: ProviderModel | undefined) => [
@@ -109,15 +110,16 @@ export function SettingsPage() {
     }
     void update(patch, 'provider');
   };
-  const status = busy === 'providers' ? 'Checking providers…' : busy ? 'Saving…' : error ? 'Could not complete change' : category === 'providers' ? 'Provider settings' : saved ? 'All changes saved' : category === 'project' ? 'Project details' : 'Changes save automatically';
+  const status = category === 'account' ? 'Mingle account' : busy === 'providers' ? 'Checking providers…' : busy ? 'Saving…' : error ? 'Could not complete change' : category === 'providers' ? 'Provider settings' : saved ? 'All changes saved' : category === 'project' ? 'Project details' : 'Changes save automatically';
 
   return <div className="settings-page" aria-labelledby="settings-title">
     <div className="settings-page__inner">
-      <header className="settings-page__head"><div><h1 id="settings-title" tabIndex={-1}>Settings</h1><p>Projects, models and appearance.</p></div><span className="settings-page__save" role="status">{status}</span></header>
+      <header className="settings-page__head"><div><h1 id="settings-title" tabIndex={-1}>Settings</h1><p>Account, projects, models and appearance.</p></div><span className="settings-page__save" role="status">{status}</span></header>
       <nav className="settings-page__tabs" aria-label="Settings sections">
         {CATEGORIES.filter((item) => item.id !== 'project' || project).map((item) => <button type="button" key={item.id} aria-current={category === item.id ? 'page' : undefined} onClick={() => setCategory(item.id)}>{item.name}</button>)}
       </nav>
       {error ? <InlineError>{error}</InlineError> : null}
+      {category === 'account' ? <AccountSettings settings={settings} /> : null}
       {category === 'general' ? <div className="settings-page__section">
         <div className="settings-page__section-head"><h2>New sessions</h2><p>Defaults for your next session. Existing conversations keep their own settings.</p></div>
         <SettingRow title="Provider" description="The agent used when you start a session." htmlFor="st-provider">
@@ -155,7 +157,7 @@ export function SettingsPage() {
         }} />)}
         {!boot.providers.length ? <p className="settings-page__hint">Provider information is loading. Re-check to request a fresh status.</p> : null}
         <AntigravityRuntimeSetup providerInfo={boot.providers.find((provider) => provider.id === 'antigravity')} onProviderChanged={refreshAntigravityAfterInstall} />
-        <div className="settings-page__login"><p>Sign in on this machine with <code>claude auth login</code> or <code>codex login</code>, then re-check. Antigravity sign-in opens its native Google browser flow. OpenCode uses its own provider logins (<code>opencode providers login</code>) and lists the models it exposes; Mingle never reads its credential files.</p><p>Claude uses its existing login. An <code>ANTHROPIC_API_KEY</code> in the server environment takes precedence and uses API billing. Mingle stores no credentials.</p></div>
+        <div className="settings-page__login"><p>Sign in on this machine with <code>claude auth login</code> or <code>codex login</code>, then re-check. Antigravity sign-in opens its native Google browser flow. OpenCode uses its own provider logins (<code>opencode providers login</code>) and lists the models it exposes; Mingle never reads its credential files.</p><p>Claude uses its existing login. An <code>ANTHROPIC_API_KEY</code> in the server environment takes precedence and uses API billing. Provider credentials stay with each provider.</p></div>
       </div> : null}
       {category === 'appearance' ? <div className="settings-page__section">
         <div className="settings-page__section-head"><h2>Appearance</h2><p>Simple surfaces, readable text and quiet controls.</p></div>

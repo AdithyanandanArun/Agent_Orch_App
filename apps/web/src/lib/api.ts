@@ -2,7 +2,7 @@ import type {
   AddGroupAgent, AntigravityAuthState, AntigravityInstallState, Approval, AppSettings, Bootstrap, BrowserAction, BrowserConnect, BrowserDiscovery, BrowserSessionState, BrowserTab, CreateGroup, DirectoryListing, ExternalConversationDetails, ExternalConversationList, FileEntry, GitHubState, GitStatus, GroupMode, GroupSnapshot, ImportConversationResult, Project, ProjectContext, ProviderCatalog, ProviderInfo,
   RepositoryBranch, RepositoryCommit, RepositoryMutationResult, RepositoryPullRequest, RepositoryPush, RepositoryState, RunChanges, SendGroupMessage, Session, SessionUsage, ToolCall, Task, TaskStatus, WorkspaceEvent,
 } from '@mingle/contracts';
-import type { AttachmentRef, NativeActionCatalog } from '@mingle/contracts';
+import type { AccountState, AccountConnection, AccountPreferences, SavedAccountPreferences, AttachmentRef, NativeActionCatalog } from '@mingle/contracts';
 export type { ProviderCatalog } from '@mingle/contracts';
 
 export class ApiError extends Error {
@@ -106,6 +106,13 @@ const groupBase = (groupId: string): string => `/api/groups/${encodeURIComponent
 const browserBase = (sessionId: string): string => `/api/sessions/${encodeURIComponent(sessionId)}/browser`;
 
 export const api = {
+  account: (signal?: AbortSignal) => json<AccountState>('/api/account', 'GET', undefined, signal),
+  accountConnection: (connection: AccountConnection) => json<AccountState>('/api/account/connection', 'PUT', connection),
+  accountSignIn: () => json<AccountState>('/api/account/sign-in', 'POST', {}),
+  accountCancelSignIn: () => json<AccountState>('/api/account/sign-in', 'DELETE', {}),
+  accountSignOut: () => json<AccountState>('/api/account/sign-out', 'POST', {}),
+  accountPreferences: (signal?: AbortSignal) => json<SavedAccountPreferences | null>('/api/account/preferences', 'GET', undefined, signal),
+  saveAccountPreferences: (preferences: AccountPreferences, expectedRevision: number | null) => json<SavedAccountPreferences>('/api/account/preferences', 'PUT', { preferences, expectedRevision }),
   bootstrap: (signal?: AbortSignal) => json<Bootstrap>('/api/bootstrap', 'GET', undefined, signal),
   createProject: (input: { name: string; path: string }) => json<Project>('/api/projects', 'POST', input),
   directories: (path: string, query: string, hidden: boolean, signal?: AbortSignal) =>
