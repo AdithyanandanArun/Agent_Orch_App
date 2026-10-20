@@ -61,14 +61,15 @@ export class AcpConnection {
       const newline = this.buffer.indexOf('\n'); if (newline < 0) break;
       const line = this.buffer.slice(0, newline).replace(/\r$/, ''); this.buffer = this.buffer.slice(newline + 1);
       if (this.discarding) { this.discarding = false; continue; }
+      if (line.length > MAX_LINE) { this.hooks.issue?.('Dropped an oversized ACP JSON-RPC line.'); continue; }
       if (line.trim()) this.dispatch(line);
     }
     if (this.buffer.length > MAX_LINE) { this.hooks.issue?.('Dropped an oversized ACP JSON-RPC line.'); this.buffer = ''; this.discarding = true; }
   }
   private dispatch(line: string): void {
     let value: unknown;
-    try { value = JSON.parse(line); } catch { this.hooks.issue?.(`Ignored non-JSON ACP output: ${truncate(redactSecrets(line), 160)}`); return; }
-    if (!isRecord(value)) { this.hooks.issue?.('Ignored ACP message that was not an object.'); return; }
+    try { value = JSON.parse(line); } catch { this.hooks.issue?.('Ignored non-JSON output from Antigravity ACP.'); return; }
+    if (!isRecord(value) || value.jsonrpc !== '2.0') { this.hooks.issue?.('Ignored a malformed ACP JSON-RPC message.'); return; }
     const id = value.id; const hasId = typeof id === 'number' || typeof id === 'string';
     if (typeof value.method === 'string' && hasId) { void this.answer(id, value.method, value.params); return; }
     if (typeof value.method === 'string') { try { this.hooks.notification(value.method, value.params); } catch { this.hooks.issue?.(`ACP notification ${value.method} could not be handled.`); } return; }

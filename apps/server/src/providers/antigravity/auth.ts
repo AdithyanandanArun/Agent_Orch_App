@@ -1,47 +1,70 @@
 import { tmpdir } from 'node:os';
-import type { AppSettings, ProviderInfo } from '@relay/contracts';
-import { isRecord, redactSecrets, truncate } from '../common.js';
-import { closeAntigravity, markAntigravityAuthenticated, resolveAntigravity, startAntigravity } from './runtime.js';
-import { parseAntigravityMetadata } from './metadata.js';
-import { rememberAntigravityMetadata } from './runtime.js';
+import { chmod, mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import type { AppSettings, ProviderInfo, ProviderModel } from '@relay/contracts';
+import { abortError, isRecord } from '../common.js';
+import { closeAntigravity, markAntigravityAuthenticated, rememberAntigravityMetadata, resolveAntigravity, safeAntigravityError, startAntigravity, type AntigravityRuntime } from './runtime.js';
+import { choices, configuration, object, parseAntigravityMetadata } from './metadata.js';
 
 const AUTH_TIMEOUT = 5 * 60_000;
-const SESSION_TIMEOUT = 90_000;
-function toInfo(exe: string, version: string, response: unknown): ProviderInfo {
-  const parsed = parseAntigravityMetadata(version, response);
-  return { id: 'antigravity', name: 'Google Antigravity', available: true, version, executable: exe, reason: 'Google sign-in completed; account access is checked again when a run starts.', models: parsed.models, policies: ['supervised', 'balanced', 'full-access'] };
-}
 async function refresh(settings: AppSettings, authenticate: boolean, signal?: AbortSignal): Promise<ProviderInfo> {
   const found = await resolveAntigravity(settings);
   if (!found.ok) return { id: 'antigravity', name: 'Google Antigravity', available: false, version: null, executable: null, reason: found.reason, models: [] };
-  let runtime: Awaited<ReturnType<typeof startAntigravity>> | undefined;
+  const timeout = new AbortController();
+  const deadline = Date.now() + AUTH_TIMEOUT;
+  const timer = setTimeout(() => timeout.abort(), AUTH_TIMEOUT); timer.unref();
+  const combined = signal ? AbortSignal.any([signal, timeout.signal]) : timeout.signal;
+  const remaining = (max: number): number => Math.max(1, Math.min(max, deadline - Date.now()));
+  let runtime: AntigravityRuntime | undefined;
+  let workspace: string | undefined;
+  let sessionId: string | null = null;
   let commands: unknown[] = [];
   try {
-    if (signal?.aborted) throw Object.assign(new Error('Antigravity authentication was canceled.'), { name: 'AbortError' });
-    runtime = await startAntigravity(found.executable.path, found.executable.companion, {
-      cwd: tmpdir(), timeoutMs: 12_000,
-      notification: (_method, params) => {
-        const data = isRecord(params) ? params : {}; const update = isRecord(data.update) ? data.update : {};
-        if (update.sessionUpdate === 'available_commands_update' && Array.isArray(update.availableCommands)) commands = update.availableCommands;
+    if (combined.aborted) throw abortError();
+    workspace = await mkdtemp(join(tmpdir(), 'relay-antigravity-metadata-'));
+    if (process.platform !== 'win32') await chmod(workspace, 0o700);
+    runtime = await startAntigravity(found.executable.path, found.executable.companion, { cwd: workspace, timeoutMs: remaining(12_000), signal: combined,
+      notification: (method, params) => {
+        const data = object(params); const update = object(data.update);
+        if (method === 'session/update' && (!sessionId || data.sessionId === sessionId) && update.sessionUpdate === 'available_commands_update' && Array.isArray(update.availableCommands)) commands = update.availableCommands.slice(0, 100);
       },
     });
-    if (authenticate) await runtime.conn.request('authenticate', { methodId: 'oauth-personal' }, AUTH_TIMEOUT);
-    if (signal?.aborted) throw Object.assign(new Error('Antigravity authentication was canceled.'), { name: 'AbortError' });
-    const response: unknown = await runtime.conn.request('session/new', { cwd: tmpdir(), mcpServers: [] }, SESSION_TIMEOUT);
-    if (!isRecord(response) || typeof response.sessionId !== 'string') throw new Error('Antigravity ACP did not return a metadata session.');
-    markAntigravityAuthenticated(found.executable.path, process.env);
-    const info = toInfo(found.executable.path, runtime.version, response);
-    const parsed = parseAntigravityMetadata(runtime.version, response);
-    if (commands.length) parsed.commands = parseAntigravityMetadata(runtime.version, { availableCommands: commands }).commands;
+    if (authenticate) await runtime.conn.request('authenticate', { methodId: 'oauth-personal' }, remaining(AUTH_TIMEOUT));
+    if (combined.aborted) throw abortError();
+    const response: unknown = await runtime.conn.request('session/new', { cwd: workspace, mcpServers: [] }, remaining(60_000));
+    if (!isRecord(response) || typeof response.sessionId !== 'string' || !response.sessionId) throw new Error('Antigravity did not return an authenticated metadata session.');
+    sessionId = response.sessionId;
+    const initialModel = configuration(response, 'model')?.currentValue;
+    const models = new Map<string, ProviderModel>();
+    let parsed = parseAntigravityMetadata(runtime.version, response, commands);
+    for (const model of parsed.models) models.set(model.id, model);
+    // Native selectors expose reasoning choices for one model at a time. Measure each bounded choice without a prompt.
+    for (const choice of choices(configuration(response, 'model')?.options).slice(0, 40)) {
+      if (combined.aborted) throw abortError();
+      const next = choice.value === initialModel ? response : await runtime.conn.request('session/set_config_option', { sessionId, configId: String(configuration(response, 'model')?.id ?? 'model'), value: choice.value }, remaining(15_000));
+      const measured = parseAntigravityMetadata(runtime.version, next, commands);
+      const model = measured.models.find((item) => item.id === choice.value);
+      if (model) models.set(model.id, model);
+    }
+    if (typeof initialModel === 'string' && choices(configuration(response, 'model')?.options).length > 1) await runtime.conn.request('session/set_config_option', { sessionId, configId: String(configuration(response, 'model')?.id ?? 'model'), value: initialModel }, remaining(15_000));
+    if (combined.aborted) throw abortError();
+    parsed = { ...parsed, models: [...models.values()], commands: parseAntigravityMetadata(runtime.version, response, commands).commands };
     rememberAntigravityMetadata(found.executable.path, process.env, parsed);
-    return info;
+    markAntigravityAuthenticated(found.executable.path);
+    return { id: 'antigravity', name: 'Google Antigravity', available: true, version: runtime.version, executable: found.executable.path,
+      reason: `${authenticate ? 'Google sign-in completed' : 'Authenticated model metadata refreshed'}; no model prompt was submitted. Account access and quota are checked again when a run starts.`, models: parsed.models,
+      policies: [...new Set(parsed.models.flatMap((model) => model.policies ?? []))] };
   } catch (error) {
-    return { id: 'antigravity', name: 'Google Antigravity', available: false, version: runtime?.version ?? null, executable: found.executable.path,
-      reason: `Antigravity ${authenticate ? 'sign-in' : 'metadata refresh'} failed: ${truncate(redactSecrets(error instanceof Error ? error.message : String(error)), 350)}`,
-      models: [] };
-  } finally { if (runtime) await closeAntigravity(runtime); }
+    const reason = combined.aborted ? signal?.aborted ? 'Antigravity setup was canceled.' : 'Antigravity setup reached its five-minute limit. Try signing in again.' : `Antigravity ${authenticate ? 'sign-in' : 'metadata refresh'} failed: ${safeAntigravityError(error)}`;
+    return { id: 'antigravity', name: 'Google Antigravity', available: false, version: runtime?.version ?? null, executable: found.executable.path, reason, models: [] };
+  } finally {
+    clearTimeout(timer);
+    // Preserve the directory if native shutdown fails; an active child may still be using it.
+    if (runtime) await closeAntigravity(runtime);
+    if (workspace && runtime) await rm(workspace, { recursive: true, force: true }).catch(() => {});
+  }
 }
-/** Explicit Settings action: ACP authenticate opens Google's own sign-in flow. Relay stores no credentials. */
+/** Explicit Settings action: Google's runtime opens the browser and stores its own credentials. */
 export function authenticateAntigravity(settings: AppSettings, options: { signal?: AbortSignal } = {}): Promise<ProviderInfo> { return refresh(settings, true, options.signal); }
-/** Explicit metadata refresh only. This can re-trigger native authentication if Google's session expired. */
+/** Explicit action only: native session setup may reopen Google sign-in if its credentials expired. */
 export function probeAuthenticatedAntigravity(settings: AppSettings, options: { signal?: AbortSignal } = {}): Promise<ProviderInfo> { return refresh(settings, false, options.signal); }

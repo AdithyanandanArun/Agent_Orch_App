@@ -10,7 +10,7 @@ import { CLAUDE_POLICIES, probeClaudeModels } from './claude/capabilities.js';
 import { TextTail, cleanEnv, errorMessage, isRecord, redactSecrets, truncate } from './common.js';
 import { bundledClaudeCandidates, resolveExecutable, type ResolvedExecutable } from './discovery.js';
 import { runProbe, shutdownChild, settlesWithin, type ChildLike, type ProbeFn } from './process.js';
-import { antigravityInfo, ANTIGRAVITY_DEFAULT, cachedAntigravityMetadata, closeAntigravity, resolveAntigravity, startAntigravity } from './antigravity/runtime.js';
+import { antigravityInfo, ANTIGRAVITY_DEFAULT, cachedAntigravityMetadata, isAntigravityAuthenticated, closeAntigravity, resolveAntigravity, startAntigravity } from './antigravity/runtime.js';
 
 export const CODEX_DEFAULT_MODEL = 'gpt-6.1-sol';
 const CODEX_DEFAULT_MODEL_ENTRY = { id: CODEX_DEFAULT_MODEL, name: 'GPT-6.1 Sol' };
@@ -39,9 +39,10 @@ export async function detectAntigravity(settings: AppSettings, deps: DetectDeps 
     });
     const cached = cachedAntigravityMetadata(found.executable.path, env);
     const mcp = runtime.capabilities.mcpCapabilities;
-    const note = isRecord(mcp) && mcp.http === true
-      ? 'Google sign-in is not verified; sign in from Settings. Authentication is checked when a run starts.'
-      : 'ACP connected, but it did not advertise HTTP MCP support; Relay team MCP runs will be unavailable. Google sign-in is not verified.';
+    const authNote = isAntigravityAuthenticated(found.executable.path, env)
+      ? 'Authenticated metadata was checked earlier in this Relay process. Account access and quota are checked again when a run starts.'
+      : 'Google sign-in is not verified; sign in from Settings. Authentication is checked when a run starts.';
+    const note = `${isRecord(mcp) && mcp.http === true ? '' : 'ACP did not advertise HTTP MCP; browser/team connections are unavailable. '}${authNote}`;
     return antigravityInfo(found.executable.path, runtime.version, cached?.models ?? [ANTIGRAVITY_DEFAULT], true, note);
   } catch (error) {
     return antigravityInfo(found.executable.path, null, [ANTIGRAVITY_DEFAULT], false, `Antigravity ACP could not initialize: ${truncate(redactSecrets(errorMessage(error)), 350)}`);

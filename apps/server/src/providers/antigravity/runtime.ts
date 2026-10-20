@@ -4,79 +4,112 @@ import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { spawn, type SpawnOptions } from 'node:child_process';
 import type { AppSettings, ProviderInfo, ProviderModel, Policy } from '@relay/contracts';
-import { cleanEnv, errorMessage, isRecord, redactSecrets, truncate } from '../common.js';
-import { shutdownChild, type ChildLike } from '../process.js';
+import { abortError, cleanEnv, errorMessage, isRecord, redactSecrets, TextTail, truncate } from '../common.js';
+import { runProbe, settlesWithin, shutdownChild, type ChildLike } from '../process.js';
 import { AcpConnection, AcpRpcError, ACP_METHOD_NOT_FOUND } from './rpc.js';
 
 export const ANTIGRAVITY_POLICIES: Policy[] = ['supervised', 'balanced', 'full-access'];
 export const ANTIGRAVITY_DEFAULT: ProviderModel = { id: 'default', name: 'Antigravity default', reasoningEfforts: [{ id: 'none', label: 'Native default' }], defaultReasoningEffort: 'none', policies: ANTIGRAVITY_POLICIES };
 const REMOVE_ENV = ['RELAY_BROWSER_MCP_TOKEN', 'RELAY_TEAM_MCP_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'OPENAI_API_KEY', 'CODEX_API_KEY'];
-const spawnDefault = (file: string, args: string[], options: SpawnOptions): ChildLike => spawn(file, args, options) as unknown as ChildLike;
+export type AntigravitySpawn = (file: string, args: string[], options: SpawnOptions) => ChildLike;
+const spawnDefault: AntigravitySpawn = (file, args, options) => spawn(file, args, options) as unknown as ChildLike;
 export interface AntigravityExecutable { path: string; companion: string }
 export type AntigravityResolve = { ok: true; executable: AntigravityExecutable } | { ok: false; reason: string };
 function expandHome(path: string, home: string): string { return path === '~' ? home : path.startsWith('~/') || path.startsWith('~\\') ? join(home, path.slice(2)) : path; }
-async function executable(path: string): Promise<boolean> { try { return (await stat(path)).isFile() && (await access(path, constants.X_OK), true); } catch { return false; } }
+async function executable(path: string): Promise<boolean> { try { return (await stat(path)).isFile() && (await access(path, process.platform === 'win32' ? constants.R_OK : constants.X_OK), true); } catch { return false; } }
 function names(): { acp: string; harness: string } { return process.platform === 'win32' ? { acp: 'agy_acp_server.exe', harness: 'localharness_external.exe' } : { acp: 'agy_acp_server.par', harness: 'localharness_external' }; }
 async function verifyPair(path: string): Promise<AntigravityExecutable | null> {
   if (!(await executable(path))) return null;
   const companion = join(dirname(path), names().harness);
-  if (!(await executable(companion))) return null;
-  return { path, companion };
+  return await executable(companion) ? { path, companion } : null;
 }
 export async function resolveAntigravity(settings: AppSettings, env: NodeJS.ProcessEnv = process.env, home = homedir()): Promise<AntigravityResolve> {
   const override = settings.antigravityExecutable?.trim();
+  const directories = (env.PATH ?? '').split(delimiter).filter((directory) => directory && isAbsolute(directory));
   if (override) {
+    if (/[\x00-\x1f\x7f]/.test(override)) return { ok: false, reason: 'The configured Antigravity executable contains control characters.' };
     const expanded = expandHome(override, home);
-    const path = /[\\/]/.test(expanded) ? resolve(expanded) : (env.PATH ?? '').split(delimiter).filter(isAbsolute).map((dir) => join(dir, expanded)).find((p) => p.endsWith(names().acp) || p === expanded);
-    if (!path) return { ok: false, reason: `Configured Antigravity ACP executable "${truncate(override, 200)}" was not found.` };
-    const pair = await verifyPair(path);
-    return pair ? { ok: true, executable: pair } : { ok: false, reason: `Configured Antigravity executable ${path} or its required ${names().harness} companion is missing or not executable.` };
+    const candidates = /[\\/]/.test(expanded) ? [resolve(expanded)] : directories.map((directory) => join(directory, expanded));
+    for (const candidate of candidates) { const pair = await verifyPair(candidate); if (pair) return { ok: true, executable: pair }; }
+    return { ok: false, reason: `The configured Antigravity ACP executable or its ${names().harness} companion is missing or not executable. Reinstall the runtime or select its full path in Settings.` };
   }
-  const candidates = (env.PATH ?? '').split(delimiter).filter(isAbsolute).map((dir) => join(dir, names().acp));
-  candidates.push(join(home, '.local', 'bin', names().acp));
-  for (const path of [...new Set(candidates)]) { const pair = await verifyPair(path); if (pair) return { ok: true, executable: pair }; }
-  return { ok: false, reason: `Antigravity ACP was not found on PATH or ~/.local/bin. Install it explicitly in Settings, including its ${names().harness} companion.` };
+  const candidates = [...directories.map((directory) => join(directory, names().acp)), join(home, '.local', 'bin', names().acp)];
+  for (const candidate of [...new Set(candidates)]) { const pair = await verifyPair(candidate); if (pair) return { ok: true, executable: pair }; }
+  return { ok: false, reason: `Google Antigravity ACP is not installed or configured. Use Install runtime in Settings; both ${names().acp} and ${names().harness} are required. The agy CLI alone is not this runtime.` };
 }
 
 export interface AntigravityMetadata { version: string; models: ProviderModel[]; commands: { id: string; name: string; description: string; argumentHint?: string; source: 'provider'; kind: 'prompt' }[]; choices: unknown }
 const metadata = new Map<string, AntigravityMetadata>();
-const authVerified = new Set<string>();
-const keyOf = (exe: string, env: NodeJS.ProcessEnv): string => JSON.stringify([exe, process.platform, env.ANTIGRAVITY_HARNESS_PATH ?? 'sibling']);
+const authenticated = new Map<string, number>();
+const keyOf = (exe: string, env: NodeJS.ProcessEnv): string => JSON.stringify([exe, process.platform, env.GEMINI_HOME ?? homedir(), env.GOOGLE_CLOUD_PROJECT ?? '', env.GOOGLE_CLOUD_LOCATION ?? '']);
+function bound<T>(map: Map<string, T>): void { while (map.size > 16) map.delete(map.keys().next().value!); }
 export function cachedAntigravityMetadata(exe: string, env: NodeJS.ProcessEnv = process.env): AntigravityMetadata | undefined { return metadata.get(keyOf(exe, env)); }
-export function rememberAntigravityMetadata(exe: string, env: NodeJS.ProcessEnv, value: AntigravityMetadata): void { metadata.set(keyOf(exe, env), value); }
-export function markAntigravityAuthenticated(exe: string, env: NodeJS.ProcessEnv): void { authVerified.add(keyOf(exe, env)); }
-export function isAntigravityAuthenticated(exe: string, env: NodeJS.ProcessEnv = process.env): boolean { return authVerified.has(keyOf(exe, env)); }
+export function rememberAntigravityMetadata(exe: string, env: NodeJS.ProcessEnv, value: AntigravityMetadata): void { metadata.set(keyOf(exe, env), value); bound(metadata); }
+export function markAntigravityAuthenticated(exe: string, env: NodeJS.ProcessEnv = process.env): void { authenticated.set(keyOf(exe, env), Date.now()); bound(authenticated); }
+export function isAntigravityAuthenticated(exe: string, env: NodeJS.ProcessEnv = process.env): boolean { return authenticated.has(keyOf(exe, env)); }
 export function antigravityInfo(executablePath: string | null, version: string | null, models: ProviderModel[], available: boolean, reason: string | null): ProviderInfo {
   return { id: 'antigravity', name: 'Google Antigravity', available, version, executable: executablePath, reason, models, policies: ANTIGRAVITY_POLICIES };
 }
-export function antigravityChildEnv(env: NodeJS.ProcessEnv, companion: string): Record<string, string> {
-  return cleanEnv(env, REMOVE_ENV, { ANTIGRAVITY_HARNESS_PATH: companion });
+export function antigravityChildEnv(env: NodeJS.ProcessEnv, companion: string): Record<string, string> { return cleanEnv(env, REMOVE_ENV, { ANTIGRAVITY_HARNESS_PATH: companion }); }
+/** Native login URLs belong in Google's browser flow, never in Relay's durable diagnostics. */
+export function safeAntigravityText(text: string, secrets: readonly (string | undefined)[] = [process.env.GEMINI_API_KEY, process.env.GOOGLE_API_KEY]): string {
+  return redactSecrets(text, secrets).replace(/https?:\/\/[^\s<>"']+/gi, (raw) => {
+    try {
+      const url = new URL(raw);
+      if (url.hostname === 'accounts.google.com' || /(?:^|\.)(?:antigravity\.google|antigravity\.google\.com)$/.test(url.hostname) || [...url.searchParams.keys()].some((key) => /^(?:code|state|access_token|refresh_token|id_token|client_secret|code_verifier|code_challenge)$/i.test(key))) return `${url.origin}${url.pathname}${url.search || url.hash ? '?[redacted]' : ''}`;
+    } catch { /* Non-URL diagnostic text is retained after credential redaction. */ }
+    return raw;
+  });
+}
+export function safeAntigravityError(error: unknown, secrets: readonly (string | undefined)[] = [process.env.GEMINI_API_KEY, process.env.GOOGLE_API_KEY]): string {
+  const detail = error instanceof AcpRpcError && isRecord(error.data) && typeof error.data.message === 'string' ? `${error.message}: ${error.data.message}` : errorMessage(error);
+  return truncate(safeAntigravityText(detail, secrets), 1200);
 }
 
-export interface AntigravityRuntime { child: ChildLike; conn: AcpConnection; stderr: string[]; version: string; capabilities: Record<string, unknown> }
-export async function startAntigravity(path: string, companion: string, options: { env?: NodeJS.ProcessEnv; spawn?: typeof spawnDefault; timeoutMs?: number; cwd?: string; notification?: (method: string, params: unknown) => void; request?: (method: string, params: unknown) => Promise<unknown> } = {}): Promise<AntigravityRuntime> {
-  const env = options.env ?? process.env; const spawnFn = options.spawn ?? spawnDefault;
-  const child = spawnFn(path, [], { cwd: options.cwd ?? process.cwd(), env: antigravityChildEnv(env, companion), stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsHide: true });
-  const stderr: string[] = []; child.stderr?.on('data', (chunk: string | Buffer) => { stderr.push(chunk.toString()); if (stderr.join('').length > 20_000) stderr.splice(0, stderr.length - 1); });
+export interface AntigravityRuntime { child: ChildLike; conn: AcpConnection; stderr: TextTail; version: string; capabilities: Record<string, unknown>; close(): Promise<void> }
+export async function startAntigravity(path: string, companion: string, options: {
+  env?: NodeJS.ProcessEnv; spawn?: AntigravitySpawn; timeoutMs?: number; cwd?: string; signal?: AbortSignal; secrets?: readonly (string | undefined)[]; keepLockOnUnresponsive?: boolean;
+  notification?: (method: string, params: unknown) => void; request?: (method: string, params: unknown) => Promise<unknown>;
+} = {}): Promise<AntigravityRuntime> {
+  if (options.signal?.aborted) throw abortError();
+  const env = options.env ?? process.env;
+  const child = (options.spawn ?? spawnDefault)(path, process.platform === 'linux' ? ['--uid='] : [], { cwd: options.cwd ?? process.cwd(), env: antigravityChildEnv(env, companion), stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsHide: true });
+  const stderr = new TextTail(20_000);
+  child.stderr?.on('data', (chunk: string | Buffer) => stderr.push(chunk.toString()));
   const conn = new AcpConnection(child, {
     notification: (method, params) => options.notification?.(method, params),
-    request: async (method, params) => {
-      if (options.request) return options.request(method, params);
-      throw new AcpRpcError(ACP_METHOD_NOT_FOUND, `Relay does not support ACP client request ${method}.`);
-    },
-    closeMessage: (info) => `Antigravity ACP ${info.error ? `could not start (${(info.error as NodeJS.ErrnoException).code ?? info.error.message})` : `exited unexpectedly (${info.signal ?? `code ${info.exitCode}`})`}${stderr.length ? `: ${truncate(redactSecrets(stderr.join('')), 500)}` : ''}.`,
+    request: async (method, params) => { if (options.request) return options.request(method, params); throw new AcpRpcError(ACP_METHOD_NOT_FOUND, `Relay does not provide ACP client request ${method}.`); },
+    closeMessage: (info) => `Antigravity ACP ${info.error ? `could not start (${(info.error as NodeJS.ErrnoException).code ?? safeAntigravityError(info.error, options.secrets)})` : `exited (${info.signal ?? `code ${info.exitCode}`})`}${stderr.isEmpty ? '' : `: ${truncate(safeAntigravityText(stderr.summary(1200, options.secrets), options.secrets), 1200)}`}.`,
   });
+  let closing: Promise<void> | undefined;
+  const close = (): Promise<void> => closing ??= (async () => {
+    // Windows does not expose POSIX process groups. Terminate the actual child tree before its parent PID disappears.
+    if (process.platform === 'win32' && !options.spawn && child.pid) {
+      try { child.stdin?.end(); } catch { /* Already closed. */ }
+      if (!await settlesWithin(conn.closed, options.signal?.aborted ? 0 : 350)) {
+        const killer = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe');
+        await runProbe(killer, ['/PID', String(child.pid), '/T', '/F'], { timeoutMs: 2000 });
+      }
+    }
+    const outcome = await shutdownChild(child, { closed: conn.closed, group: process.platform !== 'win32', graceMs: options.signal?.aborted ? 0 : 350, termMs: 1000, killMs: 1000 });
+    if (outcome === 'unresponsive') {
+      if (options.keepLockOnUnresponsive) await conn.closed;
+      else throw new Error('Antigravity ACP did not stop after process termination.');
+    }
+  })();
+  const onAbort = () => { void close().catch(() => undefined); };
+  options.signal?.addEventListener('abort', onAbort, { once: true });
+  if (options.signal?.aborted) onAbort();
   try {
     const init: unknown = await conn.request('initialize', { protocolVersion: 1, clientInfo: { name: 'relay', version: '0.1.0' }, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } }, options.timeoutMs ?? 12_000);
-    if (!isRecord(init) || !isRecord(init.agentInfo) || typeof init.agentInfo.version !== 'string' || !isRecord(init.agentCapabilities)) throw new Error('Antigravity ACP returned an invalid initialize response.');
-    return { child, conn, stderr, version: init.agentInfo.version, capabilities: init.agentCapabilities };
+    if (options.signal?.aborted) throw abortError();
+    if (!isRecord(init) || init.protocolVersion !== 1 || !isRecord(init.agentInfo) || init.agentInfo.name !== 'antigravity-acp' || typeof init.agentInfo.version !== 'string' || !isRecord(init.agentCapabilities)) throw new Error('The selected executable did not identify itself as a compatible Google Antigravity ACP runtime.');
+    return { child, conn, stderr, version: init.agentInfo.version, capabilities: init.agentCapabilities, close: async () => { options.signal?.removeEventListener('abort', onAbort); await close(); } };
   } catch (error) {
-    await shutdownChild(child, { closed: conn.closed, group: process.platform !== 'win32', graceMs: 0, termMs: 700, killMs: 700 });
+    options.signal?.removeEventListener('abort', onAbort);
+    await close().catch(() => undefined);
+    if (options.signal?.aborted) throw abortError();
     throw error;
   }
 }
-
-export function closeAntigravity(runtime: AntigravityRuntime): Promise<unknown> {
-  return shutdownChild(runtime.child, { closed: runtime.conn.closed, group: process.platform !== 'win32', graceMs: 700, termMs: 1_200, killMs: 1_000 });
-}
-export function safeAntigravityError(error: unknown): string { return truncate(redactSecrets(errorMessage(error)), 400); }
+export function closeAntigravity(runtime: AntigravityRuntime): Promise<void> { return runtime.close(); }
