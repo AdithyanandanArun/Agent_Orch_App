@@ -1,4 +1,4 @@
-import type { Task, TaskStatus, WorkspaceEvent } from '@relay/contracts';
+import type { TaskOverride, Task, TaskStatus, WorkspaceEvent } from '@relay/contracts';
 import { CreateTaskSchema, UpdateTaskSchema } from '@relay/contracts';
 import type { z } from 'zod';
 import { checkTransition, findCycle, unfinishedDeps } from './dag.ts';
@@ -61,6 +61,13 @@ export class TaskService {
         else if (status === 'blocked' && unfinished === 0 && patch.dependsOn !== undefined) status = 'ready';
       }
       if (patch.sessionId !== undefined && patch.sessionId !== current.sessionId && current.status === 'running') throw conflict('Cannot reassign a running task');
+      if (current.source) {
+        const overrides = new Set<TaskOverride>(current.source.overrides ?? []);
+        for (const key of Object.keys(patch) as TaskOverride[]) {
+          if (patch[key] !== undefined && JSON.stringify(patch[key]) !== JSON.stringify(current[key])) overrides.add(key);
+        }
+        this.store.setTaskSource(id, { ...current.source, overrides: [...overrides] });
+      }
       const next = this.store.updateTask(id, { title: patch.title, description: patch.description, acceptanceCriteria: patch.acceptanceCriteria, sessionId: patch.sessionId, status, dependsOn: patch.dependsOn !== undefined ? deps : undefined });
       this.store.recordEvent({ projectId: next.projectId, sessionId: next.sessionId, type: 'task.updated', summary: `Task updated: ${next.title}${next.status !== current.status ? ` (${current.status} → ${next.status})` : ''}`, payload: { taskId: id, from: current.status, to: next.status, fields: Object.keys(patch) } });
       this.cascade(next, current.status);

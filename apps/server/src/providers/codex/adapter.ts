@@ -1,3 +1,4 @@
+import { nativePlanSteps } from '../plans.js';
 import { spawn, type SpawnOptions } from 'node:child_process';
 import type { AdapterEvent, AgentAdapter, AppSettings, RunOptions } from '@relay/contracts';
 import { ProviderError, TextTail, abortError, cleanEnv, isRecord, truncate } from '../common.js';
@@ -304,6 +305,12 @@ class CodexRun {
     }
     if (!this.isOurThread(params) || this.phase === 'setup') return;
     switch (method) {
+      case 'turn/plan/updated': {
+        if (typeof params.turnId !== 'string' || (this.turnId && params.turnId !== this.turnId)) break;
+        const steps = nativePlanSteps(params.plan, 'step');
+        if (steps) this.emit({ type: 'task.plan', planId: 'codex-plan', replace: true, steps, ...(typeof params.explanation === 'string' ? { explanation: params.explanation.slice(0, 4000) } : {}) });
+        break;
+      }
       case 'turn/started': {
         const turn = isRecord(params.turn) ? params.turn : null;
         if (turn && typeof turn.id === 'string') this.turnId ??= turn.id;

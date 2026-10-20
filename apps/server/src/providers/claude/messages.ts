@@ -1,4 +1,5 @@
-import type { AdapterEvent, Policy, ToolActivity, ToolCategory } from '@relay/contracts';
+import { nativePlanSteps } from '../plans.js';
+import type { ProviderTaskPlan, AdapterEvent, Policy, ToolActivity, ToolCategory } from '@relay/contracts';
 import { ProviderError, describeValue, isRecord, truncate } from '../common.js';
 
 export type ClaudeSdkPermissionMode = 'default' | 'acceptEdits' | 'auto' | 'bypassPermissions';
@@ -74,6 +75,7 @@ export class ClaudeMessageMapper {
   private readonly streamTools = new Map<string, { id: string; name: string; parentId: string | null; partial: string }>();
   private readonly taskToToolUse = new Map<string, string>();
   private readonly taskStates = new Map<string, { status: ToolActivity['status']; summary?: string; durationMs?: number }>();
+  private readonly planTasks = new Map<string, ProviderTaskPlan['steps'][number]>();
   private emittedText = false;
   private textBlockOpen = false;
   private lastAssistantError: string | null = null;
@@ -317,7 +319,50 @@ export class ClaudeMessageMapper {
       const durationMs = typeof structured?.durationMs === 'number' ? structured.durationMs : undefined;
       const status = block.is_error === true || (exitCode !== undefined && exitCode !== 0) ? 'failed' : 'completed';
       this.toolActivity(id, tool.name, input, tool.parentId, status, output || undefined, durationMs, undefined, { ...(cwd ? { cwd } : {}), ...(exitCode !== undefined ? { exitCode } : {}), ...(processId ? { processId } : {}) });
+      if (status === 'completed' && !this.completedTools.has(id)) this.planResult(tool.name, tool.input, tool.parentId, message.tool_use_result);
       this.completedTools.add(id);
+    }
+  }
+
+  /** Only successful native task tool results report progress; tool attempts and shell prose do not. */
+  private planResult(name: string, inputText: string, parentId: string | null, result: unknown): void {
+    if (!['TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskList'].includes(name)) return;
+    let input: Record<string, unknown>;
+    try { const parsed: unknown = JSON.parse(inputText); if (!isRecord(parsed)) return; input = parsed; } catch { return; }
+    const scope = parentId ?? 'root';
+    const emit = (steps: ProviderTaskPlan['steps'], replace = false) => this.emit({ type: 'task.plan', planId: `claude-${name === 'TodoWrite' ? 'todos' : 'tasks'}:${scope}`, replace, steps });
+    if (name === 'TodoWrite') {
+      const steps = nativePlanSteps(input.todos, 'content');
+      if (steps) emit(steps, true);
+      return;
+    }
+    if (!isRecord(result)) return;
+    const validId = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 200;
+    const note = (value: unknown, fallback?: Record<string, unknown>) => {
+      if (!isRecord(value) || !validId(value.id)) return;
+      const title = str(value.subject) ?? str(fallback?.subject);
+      const status = value.status ?? fallback?.status ?? 'pending';
+      if (!title || title.length > 200 || !['pending', 'in_progress', 'completed', 'blocked'].includes(String(status))) return;
+      const step: ProviderTaskPlan['steps'][number] = { id: value.id, title, status: status as ProviderTaskPlan['steps'][number]['status'], ...(typeof value.description === 'string' ? { description: value.description.slice(0, 4000) } : typeof fallback?.description === 'string' ? { description: fallback.description.slice(0, 4000) } : {}), ...(Array.isArray(value.blockedBy) ? { dependsOn: value.blockedBy.filter(validId).slice(0, 100) } : {}) };
+      this.planTasks.set(JSON.stringify([scope, step.id]), step);
+      return step;
+    };
+    if (name === 'TaskCreate' || name === 'TaskGet') {
+      const step = note(result.task, input);
+      if (step) emit([step]);
+    } else if (name === 'TaskList' && Array.isArray(result.tasks)) {
+      const steps = result.tasks.slice(0, 100).map(value => note(value)).filter((step): step is ProviderTaskPlan['steps'][number] => Boolean(step));
+      emit(steps);
+    } else if (name === 'TaskUpdate' && result.success === true && validId(result.taskId) && result.taskId === input.taskId) {
+      const previous = this.planTasks.get(JSON.stringify([scope, result.taskId]));
+      // Unknown native IDs are not given fabricated titles; TaskGet/List can provide their metadata.
+      const change = isRecord(result.statusChange) ? result.statusChange : {};
+      const step = note({ ...previous, ...input, id: result.taskId, subject: input.subject ?? previous?.title, status: change.to ?? input.status ?? previous?.status });
+      if (step) {
+        const deps = new Set([...(previous?.dependsOn ?? []), ...(Array.isArray(input.addBlockedBy) ? input.addBlockedBy.filter(validId) : [])]);
+        step.dependsOn = [...deps].slice(0, 100);
+        emit([step]);
+      }
     }
   }
 
