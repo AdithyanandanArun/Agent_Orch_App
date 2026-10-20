@@ -10,7 +10,7 @@ import { formatElapsed } from '../lib/activity';
 import { Badge, Button, EmptyState, PROVIDER_NAME, ProviderMark, StatusDot } from '../components/ui';
 import { ContextCard } from '../components/automation/ContextSummary';
 import { SourceBadges } from '../components/automation/TaskSource';
-import { MAX_AGENT_NODES, MAX_COMPONENT_NODES, buildGraph, type AgentData, type Component, type ComponentData, type RootData, type SessionData, type TaskData } from './map/graph';
+import { MAX_AGENT_NODES, MAX_COMPONENT_NODES, MAX_TASK_NODES, buildGraph, type AgentData, type Component, type ComponentData, type RootData, type SessionData, type TaskData } from './map/graph';
 
 function RootNode({ data, selected }: NodeProps<Node<RootData>>) {
   const { project, context } = data;
@@ -91,7 +91,7 @@ export default function AgentMap() {
 
   if (!project || !graph) return <EmptyState icon={<Network size={20} />} title="No project">Open a project to see its structure, sessions and tasks.</EmptyState>;
 
-  const { nodes, edges, sessions, tasks, components, agentCalls, unresolved, hiddenComponents, hiddenAgents } = graph;
+  const { nodes, edges, sessions, tasks, components, agentCalls, unresolved, hiddenComponents, hiddenAgents, hiddenTasks } = graph;
   const theme = boot?.settings.theme ?? 'dark';
   const sel = selected?.startsWith('s:') ? sessions.find((s) => `s:${s.id}` === selected) : undefined;
   const selTask = selected?.startsWith('t:') ? tasks.find((t) => `t:${t.id}` === selected) : undefined;
@@ -132,6 +132,7 @@ export default function AgentMap() {
           <em>
             Components are scanned folders and packages, not running agents. Agent nodes appear only when a provider reported them.
             {hiddenComponents > 0 ? ` ${hiddenComponents} more components are not drawn (limit ${MAX_COMPONENT_NODES}).` : ''}
+            {hiddenTasks > 0 ? ` Showing ${MAX_TASK_NODES} of ${tasks.length} tasks (running, blocked, ready and in review first, then the most recently updated); ${hiddenTasks} hidden here but still on the board, and dependencies are drawn only between shown tasks.` : ''}
             {hiddenAgents > 0 ? ` Showing the latest ${MAX_AGENT_NODES} of ${agentCalls.length + hiddenAgents} agent invocations.` : ''}
           </em>
         </div>

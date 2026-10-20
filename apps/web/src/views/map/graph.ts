@@ -10,16 +10,33 @@ export interface AgentData { call: ToolCall; [key: string]: unknown }
 
 export const MAX_COMPONENT_NODES = 40;
 export const MAX_AGENT_NODES = 40;
+export const MAX_TASK_NODES = 200;
+
+const TASK_PRIORITY: Record<Task['status'], number> = { running: 0, blocked: 1, ready: 2, review: 3, backlog: 4, done: 5 };
+
+/** Keeps at most `limit` tasks: active states first, then most recently updated; the selected task is always kept. Original order is preserved. */
+export function pickVisibleTasks(tasks: Task[], limit: number, selectedId: string | null): Task[] {
+  if (tasks.length <= limit) return tasks;
+  const ranked = [...tasks].sort((a, b) => TASK_PRIORITY[a.status] - TASK_PRIORITY[b.status] || b.updatedAt.localeCompare(a.updatedAt));
+  const keep = new Set(ranked.slice(0, limit).map((t) => t.id));
+  if (selectedId && !keep.has(selectedId) && tasks.some((t) => t.id === selectedId)) {
+    keep.delete(ranked[limit - 1].id);
+    keep.add(selectedId);
+  }
+  return tasks.filter((t) => keep.has(t.id));
+}
 
 export interface GraphInput {
   project: Project; context: ProjectContext | null; sessions: Session[]; tasks: Task[]; toolCalls: ToolCall[]; events: WorkspaceEvent[]; selected: string | null;
 }
 export interface GraphResult {
   nodes: Node[]; edges: Edge[];
-  hiddenComponents: number; hiddenAgents: number;
+  hiddenComponents: number; hiddenAgents: number; hiddenTasks: number;
   /** Component id -> the dependency strings that matched no scanned component. */
   unresolved: Map<string, string[]>;
   components: Component[]; agentCalls: ToolCall[];
+  /** Tasks drawn as nodes; a subset of the input tasks, which stay untouched. */
+  visibleTasks: Task[];
 }
 
 const marker = { type: MarkerType.ArrowClosed, width: 16, height: 16 };
@@ -56,7 +73,7 @@ function levels(ids: string[], next: Map<string, string[]>, sources: string[]): 
  * sessions, tasks, recorded handoffs, and provider-reported agent invocations linked by native parent IDs.
  * `source.parentTaskId` is drawn as containment, never as a dependency.
  */
-export function buildGraph({ project, context, sessions, tasks, toolCalls, events, selected }: GraphInput): GraphResult {
+export function buildGraph({ project, context, sessions, tasks: allTasks, toolCalls, events, selected }: GraphInput): GraphResult {
   const nodes: Node[] = [];
   const edges: Edge[] = [];
   const sel = (id: string) => selected === id;
@@ -102,6 +119,8 @@ export function buildGraph({ project, context, sessions, tasks, toolCalls, event
 
   /* Sessions and tasks */
   const y0 = compHeight + (components.length ? 80 : 150);
+  const everyTask = new Map(allTasks.map((t) => [t.id, t]));
+  const tasks = pickVisibleTasks(allTasks, MAX_TASK_NODES, selected?.startsWith('t:') ? selected.slice(2) : null);
   const byId = new Map(tasks.map((t) => [t.id, t]));
   const depth = new Map<string, number>();
   const depthOf = (t: Task, seen = new Set<string>()): number => {
@@ -114,7 +133,7 @@ export function buildGraph({ project, context, sessions, tasks, toolCalls, event
   };
   tasks.forEach((t) => depthOf(t));
   sessions.forEach((s, i) => {
-    nodes.push({ id: `s:${s.id}`, type: 'session', position: { x: 0, y: y0 + i * 120 }, data: { session: s, assigned: tasks.filter((t) => t.sessionId === s.id).length } satisfies SessionData, selected: sel(`s:${s.id}`) });
+    nodes.push({ id: `s:${s.id}`, type: 'session', position: { x: 0, y: y0 + i * 120 }, data: { session: s, assigned: allTasks.filter((t) => t.sessionId === s.id).length } satisfies SessionData, selected: sel(`s:${s.id}`) });
     edges.push({ id: `rs:${s.id}`, source: `r:${project.id}`, sourceHandle: 'down', target: `s:${s.id}`, targetHandle: 'up', className: 'edge-contains', markerEnd: marker });
   });
   const perDepth = new Map<number, number>();
@@ -122,7 +141,7 @@ export function buildGraph({ project, context, sessions, tasks, toolCalls, event
     const d = depth.get(t.id) ?? 0;
     const row = perDepth.get(d) ?? 0;
     perDepth.set(d, row + 1);
-    const blocked = t.dependsOn.some((id) => byId.get(id) && byId.get(id)!.status !== 'done');
+    const blocked = t.dependsOn.some((id) => everyTask.get(id) && everyTask.get(id)!.status !== 'done');
     nodes.push({ id: `t:${t.id}`, type: 'task', position: { x: 270 + d * 250, y: y0 + row * 96 }, data: { task: t, blocked } satisfies TaskData, selected: sel(`t:${t.id}`) });
   }
   for (const t of tasks) {
@@ -176,5 +195,5 @@ export function buildGraph({ project, context, sessions, tasks, toolCalls, event
     else edges.push({ id: `ag:s:${call.sessionId}:${call.id}`, source: `s:${call.sessionId}`, target: `a:${call.id}`, label: owner.resolved ? 'invoked' : 'parent not shown', className: owner.resolved ? 'edge-agent' : 'edge-unresolved', markerEnd: marker });
   }
 
-  return { nodes, edges, hiddenComponents: allComponents.length - components.length, hiddenAgents: allAgents.length - agentCalls.length, unresolved, components, agentCalls };
+  return { nodes, edges, hiddenComponents: allComponents.length - components.length, hiddenAgents: allAgents.length - agentCalls.length, hiddenTasks: allTasks.length - tasks.length, unresolved, components, agentCalls, visibleTasks: tasks };
 }
