@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { Approval, GroupMember, GroupSnapshot, ProviderInfo, Session, SessionRun } from '@relay/contracts';
 import { configSummary, ROLE_LABEL } from '../../lib/groups';
 import { memberPresence } from '../../lib/groupPresence';
@@ -30,15 +30,14 @@ function PresenceRow({
   const summary = session ? configSummary({ model: session.model, effort: session.effort, policy: session.policy, serviceTier: session.serviceTier ?? 'standard' }, providers, session.provider) : null;
   return (
     <li className={`agent-presence__row is-${presence.state}`}>
-      <div className="agent-presence__identity">
+      <div className="agent-presence__identity" title={ROLE_LABEL[member.role]}>
         <AgentIdentity handle={member.handle} identityKey={member.sessionId} provider={session?.provider} />
-        <span className="agent-presence__role">{ROLE_LABEL[member.role]}</span>
+        <span className="agent-presence__state" title={`${presence.label}${elapsed ? ` · ${elapsed}` : ''}`} aria-label={`${presence.label}${elapsed ? `, elapsed ${elapsed}` : ''}`}>
+          <span className={presence.working ? 'activity-shimmer' : undefined}>{presence.label}</span>
+          {elapsed ? <time className="agent-presence__elapsed" dateTime={presence.startedAt ?? undefined} aria-live="off">{elapsed}</time> : null}
+        </span>
       </div>
       {summary && session ? <small className="agent-presence__model" title={`${summary.model} · ${summary.detail}`}>{summary.model} · {summary.detail.split(' · ')[0]}</small> : null}
-      <div className="agent-presence__state" aria-label={`${presence.label}${elapsed ? `, elapsed ${elapsed}` : ''}`}>
-        <span className={presence.working ? 'activity-shimmer' : undefined}>{presence.label}</span>
-        {elapsed ? <time className="agent-presence__elapsed" dateTime={presence.startedAt ?? undefined} aria-live="off">{elapsed}</time> : null}
-      </div>
       {presence.detail ? <small className="agent-presence__detail" title={presence.detail}>{presence.detail}</small> : null}
     </li>
   );
@@ -52,18 +51,24 @@ export function AgentPresenceRail({
   hidden?: boolean;
 }) {
   const panel = useRef<HTMLElement>(null);
+  const listId = useId();
   const preference = useRef<boolean | null>(null);
   const [expanded, setExpanded] = useState(true);
 
   useLayoutEffect(() => {
     const container = panel.current?.parentElement;
     if (!container || typeof ResizeObserver === 'undefined') return;
+    const transcript = container.querySelector<HTMLElement>('.chat__scroll');
     const update = () => {
-      if (preference.current === null) setExpanded(container.clientWidth >= 640 && container.clientHeight >= 500);
+      // Follow the visible transcript, including when a growing composer consumes more height.
+      const availableHeight = Math.max(0, (transcript?.clientHeight ?? container.clientHeight) - 24);
+      panel.current?.style.setProperty('--agent-presence-max-height', `${Math.min(280, availableHeight)}px`);
+      if (preference.current === null) setExpanded(container.clientWidth >= 960 && availableHeight >= 240);
     };
     update();
     const observer = new ResizeObserver(update);
     observer.observe(container);
+    if (transcript) observer.observe(transcript);
     return () => observer.disconnect();
   }, []);
 
@@ -77,11 +82,11 @@ export function AgentPresenceRail({
       <header className="agent-presence__head">
         <strong>Agents</strong>
         <span>{connection === 'online' ? members.length : connection === 'connecting' ? 'Reconnecting' : 'Offline'}</span>
-        <button type="button" className="agent-presence__toggle" aria-label={expanded ? 'Collapse agent presence' : 'Expand agent presence'} aria-expanded={expanded} aria-controls="agent-presence-list" onClick={toggle}>
+        <button type="button" className="agent-presence__toggle" aria-label={expanded ? 'Collapse agent presence' : 'Expand agent presence'} aria-expanded={expanded} aria-controls={listId} onClick={toggle}>
           <span aria-hidden="true">{expanded ? '−' : '+'}</span>
         </button>
       </header>
-      <ul className="agent-presence__list" id="agent-presence-list">
+      <ul className="agent-presence__list" id={listId}>
         {members.map((member) => (
           <PresenceRow key={member.id} snapshot={snapshot} member={member} session={sessions.find((item) => item.id === member.sessionId)} runs={runs} approvals={approvals} connection={connection} providers={providers} />
         ))}
