@@ -31,7 +31,7 @@ export async function locate(root: string, signal?: AbortSignal): Promise<Locati
   }
   const lines = result.stdout.split('\n');
   if (lines[0]?.trim() !== 'true' || !lines[1]) return { kind: 'not-repo' };
-  return { kind: 'ok', top: await fsp.realpath(lines[1]), prefix: (lines[2] ?? '').trim().replace(/\/$/, '') };
+  return { kind: 'ok', top: await fsp.realpath(lines[1]), prefix: (lines[2] ?? '').replace(/\r?$/, '').replace(/\/$/, '') };
 }
 
 export interface Basics { head: string | null; branch: string | null; detached: boolean; unborn: boolean }
@@ -94,7 +94,7 @@ export async function operationInProgress(top: string, signal?: AbortSignal): Pr
   const found = await Promise.all(OPERATION_MARKERS.map(async ([marker, label]) => {
     const where = await git(top, ['rev-parse', '--git-path', marker], { allowFailure: true, signal });
     if (where.code !== 0) return null;
-    const file = path.resolve(top, where.stdout.trim());
+    const file = path.resolve(top, where.stdout.replace(/\r?\n$/, ''));
     return (await fsp.access(file).then(() => true, () => false)) ? label : null;
   }));
   return found.find(Boolean) ?? null;
