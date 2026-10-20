@@ -74,6 +74,8 @@ Request acceptance to final delivery completion spanned approximately **8 minute
 - `npm start`: server started on a dynamically reserved loopback port; `GET /api/contacts` returned HTTP 200 with an empty list. The process was stopped and temporary data removed.
 - A fresh headless Playwright Chromium context loaded the final integrated page, filled the form, submitted it, observed success feedback, confirmed one matching API and disk record, and reported zero page errors. This final browser check ran after commit `39f72e4`.
 
+The example defines no build script; the production-style start command and Node syntax checks were used instead.
+
 Two initial independent Playwright harness attempts failed before interacting with the app (incorrect module resolution, then a missing default headless-shell executable). The verifier corrected the harness to use the installed Chromium executable; the final browser check passed. One read-only status-monitor command also timed out after a PID file was mistakenly used as a URL; it changed no files and did not affect the Relay runtime or proof state.
 
 No Relay source fix was needed. The integration correction was confined to the disposable example. The Relay repository received only this proof documentation and the supported roadmap/evidence update.
