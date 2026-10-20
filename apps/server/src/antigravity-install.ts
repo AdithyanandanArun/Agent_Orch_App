@@ -146,11 +146,16 @@ async function downloadAndInstall(dataDir: string): Promise<string> {
 
 /** Explicit user action only. Returns immediately so Settings can poll bounded status requests. */
 export async function startAntigravityInstall(dataDir: string, onInstalled: (executable: string) => void): Promise<AntigravityInstallState> {
-  const current = await antigravityInstallState(dataDir);
-  if (!current.supported || current.state === 'installing') return current;
-  if (current.state === 'installed' && current.executable) { onInstalled(current.executable); return current; }
+  if (jobs.get(dataDir)?.running || !release()) return antigravityInstallState(dataDir);
+  // Claim before the first await so simultaneous clicks cannot create competing installers.
   const job = { running: true, error: null as string | null };
   jobs.set(dataDir, job);
+  if (await installed(dataDir)) {
+    try { onInstalled(join(directory(dataDir), filenames()[0])); }
+    catch (error) { job.error = truncate(redactSecrets(errorMessage(error)), 500); }
+    job.running = false;
+    return antigravityInstallState(dataDir);
+  }
   void downloadAndInstall(dataDir).then((executable) => onInstalled(executable)).catch((error) => {
     job.error = truncate(redactSecrets(errorMessage(error)), 500);
   }).finally(() => { job.running = false; });
