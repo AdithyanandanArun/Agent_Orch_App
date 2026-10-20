@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import type {
   AppSettings, ConversationListOptions, ExternalConversation, ExternalConversationDetails,
   ExternalConversationList, ExternalConversationMessage,
-} from '@relay/contracts';
+} from '@mingle/contracts';
 import { ProviderError, TextTail, cleanEnv, isRecord, redactSecrets, truncate } from '../common.js';
 import { resolveExecutableCached } from '../discovery.js';
 import { shutdownChild, type ChildLike } from '../process.js';
@@ -19,7 +19,7 @@ const MAX_TEXT_BYTES = 2 * 1024 * 1024;
 const MAX_MESSAGE_BYTES = 20 * 1024;
 const MAX_PAGES = 8;
 const READ_BUDGET_MS = 20_000;
-const CLIENT_INFO = { name: 'relay', title: 'Relay', version: '0.1.0' };
+const CLIENT_INFO = { name: 'mingle', title: 'Mingle', version: '0.1.0' };
 
 interface RpcRuntime {
   conn: JsonRpcConnection;
@@ -277,7 +277,7 @@ export async function readCodexConversation(settings: AppSettings, id: string): 
     if (pages >= MAX_PAGES && cursor) truncated = true;
     if (!result) {
       messages.reverse();
-      result = { conversation, messages, truncated, notices: truncated ? ['Conversation history was clipped at Relay’s import limits.'] : [] };
+      result = { conversation, messages, truncated, notices: truncated ? ['Conversation history was clipped at Mingle’s import limits.'] : [] };
     }
   } catch (error) {
     failure = safeRpcError(error);

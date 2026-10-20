@@ -3,8 +3,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import type { AdapterEvent, AgentAdapter, AppSettings, Provider, ProviderInfo, RunOptions } from '@relay/contracts';
-import { createApplication, type ApplicationOptions, type RelayApplication } from './app.ts';
+import type { AdapterEvent, AgentAdapter, AppSettings, Provider, ProviderInfo, RunOptions } from '@mingle/contracts';
+import { createApplication, type ApplicationOptions, type MingleApplication } from './app.ts';
 import type { ProviderRuntime } from './types.ts';
 
 export type Script = (options: RunOptions, emit: (event: AdapterEvent) => void) => Promise<void>;
@@ -49,13 +49,13 @@ export function runGit(cwd: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd, env: { ...process.env, ...GIT_ENV }, encoding: 'utf8' });
 }
 
-export function tmpDir(prefix = 'relay-test-'): string {
+export function tmpDir(prefix = 'mingle-test-'): string {
   return mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
 /** Creates a committed Git repository with the given files. */
 export function makeRepo(files: Record<string, string> = { 'README.md': '# repo\n' }): string {
-  const dir = tmpDir('relay-repo-');
+  const dir = tmpDir('mingle-repo-');
   runGit(dir, 'init', '-q', '--initial-branch=main');
   for (const [name, content] of Object.entries(files)) {
     mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
@@ -69,7 +69,7 @@ export function makeRepo(files: Record<string, string> = { 'README.md': '# repo\
 export interface ApiResponse<T = any> { status: number; json: T; headers: http.IncomingHttpHeaders }
 
 export interface TestApp {
-  app: RelayApplication;
+  app: MingleApplication;
   fake: FakeProviders;
   dataDir: string;
   url: string;
@@ -92,7 +92,7 @@ export function rawRequest(port: number, method: string, route: string, headers:
 }
 
 export async function startTestApp(options: Partial<ApplicationOptions> & { dataDir?: string; fake?: FakeProviders; keepData?: boolean } = {}): Promise<TestApp> {
-  const dataDir = options.dataDir ?? tmpDir('relay-data-');
+  const dataDir = options.dataDir ?? tmpDir('mingle-data-');
   const fake = options.fake ?? new FakeProviders();
   const app = createApplication({
     dataDir, port: 0, webDistDir: null, providers: fake, log: () => undefined, runtime: { abortGraceMs: 250, flushIntervalMs: 20 }, detectOnStart: false, ...options,

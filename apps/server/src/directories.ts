@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
-import type { DirectoryListing, LocalDirectory } from '@relay/contracts';
+import type { DirectoryListing, LocalDirectory } from '@mingle/contracts';
 import { isDeniedName } from './paths.ts';
 import { badRequest, HttpError } from './util.ts';
 

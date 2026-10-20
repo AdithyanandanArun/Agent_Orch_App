@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { devNull } from 'node:os';
 import path from 'node:path';
 import fsp from 'node:fs/promises';
-import type { GitFile, GitStatus } from '@relay/contracts';
+import type { GitFile, GitStatus } from '@mingle/contracts';
 import { SECRET_PATHSPEC_EXCLUDES, isDeniedName, resolveInside } from './paths.ts';
 import { HttpError } from './util.ts';
 

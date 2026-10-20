@@ -1,6 +1,6 @@
 import { memo, useState, type ReactNode } from 'react';
 import { ChevronRight, ShieldAlert, Terminal, Info } from 'lucide-react';
-import type { Approval, Provider } from '@relay/contracts';
+import type { Approval, Provider } from '@mingle/contracts';
 import { useRelay } from '../store/store';
 import { api, errorMessage } from '../lib/api';
 import { clockTime, cx } from '../lib/format';

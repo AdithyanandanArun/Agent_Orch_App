@@ -165,7 +165,7 @@ export function ArchiveDialog({ sessionId }: { sessionId: string }) {
     <Modal title="Archive session?" onClose={close} width={460}
       footer={<><Button variant="ghost" onClick={close}>Cancel</Button><Button variant="danger" busy={busy} onClick={() => void run(async () => { await api.archiveSession(sessionId); await useRelay.getState().refreshNow(); useRelay.getState().toast('info', 'Session archived'); })}>Archive</Button></>}>
       <div className="form">
-        <p>“{session?.name ?? 'This session'}” will be removed from the sidebar. Its metadata is kept, and its worktree and branch are <strong>never deleted</strong> by Relay — clean those up with Git when you’re ready.</p>
+        <p>“{session?.name ?? 'This session'}” will be removed from the sidebar. Its metadata is kept, and its worktree and branch are <strong>never deleted</strong> by Mingle — clean those up with Git when you’re ready.</p>
         {session && (session.status === 'running' || session.status === 'waiting') ? <div className="inline-warn" role="note"><AlertTriangle size={14} /> This session is active. Interrupt it first if you want the run to stop.</div> : null}
         {error ? <InlineError>{error}</InlineError> : null}
       </div>

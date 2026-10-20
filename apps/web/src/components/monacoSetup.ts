@@ -26,7 +26,7 @@ const noSemantic = { noSemanticValidation: true, noSyntaxValidation: false, noSu
 monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions(noSemantic);
 monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions(noSemantic);
 
-monaco.editor.defineTheme('relay-dark', {
+monaco.editor.defineTheme('mingle-dark', {
   base: 'vs-dark', inherit: true,
   rules: [
     { token: 'comment', foreground: '5c6379', fontStyle: 'italic' },
@@ -42,7 +42,7 @@ monaco.editor.defineTheme('relay-dark', {
     'editorWidget.border': '#232840', 'scrollbarSlider.background': '#96a0d233',
   },
 });
-monaco.editor.defineTheme('relay-light', {
+monaco.editor.defineTheme('mingle-light', {
   base: 'vs', inherit: true, rules: [{ token: 'keyword', foreground: '5646cf' }],
   colors: { 'editor.background': '#ffffff', 'editor.lineHighlightBackground': '#f3f3fa', 'editorCursor.foreground': '#6c5ce0' },
 });

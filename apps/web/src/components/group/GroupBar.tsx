@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { Pause, Play, Square, Users } from 'lucide-react';
-import type { GroupSnapshot } from '@relay/contracts';
+import type { GroupSnapshot } from '@mingle/contracts';
 import { useRelay } from '../../store/store';
 import { pauseGroup, resumeGroup, stopGroup } from '../../lib/groupActions';
 import { MODE_LABEL, activeMembers, isBusy } from '../../lib/groups';

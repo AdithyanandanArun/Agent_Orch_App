@@ -1,5 +1,5 @@
 import { MarkerType, type Edge, type Node } from '@xyflow/react';
-import type { Project, ProjectContext, Session, Task, ToolCall, WorkspaceEvent } from '@relay/contracts';
+import type { Project, ProjectContext, Session, Task, ToolCall, WorkspaceEvent } from '@mingle/contracts';
 
 export type Component = ProjectContext['components'][number];
 export interface RootData { project: Project; context: ProjectContext | null; [key: string]: unknown }

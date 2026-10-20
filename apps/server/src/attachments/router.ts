@@ -17,7 +17,8 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 
 /** URLSearchParams has already decoded the query value; a header is used verbatim as display metadata. */
 function uploadName(req: IncomingMessage, url: URL): string | undefined {
-  const raw = url.searchParams.get('name') ?? (typeof req.headers['x-relay-filename'] === 'string' ? req.headers['x-relay-filename'] : undefined);
+  const headerName = req.headers['x-mingle-filename'] ?? req.headers['x-relay-filename'];
+  const raw = url.searchParams.get('name') ?? (typeof headerName === 'string' ? headerName : undefined);
   if (raw === undefined) return undefined;
   if (raw.length > 1024) throw badRequest('The file name is too long.');
   return raw;

@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowDown, ArrowRight, FolderPlus } from 'lucide-react';
-import type { GroupDelivery, GroupSnapshot, Message, Session, SessionRun, Task, ToolCall } from '@relay/contracts';
+import type { GroupDelivery, GroupSnapshot, Message, Session, SessionRun, Task, ToolCall } from '@mingle/contracts';
 import { useRelay, useProject } from '../../store/store';
 import { clockTime, cx } from '../../lib/format';
 import { DELIVERY_LABEL, activeMembers } from '../../lib/groups';

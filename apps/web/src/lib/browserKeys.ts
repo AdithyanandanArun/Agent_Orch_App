@@ -1,4 +1,4 @@
-import type { BrowserAction } from '@relay/contracts';
+import type { BrowserAction } from '@mingle/contracts';
 
 /** DOM `KeyboardEvent.key` values whose Playwright name differs; everything else with a name of 2+ chars passes through. */
 const NAMED: Record<string, string> = {

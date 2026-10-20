@@ -1,4 +1,4 @@
-import type { GitHubState } from '@relay/contracts';
+import type { GitHubState } from '@mingle/contracts';
 import { ghApi, ghRun, classify, isRepositorySlug, type GhFailure, type GhResult } from './gh.ts';
 import { scrub } from './scrub.ts';
 
@@ -44,7 +44,7 @@ export async function listPullRequests(repository: string, branch: string, signa
   const result = await ghRun(['pr', 'list', '--repo', repository, `--head=${branch}`, '--state', 'all', '--limit', '10', '--json', 'number,title,url,state,isDraft,baseRefName,headRefName,headRefOid,headRepositoryOwner,updatedAt'], { signal });
   if (result.code !== 0 || result.spawnError) return { ok: false, failure: classify(result) };
   let rows: unknown;
-  try { rows = JSON.parse(result.stdout); } catch { return { ok: false, failure: { kind: 'other', status: null, message: 'GitHub returned a pull request list Relay could not read.' } }; }
+  try { rows = JSON.parse(result.stdout); } catch { return { ok: false, failure: { kind: 'other', status: null, message: 'GitHub returned a pull request list Mingle could not read.' } }; }
   if (!Array.isArray(rows)) return { ok: false, failure: { kind: 'other', status: null, message: 'GitHub returned an unexpected pull request list.' } };
   const owner = repository.split('/')[0]!.toLowerCase();
   const prefix = `https://github.com/${repository}/pull/`.toLowerCase();
@@ -84,7 +84,7 @@ async function fetchChecks(repository: string, head: string, signal?: AbortSigna
     }
   } else {
     complete = false;
-    notices.push(runs.ok ? 'Check runs: GitHub returned a response Relay could not read.' : `Check runs: ${runs.failure.message}`);
+    notices.push(runs.ok ? 'Check runs: GitHub returned a response Mingle could not read.' : `Check runs: ${runs.failure.message}`);
   }
   if (statuses.ok && isRecord(statuses.data) && Array.isArray(statuses.data.statuses)) {
     let counted = 0;
@@ -100,7 +100,7 @@ async function fetchChecks(repository: string, head: string, signal?: AbortSigna
     }
   } else {
     complete = false;
-    notices.push(statuses.ok ? 'Commit statuses: GitHub returned a response Relay could not read.' : `Commit statuses: ${statuses.failure.message}`);
+    notices.push(statuses.ok ? 'Commit statuses: GitHub returned a response Mingle could not read.' : `Commit statuses: ${statuses.failure.message}`);
   }
   if (!complete && !notices.length) notices.push('Some checks could not be read, so the check summary is incomplete.');
   return { ok: true, data: { checks, notices, complete } };
@@ -123,7 +123,7 @@ async function fetchWorkflows(repository: string, head: string, remoteBranch: st
     if (!result.ok) { notices.push(`Workflow runs: ${result.failure.message}`); return; }
     const data = result.data;
     const rows = isRecord(data) && Array.isArray(data.workflow_runs) ? data.workflow_runs : null;
-    if (!rows) { complete = false; notices.push('Workflow runs: GitHub returned a response Relay could not read.'); return; }
+    if (!rows) { complete = false; notices.push('Workflow runs: GitHub returned a response Mingle could not read.'); return; }
     for (const row of rows.slice(0, MAX_RUNS)) {
       if (!isRecord(row) || typeof row.id !== 'number') { complete = false; continue; }
       const headSha = str(row.head_sha, 80)?.toLowerCase();

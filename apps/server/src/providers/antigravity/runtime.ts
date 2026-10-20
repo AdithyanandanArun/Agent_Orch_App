@@ -4,7 +4,7 @@ import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { spawn, type SpawnOptions } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
-import type { AppSettings, ProviderInfo, ProviderModel, Policy } from '@relay/contracts';
+import type { AppSettings, ProviderInfo, ProviderModel, Policy } from '@mingle/contracts';
 import { abortError, cleanEnv, errorMessage, isRecord, redactSecrets, TextTail, truncate } from '../common.js';
 import { runProbe, settlesWithin, shutdownChild, type ChildLike } from '../process.js';
 import { AcpConnection, AcpRpcError, ACP_METHOD_NOT_FOUND } from './rpc.js';
@@ -14,7 +14,7 @@ import { readAntigravityMetadata, writeAntigravityMetadata } from './cache.js';
 
 export const ANTIGRAVITY_POLICIES: Policy[] = ['supervised', 'balanced', 'full-access'];
 export const ANTIGRAVITY_DEFAULT: ProviderModel = { id: 'default', name: 'Antigravity default', reasoningEfforts: [{ id: 'none', label: 'Native default' }], defaultReasoningEffort: 'none', policies: ANTIGRAVITY_POLICIES };
-const REMOVE_ENV = ['RELAY_BROWSER_MCP_TOKEN', 'RELAY_TEAM_MCP_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'OPENAI_API_KEY', 'CODEX_API_KEY'];
+const REMOVE_ENV = ['MINGLE_BROWSER_MCP_TOKEN', 'MINGLE_TEAM_MCP_TOKEN', 'RELAY_BROWSER_MCP_TOKEN', 'RELAY_TEAM_MCP_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'OPENAI_API_KEY', 'CODEX_API_KEY'];
 export type AntigravitySpawn = (file: string, args: string[], options: SpawnOptions) => ChildLike;
 const spawnDefault: AntigravitySpawn = (file, args, options) => spawn(file, args, options) as unknown as ChildLike;
 export interface AntigravityExecutable { path: string; companion: string }
@@ -64,7 +64,7 @@ export function antigravityInfo(executablePath: string | null, version: string |
   return { id: 'antigravity', name: 'Google Antigravity', available, version, executable: executablePath, reason, models, policies: ANTIGRAVITY_POLICIES };
 }
 export function antigravityChildEnv(env: NodeJS.ProcessEnv, companion: string): Record<string, string> { return cleanEnv(env, REMOVE_ENV, { ANTIGRAVITY_HARNESS_PATH: companion }); }
-/** Native login URLs belong in Google's browser flow, never in Relay's durable diagnostics. */
+/** Native login URLs belong in Google's browser flow, never in Mingle's durable diagnostics. */
 export function safeAntigravityText(text: string, secrets: readonly (string | undefined)[] = [process.env.GEMINI_API_KEY, process.env.GOOGLE_API_KEY]): string {
   return redactSecrets(text, secrets).replace(/https?:\/\/[^\s<>"']+/gi, (raw) => {
     try {
@@ -130,7 +130,7 @@ export async function startAntigravity(path: string, companion: string, options:
   });
   const conn = new AcpConnection(child, {
     notification: (method, params) => options.notification?.(method, params),
-    request: async (method, params) => { if (options.request) return options.request(method, params); throw new AcpRpcError(ACP_METHOD_NOT_FOUND, `Relay does not provide ACP client request ${method}.`); },
+    request: async (method, params) => { if (options.request) return options.request(method, params); throw new AcpRpcError(ACP_METHOD_NOT_FOUND, `Mingle does not provide ACP client request ${method}.`); },
     closeMessage: (info) => `Antigravity ACP ${info.error ? `could not start (${(info.error as NodeJS.ErrnoException).code ?? safeAntigravityError(info.error, options.secrets)})` : `exited (${info.signal ?? `code ${info.exitCode}`})`}${stderr.isEmpty ? '' : `: ${truncate(safeAntigravityText(stderr.summary(1200, options.secrets), options.secrets), 1200)}`}.`,
   });
   let closing: Promise<void> | undefined;
@@ -167,7 +167,7 @@ export async function startAntigravity(path: string, companion: string, options:
   options.signal?.addEventListener('abort', onAbort, { once: true });
   if (options.signal?.aborted) onAbort();
   try {
-    const init: unknown = await conn.request('initialize', { protocolVersion: 1, clientInfo: { name: 'relay', version: '0.1.0' }, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } }, options.timeoutMs ?? 12_000);
+    const init: unknown = await conn.request('initialize', { protocolVersion: 1, clientInfo: { name: 'mingle', version: '0.1.0' }, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } }, options.timeoutMs ?? 12_000);
     if (options.signal?.aborted) throw abortError();
     if (!isRecord(init) || init.protocolVersion !== 1 || !isRecord(init.agentInfo) || init.agentInfo.name !== 'antigravity-acp' || typeof init.agentInfo.version !== 'string' || !isRecord(init.agentCapabilities)) throw new Error('The selected executable did not identify itself as a compatible Google Antigravity ACP runtime.');
     return { child, conn, stderr, version: init.agentInfo.version, capabilities: init.agentCapabilities, close: async () => { options.signal?.removeEventListener('abort', onAbort); await close(); } };

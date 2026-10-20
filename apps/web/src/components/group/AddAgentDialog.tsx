@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Pause, Play } from 'lucide-react';
-import type { AgentConfiguration, GroupMember, GroupMode, GroupSnapshot, ProviderInfo, Session } from '@relay/contracts';
+import type { AgentConfiguration, GroupMember, GroupMode, GroupSnapshot, ProviderInfo, Session } from '@mingle/contracts';
 import { useRelay } from '../../store/store';
 import { api, errorMessage } from '../../lib/api';
 import { shortPath } from '../../lib/format';

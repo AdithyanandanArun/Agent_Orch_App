@@ -6,12 +6,25 @@ import { dirname, delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = app.isPackaged ? join(process.resourcesPath, 'workspace') : fileURLToPath(new URL('../../', import.meta.url));
-const runtimeNode = app.isPackaged ? join(process.resourcesPath, 'runtime/bin/node') : process.env.RELAY_NODE_EXECUTABLE || 'node';
 const serverRoot = join(root, 'apps/server');
-app.setName('Relay');
+app.setName('Mingle');
+const mingleUserData = app.getPath('userData');
+const legacyUserData = join(dirname(mingleUserData), 'Relay');
+const mingleWorkspace = join(mingleUserData, 'workspace');
+const legacyWorkspace = join(legacyUserData, 'workspace');
+const hasDatabase = (directory) => existsSync(join(directory, 'relay.sqlite'));
+// Keep the existing Electron profile together with the workspace it belongs to. If both roots
+// have a database, the legacy root wins so an earlier first-launch cannot mask the old workspace.
+const userData = hasDatabase(legacyWorkspace) ? legacyUserData
+  : hasDatabase(mingleWorkspace) ? mingleUserData
+    : existsSync(legacyWorkspace) || existsSync(legacyUserData) ? legacyUserData
+      : mingleUserData;
+app.setPath('userData', userData);
+const runtimeNodeOverride = process.env.MINGLE_NODE_EXECUTABLE !== undefined ? process.env.MINGLE_NODE_EXECUTABLE : process.env.RELAY_NODE_EXECUTABLE;
+const runtimeNode = app.isPackaged ? join(process.resourcesPath, 'runtime/bin/node') : runtimeNodeOverride?.trim() || 'node';
 if (process.platform === 'linux') {
-  app.setDesktopName('relay-workspace.desktop');
-  app.commandLine.appendSwitch('class', 'relay-workspace');
+  app.setDesktopName('mingle.desktop');
+  app.commandLine.appendSwitch('class', 'mingle');
 }
 let backend;
 let quitting = false;
@@ -43,17 +56,18 @@ async function waitForBackend(url) {
 
 async function openWorkspace() {
   if (!existsSync(join(root, 'apps/web/dist/index.html'))) {
-    throw new Error(app.isPackaged ? 'The installed application is missing its UI files. Reinstall Relay.' : 'Build Relay first with pnpm build, then run pnpm desktop.');
+    throw new Error(app.isPackaged ? 'The installed application is missing its UI files. Reinstall Mingle.' : 'Build Mingle first with pnpm build, then run pnpm desktop.');
   }
   const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
-  const userData = app.getPath('userData');
   mkdirSync(userData, { recursive: true, mode: 0o700 });
-  // Never inherit another Relay development server's paths, origins or host into the desktop runtime.
+  const dataOverride = process.env.MINGLE_DATA_DIR !== undefined ? process.env.MINGLE_DATA_DIR : process.env.RELAY_DATA_DIR;
+  const workspaceDataDir = dataOverride?.trim() || join(userData, 'workspace');
+  // Canonical values override any legacy environment inherited from another local server.
   const environment = {
-    ...process.env, NODE_ENV: 'production', RELAY_HOST: '127.0.0.1',
-    RELAY_PORT: String(port), PORT: String(port), RELAY_DATA_DIR: join(userData, 'workspace'),
-    RELAY_WEB_DIST: join(root, 'apps/web/dist'), RELAY_ALLOWED_ORIGINS: '',
+    ...process.env, NODE_ENV: 'production', MINGLE_HOST: '127.0.0.1',
+    MINGLE_PORT: String(port), PORT: String(port), MINGLE_DATA_DIR: workspaceDataDir,
+    MINGLE_WEB_DIST: join(root, 'apps/web/dist'), MINGLE_ALLOWED_ORIGINS: '',
   };
   delete environment.ELECTRON_RUN_AS_NODE;
   delete environment.NODE_OPTIONS;
@@ -73,20 +87,21 @@ async function openWorkspace() {
   });
   backend.on('error', error => {
     if (!quitting) {
-      dialog.showErrorBox('Relay runtime failed', error.message);
+      dialog.showErrorBox('Mingle runtime failed', error.message);
       app.quit();
     }
   });
   backend.on('exit', () => {
     if (!quitting && BrowserWindow.getAllWindows().length) {
-      dialog.showErrorBox('Relay runtime stopped', 'The local runtime stopped. Restart Relay to reconnect your workspace.');
+      dialog.showErrorBox('Mingle runtime stopped', 'The local runtime stopped. Restart Mingle to reconnect your workspace.');
       app.quit();
     }
   });
   try { await waitForBackend(url); }
   catch (error) { throw new Error(`${error.message}\n${startupErrors}`); }
   const window = new BrowserWindow({
-    title: 'Relay', width: 1540, height: 1000, minWidth: 900, minHeight: 620,
+    title: 'Mingle', icon: app.isPackaged ? join(root, 'apps/web/dist/mingle-icon.png') : join(root, 'apps/web/public/mingle-icon.png'),
+    width: 1540, height: 1000, minWidth: 900, minHeight: 620,
     backgroundColor: '#0a0a0a', autoHideMenuBar: true,
     webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true },
   });
@@ -110,7 +125,7 @@ else {
     if (window) { if (window.isMinimized()) window.restore(); window.focus(); }
   });
   app.whenReady().then(openWorkspace).catch(error => {
-    dialog.showErrorBox('Could not start Relay', error.message);
+    dialog.showErrorBox('Could not start Mingle', error.message);
     app.quit();
   });
   app.on('window-all-closed', () => app.quit());

@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import type { Bootstrap, GroupSnapshot } from '@relay/contracts';
+import type { Bootstrap, GroupSnapshot } from '@mingle/contracts';
 import { EXAMPLE_CONTRACT_SESSION_ID } from './example.ts';
 import { deferred, startTestApp, waitFor, type TestApp } from './test-utils.ts';
 

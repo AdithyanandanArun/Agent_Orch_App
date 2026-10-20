@@ -1,6 +1,6 @@
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
-import type { ServerEvent, WorkspaceEvent } from '@relay/contracts';
+import type { ServerEvent, WorkspaceEvent } from '@mingle/contracts';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { Security } from './security.ts';
 import type { Logger } from './types.ts';

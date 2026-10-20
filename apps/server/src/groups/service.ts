@@ -1,11 +1,11 @@
 import { createHash } from 'node:crypto';
 import {
   nativeActionCommands, nativeActionSkills,
-} from '@relay/contracts';
+} from '@mingle/contracts';
 import type {
   AddGroupAgent, AgentConfiguration, ConversationGroup, CreateGroup, GroupAssignment, GroupDelivery, GroupMember, GroupMessage, GroupMode,
   GroupRunContext, GroupSnapshot, ProviderInfo, Session, Task, TeamArtifactSchema, TeamAssignSchema, TeamMessageSchema, TeamStatusSchema, UpdateGroupSchema,
-} from '@relay/contracts';
+} from '@mingle/contracts';
 import type { z } from 'zod';
 import { unfinishedDeps } from '../dag.ts';
 import type { HandoffService } from '../handoffs.ts';
@@ -15,7 +15,7 @@ import type { TaskService } from '../tasks.ts';
 import { HttpError, conflict, errorMessage, notFound, nowIso, redactSecrets, truncate, unprocessable } from '../util.ts';
 import type { WorkspaceService } from '../workspace.ts';
 import type { AttachmentService } from '../attachments/service.ts';
-import type { GroupInvocation, NativeInvocationInput, ProviderCatalog } from '@relay/contracts';
+import type { GroupInvocation, NativeInvocationInput, ProviderCatalog } from '@mingle/contracts';
 import {
   GroupRepo, OPEN_DELIVERY, UNSETTLED_DELIVERY, artifactId, assignmentId, deliveryId, groupId as newGroupId, memberId as newMemberId, requestId as newRequestId,
   type ArtifactRow, type AssignmentRow, type DeliveryRow, type MemberRow,
@@ -30,7 +30,7 @@ export type GroupLog = (level: 'info' | 'warn' | 'error', message: string, detai
 export interface GroupRuntime {
   isActive(sessionId: string): boolean;
   isRunLive?(sessionId: string, runId: string): boolean;
-  start(sessionId: string, content: string, options?: { taskId?: string; groupDeliveryId?: string; userMessage?: { content: string; kind?: string }; attachmentOwnerKind?: 'message' | 'group_message'; attachmentOwnerId?: string; invocation?: import('@relay/contracts').NativeInvocation }): string;
+  start(sessionId: string, content: string, options?: { taskId?: string; groupDeliveryId?: string; userMessage?: { content: string; kind?: string }; attachmentOwnerKind?: 'message' | 'group_message'; attachmentOwnerId?: string; invocation?: import('@mingle/contracts').NativeInvocation }): string;
   interrupt(sessionId: string): boolean;
 }
 export type GroupCatalog = (session: Session, refresh?: boolean) => Promise<ProviderCatalog>;
@@ -349,7 +349,7 @@ export class GroupService {
       requested = [member.id];
       if (input.attachmentIds?.length && session.provider === 'opencode') throw unprocessable('OpenCode native slash commands cannot carry attachments. Remove the attachments or send a regular message.');
     }
-    if (input.attachmentIds?.length && !this.attachments) throw conflict('Attachments are unavailable in this Relay session.');
+    if (input.attachmentIds?.length && !this.attachments) throw conflict('Attachments are unavailable in this Mingle session.');
     const attachmentRows = this.attachments?.validate({ kind: 'group', id: groupId }, input.attachmentIds ?? []) ?? [];
     const route = invocation
       ? { recipients: [members.find((m) => m.id === invocation!.memberId)!], runners: [members.find((m) => m.id === invocation!.memberId)!], planner: members.find((m) => m.id === invocation!.memberId)! }
@@ -539,14 +539,14 @@ export class GroupService {
         this.store.tx(() => {
           let touched = 0;
           for (const d of this.repo.deliveries(group.id, ['running'])) {
-            this.repo.transitionDelivery(d.id, 'running', 'interrupted', { error: 'Interrupted because Relay restarted', retryable: true });
+            this.repo.transitionDelivery(d.id, 'running', 'interrupted', { error: 'Interrupted because Mingle restarted', retryable: true });
             const assignment = d.assignmentId ? this.repo.getAssignment(d.assignmentId) : undefined;
             if (assignment || d.taskId) this.tasks.finishRun(assignment?.taskId ?? d.taskId!, 'interrupted');
             touched++;
           }
           const waiting = this.repo.deliveries(group.id).filter((d) => d.status === 'queued' || ((d.status === 'failed' || d.status === 'interrupted') && d.retryable));
           if (waiting.length && !group.paused) {
-            this.repo.updateGroup(group.id, { paused: true, pauseReason: 'Relay restarted with unfinished work. Resume to continue; nothing was restarted automatically.' });
+            this.repo.updateGroup(group.id, { paused: true, pauseReason: 'Mingle restarted with unfinished work. Resume to continue; nothing was restarted automatically.' });
           }
           if (waiting.length || touched) {
             for (const request of this.repo.requestsWithStatus(group.id, 'active')) this.refreshRequest(request.id, true);
@@ -791,7 +791,7 @@ export class GroupService {
       return false;
     }
     const assignment = d.assignmentId ? this.repo.getAssignment(d.assignmentId) : undefined;
-    let nativeInvocation: import('@relay/contracts').NativeInvocation | undefined;
+    let nativeInvocation: import('@mingle/contracts').NativeInvocation | undefined;
     const sourceMessage = this.repo.getMessage(d.messageId);
     if (sourceMessage?.invocation) {
       const saved = sourceMessage.invocation as GroupInvocation;
@@ -804,7 +804,7 @@ export class GroupService {
       const items = saved.kind === 'command' ? nativeActionCommands(session.provider, current.commands) : nativeActionSkills(session.provider, current.skills);
       const resolved = items.find((item) => item.id === saved.id && item.name === saved.name && ('enabled' in item ? item.enabled : true));
       if (!resolved) { this.cancel(d, 'The provider action is no longer available. Refresh the catalog and select it again.'); return false; }
-      nativeInvocation = { kind: saved.kind, name: saved.name, arguments: saved.arguments, ...(saved.kind === 'skill' ? { skill: resolved as import('@relay/contracts').ProviderSkill } : {}) };
+      nativeInvocation = { kind: saved.kind, name: saved.name, arguments: saved.arguments, ...(saved.kind === 'skill' ? { skill: resolved as import('@mingle/contracts').ProviderSkill } : {}) };
       const latestGroup = this.repo.getGroup(group.id);
       const latestMember = this.repo.members(group.id, false).find((row) => row.id === member.id);
       const latestSession = latestMember ? this.store.getSession(latestMember.sessionId) : undefined;
@@ -1008,7 +1008,7 @@ export class GroupService {
     const unread = this.repo.messagesAddressedAfter(group.id, member.id, member.lastReadSeq, LIMITS.inboxCount + 1);
     const page = unread.length ? unread.slice(0, LIMITS.inboxCount) : this.repo.messagesFor(group.id, member.id, LIMITS.inboxCount);
     const messages = page.map((m) => ({
-      id: m.id, seq: m.seq, kind: m.kind, from: m.senderMemberId ? names.get(m.senderMemberId) ?? 'unknown' : m.kind === 'user' ? 'human' : 'relay',
+      id: m.id, seq: m.seq, kind: m.kind, from: m.senderMemberId ? names.get(m.senderMemberId) ?? 'unknown' : m.kind === 'user' ? 'human' : 'mingle',
       requestId: m.requestId, replyToId: m.replyToId, content: clean(m.content, LIMITS.inboxMessage),
     }));
     const readThrough = unread.length ? page.at(-1)!.seq : member.lastReadSeq;
@@ -1250,7 +1250,7 @@ export class GroupService {
 
   /** Verifies, against durable state on every call, that this context is a running delivery of an active member. */
   private live(ctx: GroupRunContext): Live {
-    if (this.closed) throw conflict('Relay is shutting down');
+    if (this.closed) throw conflict('Mingle is shutting down');
     const delivery = this.repo.getDelivery(ctx.deliveryId);
     if (!delivery || delivery.status !== 'running' || !delivery.runId || delivery.groupId !== ctx.groupId || delivery.memberId !== ctx.memberId
       || delivery.requestId !== ctx.requestId || delivery.hop !== ctx.hop) throw conflict('This team connection is no longer tied to an active delivery');
@@ -1281,7 +1281,7 @@ export class GroupService {
     return this.store.recordEvent({ projectId: group.projectId, sessionId: sessionId ?? null, type, summary: clean(summary, 1000), payload: JSON.parse(redactSecrets(JSON.stringify({ groupId: group.id, ...payload }))) as Record<string, unknown> });
   }
 
-  private assertOpen(): void { if (this.closed) throw conflict('Relay is shutting down'); }
+  private assertOpen(): void { if (this.closed) throw conflict('Mingle is shutting down'); }
 
   private requireGroup(id: string): ConversationGroup {
     const group = this.repo.getGroup(id);

@@ -3,7 +3,7 @@ import { constants as fsConstants, chmodSync, mkdirSync, renameSync } from 'node
 import { mkdir, open, opendir, rm, stat, unlink, type FileHandle } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
-import { ATTACHMENT_LIMITS, type AttachmentRef, type RunAttachment } from '@relay/contracts';
+import { ATTACHMENT_LIMITS, type AttachmentRef, type RunAttachment } from '@mingle/contracts';
 import type { Store } from '../store.ts';
 import type { Logger } from '../types.ts';
 import { HttpError, badRequest, conflict, notFound, unprocessable } from '../util.ts';
@@ -68,7 +68,7 @@ export class AttachmentService {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     const drain = this.uploadDrain;
-    for (const req of this.uploadRequests) req.destroy(new HttpError(503, 'Relay is shutting down.'));
+    for (const req of this.uploadRequests) req.destroy(new HttpError(503, 'Mingle is shutting down.'));
     await Promise.all([this.sweepTask, ...(drain ? [drain] : [])]);
   }
 
@@ -88,7 +88,7 @@ export class AttachmentService {
    * validating images by signature, then records metadata. Everything is removed on overflow, abort or error.
    */
   async upload(req: IncomingMessage, input: UploadInput): Promise<AttachmentRef> {
-    if (this.closed) throw new HttpError(503, 'Relay is shutting down.');
+    if (this.closed) throw new HttpError(503, 'Mingle is shutting down.');
     const projectId = this.requireScope(input.scope);
     const key = scopeKey(input.scope);
     const declared = Number(req.headers['content-length'] ?? NaN);
@@ -113,7 +113,7 @@ export class AttachmentService {
       let head = Buffer.alloc(0);
       let sniffed = false;
       for await (const chunk of req as AsyncIterable<Buffer>) {
-        if (this.closed) throw new HttpError(503, 'Relay is shutting down.');
+        if (this.closed) throw new HttpError(503, 'Mingle is shutting down.');
         if (!sniffed) {
           head = Buffer.concat([head, chunk.subarray(0, SNIFF_BYTES - head.length)]);
           // Signatures are decided from the first bytes so the smaller image limit applies while streaming.

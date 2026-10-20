@@ -1,5 +1,5 @@
 import { tmpdir } from 'node:os';
-import type { AppSettings, Policy, ProviderModel } from '@relay/contracts';
+import type { AppSettings, Policy, ProviderModel } from '@mingle/contracts';
 import { query, type ModelInfo, type Options, type Query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { resolveClaudeExecutable } from './adapter.js';
 import { claudeEnvironment } from './auth.js';
@@ -79,7 +79,7 @@ export async function withClaudeMetadataQuery<T>(
   }
 }
 
-/** Map the SDK's live model catalog to Relay metadata without advertising unsupported controls. */
+/** Map the SDK's live model catalog to Mingle metadata without advertising unsupported controls. */
 export function claudeModelsFromSdk(models: ModelInfo[]): ProviderModel[] {
   return models.flatMap((model) => {
     const id = model.value.trim();

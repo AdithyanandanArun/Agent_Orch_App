@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AntigravityAuthState, AntigravityInstallState, ProviderInfo } from '@relay/contracts';
+import type { AntigravityAuthState, AntigravityInstallState, ProviderInfo } from '@mingle/contracts';
 import { api, errorMessage } from '../lib/api';
 import { Button, InlineError, Spinner } from './ui';
 
@@ -225,7 +225,7 @@ export function AntigravityRuntimeSetup({ providerInfo, onProviderChanged }: { p
   const shownInstallError = install?.error ?? null;
 
   return <section className="agy-runtime" aria-labelledby="agy-runtime-title">
-    <div className="agy-runtime__head"><div><h3 id="agy-runtime-title">Antigravity runtime</h3><p>Install the managed ACP runtime used by Relay.</p></div>
+    <div className="agy-runtime__head"><div><h3 id="agy-runtime-title">Antigravity runtime</h3><p>Install the managed ACP runtime used by Mingle.</p></div>
       {install?.state === 'installing' ? <Spinner label="Installing Antigravity runtime" /> : null}
     </div>
     {loading && !install ? <p className="agy-runtime__meta">Checking installation status…</p> : null}

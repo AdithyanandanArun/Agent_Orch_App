@@ -3,8 +3,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
-import { TeamArtifactSchema, TeamAssignSchema, TeamMessageSchema, TeamStatusSchema } from '@relay/contracts';
-import type { GroupRunContext, Session, TeamMcpConnection } from '@relay/contracts';
+import { TeamArtifactSchema, TeamAssignSchema, TeamMessageSchema, TeamStatusSchema } from '@mingle/contracts';
+import type { GroupRunContext, Session, TeamMcpConnection } from '@mingle/contracts';
 import type { Store } from './store.ts';
 import { errorMessage, truncate } from './util.ts';
 import { redactSecrets } from './providers/common.ts';
@@ -39,10 +39,10 @@ const ERROR_LIMIT = 1_000;
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 
 const INSTRUCTIONS = [
-  'These tools are Relay’s host-authenticated team interface for this one run. Relay derives your identity, role and group from the run itself; you cannot choose or change the sender.',
-  'Call team_members first to see each member’s handle, role and actual status, including your own. Call team_inbox to read what Relay has queued for you.',
+  'These tools are Mingle’s host-authenticated team interface for this one run. Mingle derives your identity, role and group from the run itself; you cannot choose or change the sender.',
+  'Call team_members first to see each member’s handle, role and actual status, including your own. Call team_inbox to read what Mingle has queued for you.',
   'Who may assign work is enforced by the host on every call. In Orchestrated and Current agent leads groups only the designated orchestrator assigns work. In Cowork only the peer holding this request’s temporary planning lease may assign, and only within that lease; any member may message or report on its own work. A refusal is final: do not try to work around it.',
-  'team_assign, team_message and team_artifact confirm acceptance or queueing, never completion. team_status reports progress on a task you own. Recipients are handles such as claude1; Relay never dispatches work by scanning your prose for @mentions, so use these tools to reach someone.',
+  'team_assign, team_message and team_artifact confirm acceptance or queueing, never completion. team_status reports progress on a task you own. Recipients are handles such as claude1; Mingle never dispatches work by scanning your prose for @mentions, so use these tools to reach someone.',
   'For completion, publish required committed handoff files once with team_artifact (one file revision per call, only when a real commit exists), record team_status review when ready, then give a concise final summary. Unresolved work stays blocked. Do not send unsolicited completion acknowledgments or wake peers solely to repeat completion. Answer concrete teammate questions concisely with replyToId when needed. A coordinator answers the human once, with the outcome first, each member’s contribution, where work was integrated, which checks it ran versus peers reported, and what still needs review. Review is not Done.',
   'Keep payloads compact: scoped objectives, exact paths and revisions, and concise questions. Limits, edit-scope ownership and delegation budgets are enforced by the host.',
 ].join(' ');
@@ -88,7 +88,7 @@ export class TeamMcpBridge {
   }
 
   private tools(binding: Binding, requestSignal: AbortSignal): McpServer {
-    const server = new McpServer({ name: 'relay-team', version: '0.1.0' }, { instructions: INSTRUCTIONS });
+    const server = new McpServer({ name: 'mingle-team', version: '0.1.0' }, { instructions: INSTRUCTIONS });
     const output = (value: unknown) => ({ content: [{ type: 'text' as const, text: truncate(redactSecrets(JSON.stringify(value) ?? 'null'), OUTPUT_LIMIT) }] });
     const register = (name: string, description: string, shape: z.ZodRawShape, hints: { readOnly: boolean; idempotent: boolean },
       operation: (args: Record<string, unknown>) => Promise<unknown> | unknown) => {
@@ -105,7 +105,7 @@ export class TeamMcpBridge {
     };
     const ctx = binding.context;
     register('team_members', 'List this group’s members with their handles, roles and actual status. Start here to learn your role and who you can reach.', {}, { readOnly: true, idempotent: true }, () => this.groups.members(ctx));
-    register('team_inbox', 'Read the messages, assignments and artifact references Relay has queued for you.', {}, { readOnly: false, idempotent: true }, () => this.groups.inbox(ctx));
+    register('team_inbox', 'Read the messages, assignments and artifact references Mingle has queued for you.', {}, { readOnly: false, idempotent: true }, () => this.groups.inbox(ctx));
     register('team_assign', 'Assign a scoped task to another member. Allowed only when your role or planning lease permits it. A success means the assignment was accepted and queued, not completed.',
       TeamAssignSchema.shape, { readOnly: false, idempotent: false }, (args) => this.groups.assign(ctx, TeamAssignSchema.parse(args)));
     register('team_message', 'Send a targeted question, reply or note to one member. Set expectsReply only when you need an answer; success means the message was queued. Avoid unsolicited or repetitive completion acknowledgments; normal completion goes through team_artifact, team_status and your final answer. Answer concrete teammate questions concisely with replyToId when needed, setting expectsReply when your answer must let that teammate continue.',

@@ -3,7 +3,7 @@ import type { Duplex } from 'node:stream';
 import {
   BrowserActionSchema, BrowserConnectSchema, type AppSettings, type BrowserAction, type BrowserConnect, type BrowserDiscovery, type BrowserSessionState,
   type BrowserSnapshot, type BrowserTab,
-} from '@relay/contracts';
+} from '@mingle/contracts';
 import type { Security } from '../security.ts';
 import type { Logger } from '../types.ts';
 import type { Actor } from './control.ts';

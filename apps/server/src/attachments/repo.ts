@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
-import type { AttachmentKind, AttachmentRef } from '@relay/contracts';
+import type { AttachmentKind, AttachmentRef } from '@mingle/contracts';
 import { nowIso } from '../util.ts';
 
 type Row = Record<string, unknown>;

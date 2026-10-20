@@ -58,7 +58,7 @@ export function diagnoseLaunchError(error: unknown): BrowserError {
     return new BrowserError(503, 'Chromium cannot start because system libraries are missing. Install the Chromium runtime dependencies for this OS (for example with `npx playwright install-deps chromium`), then try again.');
   }
   if (/sandbox|namespace|setuid|running as root/iu.test(message)) {
-    return new BrowserError(503, 'Chromium\'s sandbox could not start. Relay keeps the sandbox enabled; run Relay as a regular user and, on Linux, allow unprivileged user namespaces (on Ubuntu 23.10+ this needs an AppArmor profile for the browser).');
+    return new BrowserError(503, 'Chromium\'s sandbox could not start. Mingle keeps the sandbox enabled; run Mingle as a regular user and, on Linux, allow unprivileged user namespaces (on Ubuntu 23.10+ this needs an AppArmor profile for the browser).');
   }
   if (/ProcessSingleton|SingletonLock|profile.*(?:in use|locked)/iu.test(message)) {
     return new BrowserError(409, 'This session\'s browser profile is already in use by another Chromium process. Disconnect the session and try again.');

@@ -1,4 +1,4 @@
-import type { GroupDelivery, GroupMember, GroupMessage, GroupSnapshot, Message, Session, SessionRun, ToolCall } from '@relay/contracts';
+import type { GroupDelivery, GroupMember, GroupMessage, GroupSnapshot, Message, Session, SessionRun, ToolCall } from '@mingle/contracts';
 import type { StreamEntry } from '../store/store';
 import type { DisplayMessage } from './conversation';
 

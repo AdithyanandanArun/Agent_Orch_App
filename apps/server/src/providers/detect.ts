@@ -1,6 +1,6 @@
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
-import type { AppSettings, ProviderInfo, ProviderModel } from '@relay/contracts';
+import type { AppSettings, ProviderInfo, ProviderModel } from '@mingle/contracts';
 import { CODEX_CLIENT_INFO } from './codex/adapter.js';
 import { CODEX_POLICIES, parseCodexModel } from './codex/capabilities.js';
 import { JsonRpcConnection, RpcError } from './codex/rpc.js';
@@ -16,7 +16,7 @@ import { antigravityInfo, ANTIGRAVITY_DEFAULT, cachedAntigravityMetadata, isAnti
 
 export const CODEX_DEFAULT_MODEL = 'gpt-6.1-sol';
 const CODEX_DEFAULT_MODEL_ENTRY = { id: CODEX_DEFAULT_MODEL, name: 'GPT-6.1 Sol' };
-const ANTIGRAVITY_AUTH_CHECKED = 'Authenticated metadata was checked earlier in this Relay process. Account access and quota are checked again when a run starts.';
+const ANTIGRAVITY_AUTH_CHECKED = 'Authenticated metadata was checked earlier in this Mingle process. Account access and quota are checked again when a run starts.';
 const ANTIGRAVITY_AUTH_UNVERIFIED = 'Google sign-in is not verified; sign in from Settings. Authentication is checked when a run starts.';
 
 export interface DetectDeps {
@@ -107,7 +107,7 @@ export async function detectClaude(settings: AppSettings, deps: DetectDeps = {})
     return { ...info, reason: 'Claude Code returned an unrecognized login status. Update Claude Code or set ANTHROPIC_API_KEY, then Re-check in Settings.' };
   }
   if (!status.loggedIn) {
-    return { ...info, reason: `Claude Code ${executable.version} is installed, but no login was found. Run \`"${executable.path}" auth login\` in a terminal on this machine, or set ANTHROPIC_API_KEY in the Relay server environment, then Re-check in Settings.` };
+    return { ...info, reason: `Claude Code ${executable.version} is installed, but no login was found. Run \`"${executable.path}" auth login\` in a terminal on this machine, or set ANTHROPIC_API_KEY in the Mingle server environment, then Re-check in Settings.` };
   }
   if (!authStatusOk) {
     return { ...info, reason: 'Claude Code login check failed. Run `claude auth status` in the server environment, then Re-check in Settings.' };
@@ -143,7 +143,7 @@ export async function probeCodexAppServer(executable: string, deps: DetectDeps =
   child.stderr?.on('data', (chunk: string | Buffer) => stderr.push(chunk.toString()));
   const conn = new JsonRpcConnection(child, {
     onNotification: () => undefined,
-    onRequest: async (method) => { throw new RpcError(-32601, `Relay probe does not support ${method}`); },
+    onRequest: async (method) => { throw new RpcError(-32601, `Mingle probe does not support ${method}`); },
     formatClose: (info) => `app-server ${info.error ? `could not start (${info.error.message})` : `exited with ${info.signal ?? `code ${info.exitCode}`}`}${stderr.isEmpty ? '' : `: ${stderr.summary(300)}`}`,
   });
   const deadline = Date.now() + timeoutMs;

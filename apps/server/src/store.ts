@@ -1,5 +1,5 @@
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
-import type { TaskSource, ProjectContext, AppSettings, Approval, Message, Policy, Project, Provider, RunChanges, RunChangesSummary, Session, SessionStatus, SessionRun, ToolCall, ToolCategory, RunStatus, Task, TaskStatus, WorkspaceEvent } from '@relay/contracts';
+import type { TaskSource, ProjectContext, AppSettings, Approval, Message, Policy, Project, Provider, RunChanges, RunChangesSummary, Session, SessionStatus, SessionRun, ToolCall, ToolCategory, RunStatus, Task, TaskStatus, WorkspaceEvent } from '@mingle/contracts';
 import { SCHEMA_VERSION } from './db.ts';
 import { newId, nowIso } from './util.ts';
 import { AttachmentRepo } from './attachments/repo.ts';
@@ -130,7 +130,7 @@ export class Store {
   }
   removeProject(id: string): void {
     this.run('UPDATE projects SET archived_at = ? WHERE id = ?', nowIso(), id);
-    this.run('UPDATE conversation_groups SET paused = 1, pause_reason = ?, updated_at = ? WHERE project_id = ?', 'Project removed from Relay. Resume explicitly after reopening it.', nowIso(), id);
+    this.run('UPDATE conversation_groups SET paused = 1, pause_reason = ?, updated_at = ? WHERE project_id = ?', 'Project removed from Mingle. Resume explicitly after reopening it.', nowIso(), id);
   }
 
   // sessions

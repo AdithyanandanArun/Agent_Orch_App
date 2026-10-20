@@ -1,4 +1,4 @@
-import type { GitHubState, RepositoryChange, RepositoryState } from '@relay/contracts';
+import type { GitHubState, RepositoryChange, RepositoryState } from '@mingle/contracts';
 
 export const shortSha = (sha: string | null | undefined): string => (sha ? sha.slice(0, 7) : 'none');
 

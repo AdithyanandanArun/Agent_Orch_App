@@ -1,7 +1,7 @@
 import { nativePlanSteps } from '../plans.js';
 import { spawn, type SpawnOptions } from 'node:child_process';
 import path from 'node:path';
-import type { AdapterEvent, AgentAdapter, AppSettings, RunOptions } from '@relay/contracts';
+import type { AdapterEvent, AgentAdapter, AppSettings, RunOptions } from '@mingle/contracts';
 import { ProviderError, TextTail, abortError, cleanEnv, isRecord, truncate } from '../common.js';
 import { resolveExecutableCached, type ResolveResult } from '../discovery.js';
 import { shutdownChild, type ChildLike } from '../process.js';
@@ -54,7 +54,7 @@ export const CODEX_OPT_OUT_NOTIFICATIONS = [
   'mcpServer/startupStatus/updated', 'mcpServer/event/stream/notification',
 ];
 
-export const CODEX_CLIENT_INFO = { name: 'relay', title: 'Relay', version: '0.1.0' };
+export const CODEX_CLIENT_INFO = { name: 'mingle', title: 'Mingle', version: '0.1.0' };
 
 const defaultSpawn: SpawnFn = (file, args, options) => spawn(file, args, options) as unknown as ChildLike;
 
@@ -132,9 +132,9 @@ class CodexRun {
 
   async execute(): Promise<void> {
     const { session, signal } = this.options;
-    const env = cleanEnv(this.ctx.env, ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN', 'RELAY_TEAM_MCP_TOKEN', 'RELAY_BROWSER_MCP_TOKEN']);
-    if (this.options.browserMcp) env.RELAY_BROWSER_MCP_TOKEN = this.options.browserMcp.token;
-    if (this.options.teamMcp) env.RELAY_TEAM_MCP_TOKEN = this.options.teamMcp.token;
+    const env = cleanEnv(this.ctx.env, ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN', 'MINGLE_TEAM_MCP_TOKEN', 'MINGLE_BROWSER_MCP_TOKEN', 'RELAY_TEAM_MCP_TOKEN', 'RELAY_BROWSER_MCP_TOKEN']);
+    if (this.options.browserMcp) env.MINGLE_BROWSER_MCP_TOKEN = this.options.browserMcp.token;
+    if (this.options.teamMcp) env.MINGLE_TEAM_MCP_TOKEN = this.options.teamMcp.token;
     this.child = this.ctx.spawn(this.executable, ['app-server'], {
       cwd: session.worktreePath, env, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsHide: true,
     });
@@ -247,13 +247,13 @@ class CodexRun {
       if (this.compaction.notice) this.info(this.compaction.notice);
     }
     const overrides: Record<string, unknown> = { ...this.compaction?.config };
-    if (this.options.browserMcp) overrides['mcp_servers.relay_browser'] = {
-      url: this.options.browserMcp.url, bearer_token_env_var: 'RELAY_BROWSER_MCP_TOKEN', enabled: true,
+    if (this.options.browserMcp) overrides['mcp_servers.mingle_browser'] = {
+      url: this.options.browserMcp.url, bearer_token_env_var: 'MINGLE_BROWSER_MCP_TOKEN', enabled: true,
       startup_timeout_sec: 15, tool_timeout_sec: 180, default_tools_approval_mode: 'approve',
     };
     // Independent of the browser server; both are per-thread and neither edits global Codex configuration.
-    if (this.options.teamMcp) overrides['mcp_servers.relay_team'] = {
-      url: this.options.teamMcp.url, bearer_token_env_var: 'RELAY_TEAM_MCP_TOKEN', enabled: true,
+    if (this.options.teamMcp) overrides['mcp_servers.mingle_team'] = {
+      url: this.options.teamMcp.url, bearer_token_env_var: 'MINGLE_TEAM_MCP_TOKEN', enabled: true,
       startup_timeout_sec: 15, tool_timeout_sec: 180, default_tools_approval_mode: 'approve',
     };
     const threadConfig = Object.keys(overrides).length ? { config: overrides } : {};
@@ -266,7 +266,7 @@ class CodexRun {
           throw error;
         });
     } else {
-      result = await this.conn.request('thread/start', { ...common, ...threadConfig, serviceName: 'relay' }, this.ctx.timeouts.threadMs);
+      result = await this.conn.request('thread/start', { ...common, ...threadConfig, serviceName: 'mingle' }, this.ctx.timeouts.threadMs);
     }
     const thread = isRecord(result) && isRecord(result.thread) ? result.thread : null;
     const id = thread && typeof thread.id === 'string' ? thread.id : null;
@@ -425,7 +425,7 @@ class CodexRun {
     const from = String(params.fromModel ?? this.options.session.model);
     const to = String(params.toModel ?? 'another model');
     const reason = typeof params.reason === 'string' ? ` (${params.reason})` : '';
-    this.violation = new ProviderError(`Codex rerouted the request from ${from} to ${to}${reason}. Relay does not allow automatic model substitution, so the run was stopped.`, { code: 'model_substitution' });
+    this.violation = new ProviderError(`Codex rerouted the request from ${from} to ${to}${reason}. Mingle does not allow automatic model substitution, so the run was stopped.`, { code: 'model_substitution' });
     this.info(this.violation.message);
     this.stopTurn();
   }
@@ -442,7 +442,7 @@ class CodexRun {
         this.turnDone.reject(new ProviderError(describeTurnError(turn.error, this.lastError ?? 'Codex turn failed'), { code: 'turn_failed' }));
         break;
       case 'interrupted':
-        this.turnDone.reject(this.violation ?? (this.abortRequested ? abortError() : new ProviderError('Codex ended the turn as interrupted without a request from Relay.', { code: 'turn_interrupted' })));
+        this.turnDone.reject(this.violation ?? (this.abortRequested ? abortError() : new ProviderError('Codex ended the turn as interrupted without a request from Mingle.', { code: 'turn_interrupted' })));
         break;
       default:
         break; // inProgress is not a terminal status
@@ -482,14 +482,14 @@ class CodexRun {
         return legacyDecision(approved, this.abortRequested);
       }
       case 'mcpServer/elicitation/request':
-        this.info(`An MCP server (${String(params.serverName ?? 'unknown')}) asked for input; Relay declined because it has no input surface for that.`);
+        this.info(`An MCP server (${String(params.serverName ?? 'unknown')}) asked for input; Mingle declined because it has no input surface for that.`);
         return { action: 'decline', content: null };
       case 'item/tool/call':
-        this.info(`Codex requested the client-side tool "${String(params.tool ?? 'unknown')}", which Relay does not provide.`);
-        return { contentItems: [{ type: 'inputText', text: 'Relay does not provide client-side tools.' }], success: false };
+        this.info(`Codex requested the client-side tool "${String(params.tool ?? 'unknown')}", which Mingle does not provide.`);
+        return { contentItems: [{ type: 'inputText', text: 'Mingle does not provide client-side tools.' }], success: false };
       default:
-        this.info(`Codex sent an unsupported request (${method}); Relay rejected it.`);
-        throw new RpcError(RPC_METHOD_NOT_FOUND, `Relay does not support ${method}`);
+        this.info(`Codex sent an unsupported request (${method}); Mingle rejected it.`);
+        throw new RpcError(RPC_METHOD_NOT_FOUND, `Mingle does not support ${method}`);
     }
   }
 }

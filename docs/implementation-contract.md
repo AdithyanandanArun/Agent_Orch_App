@@ -130,6 +130,8 @@ The server owns `BrowserService` separately from provider runtimes and the UI. M
 
 Cowork, Orchestrated and Current agent leads are implemented as a shared conversation and membership layer above the independent provider sessions. The detailed behavior is specified in phase-2-group-sessions.md; user controls are described in group-sessions.md. Migrations 7 and 8 add durable groups, members, messages, requests, deliveries, assignments, verified artifacts and explicit artifact prerequisites. Migration 8 also upgrades development databases that opened either earlier v7 shape, retaining artifact records and consumer links.
 
+- `POST /api/groups CreateGroup` converts an idle session and adds an agent, with a separate coordinator only in Orchestrated mode. Existing history/nativeevelopment databases that opened either earlier v7 shape, retaining artifact records and consumer links.
+
 - `POST /api/groups CreateGroup` converts an idle session and adds an agent, with a separate coordinator only in Orchestrated mode. Existing history/native IDs stay with their sessions. New sessions use isolated worktrees by default. Creation starts no inference.
 - `GET /api/groups/:id` returns `GroupSnapshot`; bootstrap includes group snapshots. `PATCH` changes mode/designated coordinator or limits with explicit idle/pending-work guards. Limit increases preserve recorded turn counts.
 - `POST .../agents AddGroupAgent` adds an independent participant. `DELETE .../members/:memberId` removes an eligible idle member while retaining historical identity and workspace. Handles are unique, including retired handles; the anchor and designated coordinator cannot be removed directly. Active groups are not archived through the independent-session archive endpoint.

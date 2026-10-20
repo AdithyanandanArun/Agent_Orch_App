@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { AlertTriangle, ArrowDownToLine, Check, Clock3, Folder, Search, X } from 'lucide-react';
-import type { ExternalConversation, ExternalConversationDetails, ExternalConversationMessage, Provider } from '@relay/contracts';
+import type { ExternalConversation, ExternalConversationDetails, ExternalConversationMessage, Provider } from '@mingle/contracts';
 import { useRelay } from '../store/store';
 import { api, errorMessage } from '../lib/api';
 import { Button, InlineError, Modal, Spinner } from './ui';
@@ -220,7 +220,7 @@ export function ImportDialog() {
         <section className="import-dialog__preview" aria-label="Conversation preview" aria-live="polite">
           {!picked ? <div className="import-dialog__state import-dialog__state--preview"><ArrowDownToLine size={20} /><strong>Choose a conversation</strong><span>Review its transcript and original folder before importing.</span></div> : <>
             <div className="import-dialog__preview-head"><div><h3>{picked.title || 'Untitled conversation'}</h3><p><Folder size={13} />{picked.directory ?? 'Original folder unavailable'}</p></div><button className="import-dialog__clear" type="button" aria-label="Clear selected conversation" disabled={importing} onClick={() => setSelected(null)}><X size={15} /></button></div>
-            <p className="import-dialog__resume-note">Import opens a Relay session without starting a model turn. Your next composer message resumes this conversation in its original folder.</p>
+                 <p className="import-dialog__resume-note">Import opens a Mingle session without starting a model turn. Your next composer message resumes this conversation in its original folder.</p>
             {unavailableReason ? <div className="import-dialog__unavailable"><AlertTriangle size={15} /><span>{unavailableReason}</span></div> : null}
             <p className="import-dialog__cli-note">Finish any active CLI run before continuing here.</p>
             {detailError ? <InlineError onRetry={importing ? undefined : () => setDetailRevision((value) => value + 1)}>{detailError}</InlineError> : null}

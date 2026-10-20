@@ -1,11 +1,11 @@
-import type { Policy, ProviderCommand, ProviderModel } from '@relay/contracts';
+import type { Policy, ProviderCommand, ProviderModel } from '@mingle/contracts';
 import { isRecord, redactSecrets, truncate } from '../common.js';
 import type { OpencodeConnection } from './rpc.js';
 
 /** OpenCode's ACP has no Auto reviewer; permission rules map Supervised, Auto-accept edits and Full access. */
 export const OPENCODE_POLICIES: Policy[] = ['supervised', 'balanced', 'full-access'];
 export const OPENCODE_DEFAULT_MODEL = 'default';
-/** Relay's `none` effort means "leave the model on its native default variant". */
+/** Mingle's `none` effort means "leave the model on its native default variant". */
 export const NATIVE_EFFORT = 'none';
 /** The native option that clears a model variant. */
 export const NATIVE_VARIANT_DEFAULT = 'default';
@@ -46,7 +46,7 @@ export function currentValue(response: unknown, id: ConfigId): string | null {
 }
 
 /**
- * Relay effort identifiers are lowercase slugs and `none` is reserved for the native default, so a native variant that is
+ * Mingle effort identifiers are lowercase slugs and `none` is reserved for the native default, so a native variant that is
  * literally called `none` (an OpenAI reasoning level) is exposed as `variant-none`. Matching at run time recomputes this
  * mapping from the live native options, never from stored copies.
  */
@@ -59,7 +59,7 @@ export function relayEffortId(native: string): string | null {
 }
 
 export interface NativeEffort { id: string; native: string; label: string; description?: string }
-/** Native variants of the selected model keyed by their Relay identifiers. */
+/** Native variants of the selected model keyed by their Mingle identifiers. */
 export function nativeEfforts(response: unknown): NativeEffort[] {
   const seen = new Set<string>();
   const output: NativeEffort[] = [];

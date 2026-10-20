@@ -1,4 +1,4 @@
-import type { AdapterEvent, AgentAdapter, Policy, RunOptions, ToolActivity, ToolCategory } from '@relay/contracts';
+import type { AdapterEvent, AgentAdapter, Policy, RunOptions, ToolActivity, ToolCategory } from '@mingle/contracts';
 import { ProviderError, abortError, isRecord, truncate } from '../common.js';
 import { nativePlanSteps } from '../plans.js';
 import { AcpRpcError, ACP_INVALID_PARAMS, ACP_METHOD_NOT_FOUND } from './rpc.js';
@@ -15,13 +15,13 @@ export interface OpencodeAdapterDeps { env?: NodeJS.ProcessEnv; spawn?: Opencode
 const SESSION_TIMEOUT = 90_000;
 const PROMPT_TIMEOUT = 24 * 60 * 60_000;
 const CANCEL_DRAIN_MS = 4_000;
-const BROWSER_PREFIX = 'relay_browser_';
-const TEAM_PREFIX = 'relay_team_';
+const BROWSER_PREFIX = 'mingle_browser_';
+const TEAM_PREFIX = 'mingle_team_';
 const text = (value: unknown): string | undefined => typeof value === 'string' ? value : undefined;
 const json = (value: unknown, max = 20_000): string => { try { return truncate(typeof value === 'string' ? value : JSON.stringify(value) ?? '', max); } catch { return ''; } };
 
 /**
- * OpenCode's default agent allows every tool without asking, so Relay's permission modes are expressed as OpenCode permission
+ * OpenCode's default agent allows every tool without asking, so Mingle's permission modes are expressed as OpenCode permission
  * rules supplied through the child's environment for this run only (no config file is written). Later rules win. Reading ordinary
  * files, searching and updating the task list never prompt; secrets-shaped `.env` files, shell, web and every other tool ask in
  * Supervised, and file edits are additionally allowed in Auto-accept edits. Interactive question and plan-mode tools are denied
@@ -38,7 +38,7 @@ export function permissionRules(policy: Policy, relay: { browser: boolean; team:
       glob: 'allow', grep: 'allow', list: 'allow', lsp: 'allow', todowrite: 'allow', skill: 'allow', ...denied,
       edit: policy === 'balanced' ? 'allow' : 'ask',
     };
-  // Relay's own gateways enforce their own approvals and tab ownership; asking again here would double-prompt.
+  // Mingle's own gateways enforce their own approvals and tab ownership; asking again here would double-prompt.
   if (relay.browser) rules[`${BROWSER_PREFIX}*`] = 'allow';
   if (relay.team) rules[`${TEAM_PREFIX}*`] = 'allow';
   return rules;
@@ -47,8 +47,8 @@ export function permissionRules(policy: Policy, relay: { browser: boolean; team:
 export function createOpencodeAdapter(deps: OpencodeAdapterDeps = {}): AgentAdapter {
   return { async run(options) {
     if (options.signal.aborted) throw abortError();
-    if (options.session.serviceTier && options.session.serviceTier !== 'standard') throw new ProviderError('OpenCode does not expose Relay service tiers. Choose Standard.', { code: 'unsupported_service_tier' });
-    if ((options.skills ?? []).length || options.invocation?.kind === 'skill') throw new ProviderError('Relay-selected skills are unavailable for OpenCode. Its native skills appear as slash commands.', { code: 'unsupported_skills' });
+    if (options.session.serviceTier && options.session.serviceTier !== 'standard') throw new ProviderError('OpenCode does not expose Mingle service tiers. Choose Standard.', { code: 'unsupported_service_tier' });
+    if ((options.skills ?? []).length || options.invocation?.kind === 'skill') throw new ProviderError('Mingle-selected skills are unavailable for OpenCode. Its native skills appear as slash commands.', { code: 'unsupported_skills' });
     if (options.attachments?.length && (options.invocation || /^\s*\/[A-Za-z0-9][A-Za-z0-9_.:-]*(?:\s|$)/.test(options.prompt))) {
       throw new ProviderError('OpenCode native slash commands accept text arguments only. Remove the attachments or send a regular message; no prompt was sent.', { code: 'unsupported_attachment' });
     }
@@ -119,24 +119,24 @@ class OpencodeRun {
         notification: (method, params) => this.onNotification(method, params), request: (method, params) => this.onRequest(method, params),
       });
       const { conn, capabilities } = this.runtime;
-      const connections = [browserMcp && { name: 'relay_browser', ...browserMcp }, teamMcp && { name: 'relay_team', ...teamMcp }]
+      const connections = [browserMcp && { name: 'mingle_browser', ...browserMcp }, teamMcp && { name: 'mingle_team', ...teamMcp }]
         .filter((value): value is { name: string; url: string; token: string } => Boolean(value));
       if (connections.length && object(capabilities.mcpCapabilities).http !== true) {
-        throw new ProviderError('The selected OpenCode runtime did not advertise HTTP MCP support. Relay browser and team tools cannot be connected; no prompt was sent.', { code: 'mcp_unsupported' });
+        throw new ProviderError('The selected OpenCode runtime did not advertise HTTP MCP support. Mingle browser and team tools cannot be connected; no prompt was sent.', { code: 'mcp_unsupported' });
       }
       // Per-session ACP registration keeps the capability in this child's memory only; nothing is written to OpenCode configuration.
       const mcpServers = connections.map((connection) => ({ type: 'http', name: connection.name, url: connection.url, headers: [{ name: 'Authorization', value: `Bearer ${connection.token}` }] }));
       const params = { cwd: session.worktreePath, mcpServers };
       const existing = session.providerSessionId;
       if (existing) {
-        if (!SESSION_ID.test(existing)) throw new ProviderError('The stored conversation ID is not a valid OpenCode session ID. Relay will not start a replacement conversation.', { code: 'resume_failed' });
+         if (!SESSION_ID.test(existing)) throw new ProviderError('The stored conversation ID is not a valid OpenCode session ID. Mingle will not start a replacement conversation.', { code: 'resume_failed' });
         this.sessionId = existing;
         const method = object(capabilities.sessionCapabilities).resume ? 'session/resume' : capabilities.loadSession === true ? 'session/load' : null;
-        if (!method) throw new ProviderError('This OpenCode runtime cannot resume the selected native conversation. Relay will not create a replacement.', { code: 'resume_unsupported' });
+         if (!method) throw new ProviderError('This OpenCode runtime cannot resume the selected native conversation. Mingle will not create a replacement.', { code: 'resume_unsupported' });
         try { this.selected = await this.race(conn.request(method, { ...params, sessionId: existing }, SESSION_TIMEOUT)); }
         catch (error) {
           if (error instanceof ProviderError || this.signal.aborted) throw error;
-          throw new ProviderError(`OpenCode could not resume conversation ${truncate(existing, 80)} (${safeOpencodeError(error, this.secrets, 200)}). It may have been deleted or belong to a different OpenCode data directory. Relay will not start a replacement conversation.`, { code: 'resume_failed', cause: error });
+           throw new ProviderError(`OpenCode could not resume conversation ${truncate(existing, 80)} (${safeOpencodeError(error, this.secrets, 200)}). It may have been deleted or belong to a different OpenCode data directory. Mingle will not start a replacement conversation.`, { code: 'resume_failed', cause: error });
         }
         const returned = object(this.selected).sessionId;
         if (returned !== undefined && returned !== existing) throw new ProviderError('OpenCode returned a different conversation ID. The run was stopped.', { code: 'resume_failed' });
@@ -152,7 +152,7 @@ class OpencodeRun {
       if (session.model === OPENCODE_DEFAULT_MODEL) this.info(`OpenCode selected its native default model: ${this.expectedModel}.`);
       const mode = currentValue(this.selected, 'mode');
       if (mode && mode !== 'build') this.info(`OpenCode is using its "${mode}" agent mode from your OpenCode configuration.`);
-      if (this.options.settings.autoCompactPercent != null) this.info('Relay’s automatic compaction threshold is not exposed by OpenCode ACP. OpenCode’s native compaction remains in effect.');
+       if (this.options.settings.autoCompactPercent != null) this.info('Mingle’s automatic compaction threshold is not exposed by OpenCode ACP. OpenCode’s native compaction remains in effect.');
       this.announceSlashCommand();
       const content = await acpPrompt({ text: this.options.invocation ? invocationText(this.options.invocation) : this.options.prompt,
         attachments: this.options.attachments, capabilities: acpPromptCapabilities(capabilities), agent: 'OpenCode', context: this.options.context });
@@ -166,7 +166,7 @@ class OpencodeRun {
       if (this.signal.aborted) throw abortError();
       this.reportUsage(response);
       const reason = object(response).stopReason;
-      if (reason === 'cancelled') throw new ProviderError('OpenCode canceled the turn without a Relay interruption.', { code: 'turn_interrupted' });
+       if (reason === 'cancelled') throw new ProviderError('OpenCode canceled the turn without a Mingle interruption.', { code: 'turn_interrupted' });
       if (reason === 'max_tokens' || reason === 'max_turn_requests') throw new ProviderError(`OpenCode stopped at its ${reason === 'max_tokens' ? 'token' : 'turn'} limit. Partial output was retained.`, { code: 'turn_limit' });
       if (reason !== 'end_turn' && reason !== 'refusal') throw new ProviderError('OpenCode returned an unrecognized completion state.', { code: 'protocol_error' });
     } catch (error) {
@@ -178,7 +178,7 @@ class OpencodeRun {
       }
       const detail = safeOpencodeError(error, this.secrets);
       const authShaped = error instanceof AcpRpcError && error.code === -32000 || /unauthori[sz]ed|\b401\b|api[ _-]?key|authenticat|not logged in|no credentials/i.test(detail);
-      throw new ProviderError(`OpenCode ACP: ${detail}${authShaped ? ' Check the provider sign-in with `opencode providers login` in a terminal; OpenCode owns its credentials and Relay does not manage them.' : ''}`, {
+      throw new ProviderError(`OpenCode ACP: ${detail}${authShaped ? ' Check the provider sign-in with `opencode providers login` in a terminal; OpenCode owns its credentials and Mingle does not manage them.' : ''}`, {
         code: error instanceof ProviderError ? error.code : authShaped ? 'authentication_required' : 'opencode_failed', cause: error,
       });
     } finally {
@@ -251,7 +251,7 @@ class OpencodeRun {
   }
 
   private async onRequest(method: string, params: unknown): Promise<unknown> {
-    if (method !== 'session/request_permission') throw new AcpRpcError(ACP_METHOD_NOT_FOUND, `Relay does not provide ACP client method ${method}.`);
+    if (method !== 'session/request_permission') throw new AcpRpcError(ACP_METHOD_NOT_FOUND, `Mingle does not provide ACP client method ${method}.`);
     const data = object(params);
     const call = object(data.toolCall);
     const cancelled = { outcome: { outcome: 'cancelled' } };
@@ -294,9 +294,9 @@ class OpencodeRun {
       if (steps) this.emit({ type: 'task.plan', planId: 'opencode-plan', replace: true, steps });
     } else if (kind === 'config_option_update') {
       const model = currentValue({ configOptions: update.configOptions }, 'model');
-      if (model && model !== this.expectedModel) this.fail('OpenCode changed the selected model during the run. Relay stopped the turn rather than accepting an automatic substitution.', 'model_substitution');
+      if (model && model !== this.expectedModel) this.fail('OpenCode changed the selected model during the run. Mingle stopped the turn rather than accepting an automatic substitution.', 'model_substitution');
       else if (this.expectedEffort && currentValue({ configOptions: update.configOptions }, 'effort') !== this.expectedEffort) {
-        this.fail('OpenCode changed the selected reasoning effort during the run. Relay stopped the turn rather than continuing with a different variant.', 'effort_substitution');
+        this.fail('OpenCode changed the selected reasoning effort during the run. Mingle stopped the turn rather than continuing with a different variant.', 'effort_substitution');
       }
     }
     // Reasoning chunks are provider-private. usage_update.used is context size, not token usage.

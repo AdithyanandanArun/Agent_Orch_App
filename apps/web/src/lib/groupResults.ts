@@ -1,6 +1,6 @@
 import type {
   GroupDelivery, GroupMember, GroupMessage, GroupRequest, GroupSnapshot, Message, Provider, RunChangedFile, Session, SessionRun, Task, TaskStatus,
-} from '@relay/contracts';
+} from '@mingle/contracts';
 
 /**
  * Pure projection of the LATEST human request in a group. Everything is scoped to that request's recorded
@@ -48,7 +48,7 @@ export const TASK_STATUS_LABEL: Record<TaskStatus, string> = {
   backlog: 'Backlog', ready: 'Ready', running: 'Running', blocked: 'Blocked', review: 'Needs review', done: 'Accepted',
 };
 export const CHANGE_STATUS_LABEL: Record<RunChangedFile['status'], string> = { A: 'Added', M: 'Modified', D: 'Deleted', T: 'Type changed' };
-const CAVEAT = 'Task status is recorded by Relay; checks and integration are described in the agent reports.';
+const CAVEAT = 'Task status is recorded by Mingle; checks and integration are described in the agent reports.';
 const NO_REPORT = 'No final report recorded.';
 
 const time = (iso: string | null | undefined): number => {

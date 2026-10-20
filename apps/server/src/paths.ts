@@ -1,10 +1,10 @@
 import fsp from 'node:fs/promises';
 import { constants } from 'node:fs';
 import path from 'node:path';
-import type { FileEntry } from '@relay/contracts';
+import type { FileEntry } from '@mingle/contracts';
 import { HttpError } from './util.ts';
 
-const DENIED_DIRS = new Set(['.git', '.relay', '.ssh', '.gnupg', '.aws', '.azure', '.kube', '.docker']);
+const DENIED_DIRS = new Set(['.git', '.mingle', '.relay', '.ssh', '.gnupg', '.aws', '.azure', '.kube', '.docker']);
 const SECRET_EXACT = new Set([
   '.env', '.npmrc', '.netrc', '.pypirc', '.git-credentials', '.htpasswd', '.dockercfg',
   'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519', 'credentials', 'credentials.json', 'secrets.json',

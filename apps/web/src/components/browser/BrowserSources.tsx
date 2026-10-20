@@ -1,5 +1,5 @@
 import { Copy, ExternalLink, RefreshCw } from 'lucide-react';
-import type { BrowserDiscovery } from '@relay/contracts';
+import type { BrowserDiscovery } from '@mingle/contracts';
 import { copyText } from '../../lib/clipboard';
 import { errorMessage } from '../../lib/api';
 import { useRelay } from '../../store/store';
@@ -21,9 +21,9 @@ export function ChromeSetupHelp({ open }: { open?: boolean }) {
       <summary>How to allow your browser to connect</summary>
       <ol>
         <li>In Chrome 144 or newer, open <code>{CHROME_INSPECT_URL}</code> <button type="button" className="link-btn" onClick={copy}><Copy size={11} aria-hidden="true" /> Copy</button> and turn on remote debugging.</li>
-        <li>Choose the detected browser, then approve the prompt Chrome shows when Relay connects.</li>
+        <li>Choose the detected browser, then approve the prompt Chrome shows when Mingle connects.</li>
       </ol>
-      <p>Relay attaches to the running browser. It does not copy cookies, passwords or profiles, and disconnecting leaves the browser open.</p>
+      <p>Mingle attaches to the running browser. It does not copy cookies, passwords or profiles, and disconnecting leaves the browser open.</p>
       <a href={CHROME_DOCS_URL} target="_blank" rel="noopener noreferrer">Chrome remote debugging guide <ExternalLink size={11} aria-hidden="true" /></a>
     </details>
   );

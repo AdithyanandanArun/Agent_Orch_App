@@ -1,7 +1,7 @@
 import { tmpdir } from 'node:os';
 import { chmod, mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { AntigravityAuthState, AppSettings, ProviderInfo, ProviderModel } from '@relay/contracts';
+import type { AntigravityAuthState, AppSettings, ProviderInfo, ProviderModel } from '@mingle/contracts';
 import { abortError, isRecord } from '../common.js';
 import { closeAntigravity, markAntigravityAuthenticated, rememberAntigravityMetadata, resolveAntigravity, safeAntigravityError, startAntigravity, type AntigravityRuntime } from './runtime.js';
 import { choices, configuration, object, parseAntigravityMetadata } from './metadata.js';
@@ -85,7 +85,7 @@ async function refresh(settings: AppSettings, authenticate: boolean, options: Au
     if (workspace && runtime) await rm(workspace, { recursive: true, force: true }).catch(() => {});
   }
 }
-/** Explicit Settings action: Google owns authentication; Relay launches its native link on the host. */
+/** Explicit Settings action: Google owns authentication; Mingle launches its native link on the host. */
 export function authenticateAntigravity(settings: AppSettings, options: AuthOptions = {}): Promise<ProviderInfo> { return refresh(settings, true, options); }
 /** Metadata only: expired native credentials return a sign-in requirement without opening a browser. */
 export function probeAuthenticatedAntigravity(settings: AppSettings, options: AuthOptions = {}): Promise<ProviderInfo> { return refresh(settings, false, options); }

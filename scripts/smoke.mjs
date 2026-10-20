@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const require = createRequire(new URL('../apps/server/package.json', import.meta.url));
 const { WebSocket } = require('ws');
-const dataDir = await mkdtemp(join(tmpdir(), 'relay-smoke-'));
+const dataDir = await mkdtemp(join(tmpdir(), 'mingle-smoke-'));
 let child;
 let socket;
 let logs = '';
@@ -30,7 +30,7 @@ const base = `http://127.0.0.1:${port}`;
 
 async function start() {
   child = spawn(process.execPath, ['--import', join(root, 'apps/server/node_modules/tsx/dist/loader.mjs'), join(root, 'apps/server/src/index.ts')], {
-    cwd: root, env: { ...process.env, RELAY_DATA_DIR: dataDir, RELAY_PORT: String(port), PORT: String(port) }, stdio: ['ignore', 'pipe', 'pipe'],
+    cwd: root, env: { ...process.env, MINGLE_DATA_DIR: dataDir, MINGLE_PORT: String(port), PORT: String(port) }, stdio: ['ignore', 'pipe', 'pipe'],
   });
   child.stdout.on('data', chunk => { logs = (logs + chunk).slice(-12000); });
   child.stderr.on('data', chunk => { logs = (logs + chunk).slice(-12000); });
@@ -110,10 +110,10 @@ try {
     socket.on('open', () => socket.send(JSON.stringify({ type: 'terminal.start', projectId: project.id, cols: 80, rows: 24 })));
     socket.on('message', bytes => {
       const event = JSON.parse(bytes.toString());
-      if (event.type === 'terminal.ready') socket.send(JSON.stringify({ type: 'terminal.input', terminalId: event.terminalId, data: "printf 'RELAY_TERMINAL_%s\\n' 'OK'\r" }));
+      if (event.type === 'terminal.ready') socket.send(JSON.stringify({ type: 'terminal.input', terminalId: event.terminalId, data: "printf 'MINGLE_TERMINAL_%s\\n' 'OK'\r" }));
       if (event.type === 'terminal.output') {
         output += event.data;
-        if (/RELAY_TERMINAL_OK/.test(output)) { clearTimeout(timer); resolve(); }
+        if (/MINGLE_TERMINAL_OK/.test(output)) { clearTimeout(timer); resolve(); }
       }
     });
   });

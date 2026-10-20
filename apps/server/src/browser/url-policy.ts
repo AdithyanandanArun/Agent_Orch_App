@@ -24,7 +24,7 @@ export function normalizeNavigationUrl(input: string): string {
   return url.href;
 }
 
-/** Pages Relay may adopt or keep tracking; everything else (chrome://, devtools://, extensions, file:) is left alone. */
+/** Pages Mingle may adopt or keep tracking; everything else (chrome://, devtools://, extensions, file:) is left alone. */
 export function isEligibleTabUrl(url: string): boolean {
   return url === 'about:blank' || /^https?:\/\//iu.test(url);
 }

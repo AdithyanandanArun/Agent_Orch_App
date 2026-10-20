@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
-import type { BrowserAction, BrowserServerMessage, BrowserTab } from '@relay/contracts';
+import type { BrowserAction, BrowserServerMessage, BrowserTab } from '@mingle/contracts';
 
 export type StreamStatus = 'idle' | 'connecting' | 'live' | 'closed';
 export interface FrameSize { width: number; height: number }

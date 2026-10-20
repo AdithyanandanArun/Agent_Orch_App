@@ -1,5 +1,5 @@
 import { existsSync, statSync } from 'node:fs';
-import type { AppSettings, ProviderCatalog, Session } from '@relay/contracts';
+import type { AppSettings, ProviderCatalog, Session } from '@mingle/contracts';
 import { parseNativeCommands } from './metadata.js';
 import { resolveOpencode, safeOpencodeError, withProbeSession } from './runtime.js';
 

@@ -1,4 +1,4 @@
-import type { AdapterEvent, AppSettings, RunOptions, Session } from '@relay/contracts';
+import type { AdapterEvent, AppSettings, RunOptions, Session } from '@mingle/contracts';
 
 export const settings: AppSettings = {
   defaultProvider: 'codex', defaultCodexModel: 'gpt-6.1-sol', defaultClaudeModel: 'claude-sonnet-5-5', defaultEffort: 'high', defaultIsolated: true,

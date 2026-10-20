@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { BrowserDiscovery } from '@relay/contracts';
+import type { BrowserDiscovery } from '@mingle/contracts';
 import { api, errorMessage } from '../../lib/api';
 
 const INSTALL_POLL_MS = 2000;
@@ -14,7 +14,7 @@ export interface BrowserDiscoveryHandle {
   install(): Promise<void>;
 }
 
-/** Reads what browsers Relay can use. Nothing is downloaded or probed until the caller shows the control that needs it. */
+/** Reads what browsers Mingle can use. Nothing is downloaded or probed until the caller shows the control that needs it. */
 export function useBrowserDiscovery(): BrowserDiscoveryHandle {
   const [discovery, setDiscovery] = useState<BrowserDiscovery | null>(null);
   const [loading, setLoading] = useState(true);

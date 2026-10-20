@@ -1,4 +1,4 @@
-import type { HandoffSchema, WorkspaceEvent } from '@relay/contracts';
+import type { HandoffSchema, WorkspaceEvent } from '@mingle/contracts';
 import { existsSync } from 'node:fs';
 import type { z } from 'zod';
 import { git, repoInfo } from './git.ts';

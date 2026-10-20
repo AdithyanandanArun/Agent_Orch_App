@@ -1,7 +1,7 @@
 import fsp from 'node:fs/promises';
 import { constants, type Stats } from 'node:fs';
 import path from 'node:path';
-import type { RunChangedFile, RunChanges, RunChangesSummary } from '@relay/contracts';
+import type { RunChangedFile, RunChanges, RunChangesSummary } from '@mingle/contracts';
 import { git, repoInfo } from './git.ts';
 import { isDeniedName, resolveInside } from './paths.ts';
 import { nowIso, redactSecrets } from './util.ts';

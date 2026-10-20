@@ -1,4 +1,4 @@
-import { RASTER_IMAGE_TYPES, type RasterImageType } from '@relay/contracts';
+import { RASTER_IMAGE_TYPES, type RasterImageType } from '@mingle/contracts';
 
 /** Identifies a raster image from its leading bytes only. Declared types and extensions are never trusted for previews. */
 export function sniffRaster(head: Buffer): RasterImageType | null {

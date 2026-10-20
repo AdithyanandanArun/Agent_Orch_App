@@ -89,7 +89,7 @@ const OPERATION_MARKERS: [string, string][] = [
   ['MERGE_HEAD', 'merge'], ['CHERRY_PICK_HEAD', 'cherry-pick'], ['REVERT_HEAD', 'revert'], ['rebase-merge', 'rebase'], ['rebase-apply', 'rebase'],
 ];
 
-/** Name of an in-progress merge/rebase/cherry-pick/revert, which must be finished outside Relay. */
+/** Name of an in-progress merge/rebase/cherry-pick/revert, which must be finished outside Mingle. */
 export async function operationInProgress(top: string, signal?: AbortSignal): Promise<string | null> {
   const found = await Promise.all(OPERATION_MARKERS.map(async ([marker, label]) => {
     const where = await git(top, ['rev-parse', '--git-path', marker], { allowFailure: true, signal });

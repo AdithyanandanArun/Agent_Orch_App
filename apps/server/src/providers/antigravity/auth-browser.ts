@@ -17,7 +17,7 @@ export function googleAuthorizationUrl(value: string): string | null {
   } catch { return null; }
 }
 
-/** Python webbrowser's documented BROWSER command override. Relay opens the URL on the host instead.
+/** Python webbrowser's documented BROWSER command override. Mingle opens the URL on the host instead.
  * A quick successful no-op prevents a packaged Python browser opener from blocking before it prints
  * its native fallback link. No shell is used by Python's GenericBrowser or by this command.
  */

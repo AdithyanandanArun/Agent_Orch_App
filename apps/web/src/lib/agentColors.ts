@@ -1,4 +1,4 @@
-import type { GroupMember, GroupSnapshot } from '@relay/contracts';
+import type { GroupMember, GroupSnapshot } from '@mingle/contracts';
 
 /** Distinct hues for the eight active membership slots; the light theme uses the same hues at readable contrast. */
 export const AGENT_PALETTE = [

@@ -44,7 +44,7 @@ export async function antigravityLinuxLaunch(file: string, args: string[], optio
     const missing = [!systemdRun && 'systemd-run', !systemctl && 'systemctl'].filter(Boolean).join(' and ');
     throw new Error(
       `Antigravity cannot start here: this process has a zero realtime-timeout (RTTIME) limit that its native runtime rejects during startup, `
-      + `and ${missing} was not found in ${TOOL_DIRECTORIES.join(' or ')}. Install systemd, or start Relay from a session `
+      + `and ${missing} was not found in ${TOOL_DIRECTORIES.join(' or ')}. Install systemd, or start Mingle from a session `
       + `whose RTTIME limit is not zero (ulimit -R).`);
   }
 

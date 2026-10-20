@@ -11,7 +11,7 @@ if (process.getuid?.() === 0) throw new Error('makepkg must run as an ordinary u
 const { version } = JSON.parse(await readFile(join(root, 'apps/desktop/package.json'), 'utf8'));
 if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error('Arch release packaging currently requires a stable x.y.z version.');
 const release = join(root, 'release');
-const archiveName = `relay-workspace-${version}-linux-x64.tar.gz`;
+const archiveName = `mingle-${version}-linux-x64.tar.gz`;
 const archive = join(release, archiveName);
 const digest = createHash('sha256');
 for await (const chunk of createReadStream(archive)) digest.update(chunk);
@@ -33,7 +33,7 @@ await new Promise((resolvePromise, reject) => {
   child.once('error', reject);
   child.once('exit', (code, signal) => code === 0 ? resolvePromise() : reject(new Error(`makepkg failed (${signal ?? code}). Run this step on Arch Linux with base-devel installed.`)));
 });
-const name = (await readdir(release)).find((entry) => entry === `relay-workspace-bin-${version}-1-x86_64.pkg.tar.zst`);
+const name = (await readdir(release)).find((entry) => entry === `mingle-bin-${version}-1-x86_64.pkg.tar.zst`);
 if (!name) throw new Error('makepkg completed without the expected Arch artifact.');
 const pkgHash = createHash('sha256');
 for await (const chunk of createReadStream(join(release, name))) pkgHash.update(chunk);

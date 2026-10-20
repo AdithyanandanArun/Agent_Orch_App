@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import type { AppSettings, ProviderUsage, Session, UsageCredits, UsageResetGrant, UsageWindow } from '@relay/contracts';
+import type { AppSettings, ProviderUsage, Session, UsageCredits, UsageResetGrant, UsageWindow } from '@mingle/contracts';
 import { cleanEnv, isRecord, redactSecrets, truncate } from '../common.js';
 import { resolveExecutableCached } from '../discovery.js';
 import { shutdownChild, type ChildLike } from '../process.js';
@@ -144,7 +144,7 @@ function parseResets(value: unknown, notices: string[]): ProviderUsage['resets']
       grantedAt: isoFromUnixSeconds(raw.grantedAt),
     });
   }
-  if (detailRows && detailRows.length > MAX_RESET_GRANTS) notices.push('Codex returned more reset details than Relay displays; the available count remains authoritative.');
+  if (detailRows && detailRows.length > MAX_RESET_GRANTS) notices.push('Codex returned more reset details than Mingle displays; the available count remains authoritative.');
   // The native response has no replenishment date for this balance; credit expiry is reported per grant above.
   return { available, grants, detailsKnown, replenishesAt: null };
 }
@@ -200,12 +200,12 @@ export async function getCodexUsage(session: Session, settings: AppSettings): Pr
     conn = new JsonRpcConnection(child, {
       onNotification: () => undefined,
       onRequest: async (method) => {
-        throw new RpcError(RPC_METHOD_NOT_FOUND, `Relay usage probe does not support ${method}`);
+        throw new RpcError(RPC_METHOD_NOT_FOUND, `Mingle usage probe does not support ${method}`);
       },
       formatClose: () => 'Codex app-server exited during the usage read.',
     });
     await conn.request('initialize', {
-      clientInfo: { name: 'relay', title: 'Relay', version: resolved.executable.version },
+      clientInfo: { name: 'mingle', title: 'Mingle', version: resolved.executable.version },
       capabilities: { experimentalApi: false },
     }, INITIALIZE_TIMEOUT_MS);
     conn.notify('initialized', {});

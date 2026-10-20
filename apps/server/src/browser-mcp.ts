@@ -3,8 +3,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
-import { BrowserActionSchema } from '@relay/contracts';
-import type { BrowserAction, BrowserMcpConnection, BrowserSessionState, BrowserSnapshot, BrowserTab, Session } from '@relay/contracts';
+import { BrowserActionSchema } from '@mingle/contracts';
+import type { BrowserAction, BrowserMcpConnection, BrowserSessionState, BrowserSnapshot, BrowserTab, Session } from '@mingle/contracts';
 import type { Store } from './store.ts';
 import { errorMessage, truncate } from './util.ts';
 import { redactSecrets } from './providers/common.ts';
@@ -76,8 +76,8 @@ export class BrowserMcpBridge {
 
   private tools(binding: Binding, requestSignal: AbortSignal): McpServer {
     const ensureRequest = () => { this.ensure(binding); if (requestSignal.aborted) throw new Error('This browser request was cancelled'); };
-    const server = new McpServer({ name: 'relay-browser', version: '0.1.0' }, {
-      instructions: 'These tools operate Relay’s collaborative browser. The user sees the same tabs. Start with browser_status, then browser_open or browser_snapshot. Use snapshot refs or role/name targets; ambiguous targets fail. Human control pauses agent writes: ask the user to release control, never bypass it. Existing-browser connections are made by the user in Relay. Never extract cookies or credentials. Use browser_evaluate only for page JavaScript. Browser actions must follow the user’s task and authorization.',
+    const server = new McpServer({ name: 'mingle-browser', version: '0.1.0' }, {
+      instructions: 'These tools operate Mingle’s collaborative browser. The user sees the same tabs. Start with browser_status, then browser_open or browser_snapshot. Use snapshot refs or role/name targets; ambiguous targets fail. Human control pauses agent writes: ask the user to release control, never bypass it. Existing-browser connections are made by the user in Mingle. Never extract cookies or credentials. Use browser_evaluate only for page JavaScript. Browser actions must follow the user’s task and authorization.',
     });
     const output = (value: unknown) => ({ content: [{ type: 'text' as const, text: truncate(redactSecrets(JSON.stringify(value) ?? 'null'), 64_000) }] });
     const register = (name: string, description: string, shape: z.ZodRawShape, readOnly: boolean, operation: (args: Record<string, unknown>) => Promise<unknown> | unknown) => {
@@ -97,7 +97,7 @@ export class BrowserMcpBridge {
     };
     register('browser_status', 'Report browser connection, shared tabs and human control. No browser is launched.', {}, true, () => this.browser.status(binding.session.id));
     register('browser_tabs', 'List tabs shared with this session; other sessions’ tabs are excluded.', {}, true, () => this.browser.status(binding.session.id).tabs);
-    register('browser_open', 'Open a new shared tab. A managed browser can start on demand; an existing personal browser must first be connected by the user in Relay.', { url: z.string().max(4096).optional() }, false, async (args) => {
+    register('browser_open', 'Open a new shared tab. A managed browser can start on demand; an existing personal browser must first be connected by the user in Mingle.', { url: z.string().max(4096).optional() }, false, async (args) => {
       await this.permit(binding, requestSignal);
       const tab = await this.browser.open(binding.session.id, args.url as string | undefined);
       this.show(binding, tab.id);

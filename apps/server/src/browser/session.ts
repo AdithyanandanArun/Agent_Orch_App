@@ -1,6 +1,6 @@
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
-import type { AppSettings, BrowserSessionState, BrowserTab } from '@relay/contracts';
+import type { AppSettings, BrowserSessionState, BrowserTab } from '@mingle/contracts';
 import type { Logger } from '../types.ts';
 import { truncate } from '../util.ts';
 import { refreshViewport, runAction } from './actions.ts';
@@ -14,7 +14,7 @@ import type { Browser, BrowserContext, Dialog, Download, Page } from './playwrig
 import { TabEntry } from './tab.ts';
 import type { TargetRegistry } from './targets.ts';
 import { isEligibleTabUrl, normalizeNavigationUrl } from './url-policy.ts';
-import type { BrowserAction } from '@relay/contracts';
+import type { BrowserAction } from '@mingle/contracts';
 
 export interface ExistingTarget {
   wsUrl: string;
@@ -36,7 +36,7 @@ export interface SessionDeps {
 
 type Mode = 'managed' | 'existing';
 
-/** One Relay session's browser: a private Chromium it launched, or a user-approved attachment to an existing one. */
+/** One Mingle session's browser: a private Chromium it launched, or a user-approved attachment to an existing one. */
 export class BrowserSessionRuntime {
   private status: BrowserSessionState['status'] = 'disconnected';
   private mode: Mode | null = null;
@@ -69,7 +69,7 @@ export class BrowserSessionRuntime {
   state(): BrowserSessionState {
     const notices = [...this.notices];
     if (this.skippedForLimit) notices.push(`${this.skippedForLimit} open tab(s) were not shared because of the tab limit (${MAX_TABS_PER_SESSION} per session, ${MAX_TABS_GLOBAL} overall).`);
-    if (this.skippedOwned) notices.push(`${this.skippedOwned} open tab(s) are already used by another Relay session and were skipped.`);
+    if (this.skippedOwned) notices.push(`${this.skippedOwned} open tab(s) are already used by another Mingle session and were skipped.`);
     return {
       sessionId: this.deps.sessionId, status: this.status, mode: this.mode, tabs: [...this.tabs.values()].map((tab) => tab.describe()),
       activeTabId: this.activeTabId, error: this.error, notices,
@@ -158,7 +158,7 @@ export class BrowserSessionRuntime {
     let entry = [...this.tabs.values()].find((tab) => tab.reusable && tab.page.url() === 'about:blank' && tab.control.ownerId === null && !tab.dialog) ?? null;
     if (!entry) {
       if (this.tabs.size >= MAX_TABS_PER_SESSION) throw new BrowserError(409, `This session already has ${MAX_TABS_PER_SESSION} tabs open. Close one first.`);
-      if (this.deps.totalTabs() >= MAX_TABS_GLOBAL) throw new BrowserError(409, `Relay already has ${MAX_TABS_GLOBAL} browser tabs open across sessions. Close one first.`);
+      if (this.deps.totalTabs() >= MAX_TABS_GLOBAL) throw new BrowserError(409, `Mingle already has ${MAX_TABS_GLOBAL} browser tabs open across sessions. Close one first.`);
       entry = await this.createTab(context);
     }
     this.activeTabId = entry.id;
@@ -295,7 +295,7 @@ export class BrowserSessionRuntime {
     this.browser = browser;
     this.context = context;
     this.endpoint = target.wsUrl;
-    this.addNotice(`Connected to ${target.label}. The agent can see and use your open tabs, including pages you are signed in to. Relay never closes your browser; disconnecting only detaches.`);
+    this.addNotice(`Connected to ${target.label}. The agent can see and use your open tabs, including pages you are signed in to. Mingle never closes your browser; disconnecting only detaches.`);
     browser.on('disconnected', () => this.browserGone(generation, `${target.label} disconnected.`));
     context.on('page', (page) => this.onPage(page, generation));
     for (const page of context.pages()) await this.adopt(page, { activate: this.activeTabId === null });
@@ -325,7 +325,7 @@ export class BrowserSessionRuntime {
     this.deps.targets.releaseSession(this.deps.sessionId);
     if (!closeBrowser) return;
     if (browser) {
-      // For a connected (not launched) browser, close() only drops Relay's connection; the user's browser keeps running.
+      // For a connected (not launched) browser, close() only drops Mingle's connection; the user's browser keeps running.
       await withTimeout(browser.close(), DETACH_TIMEOUT_MS, 'disconnect timed out').catch(() => undefined);
     } else if (context && mode === 'managed') {
       await withTimeout(context.close(), 10_000, 'close timed out').catch(() => undefined);
@@ -404,7 +404,7 @@ export class BrowserSessionRuntime {
       return null;
     }
     const entry = new TabEntry(page, this.mode === 'managed', targetId);
-    // A blank tab may be recycled by open() only if Relay made it; never one the user already had open.
+      // A blank tab may be recycled by open() only if Mingle made it; never one the user already had open.
     entry.reusable = this.mode === 'managed' || options.created === true;
     this.tabs.set(entry.id, entry);
     this.pages.set(page, entry);
@@ -497,37 +497,37 @@ export class BrowserSessionRuntime {
     on('download', (download: Download) => {
       if (entry.managed) {
         void download.cancel().catch(() => undefined);
-        this.addNotice('Downloads are not supported in Relay\'s shared browser yet; the download was cancelled and not saved.');
+        this.addNotice('Downloads are not supported in Mingle\'s shared browser yet; the download was cancelled and not saved.');
       } else {
-        // Relay never intercepted it: the user's own browser handles the file as it normally does.
-        this.addNotice('A download started in your browser. Relay does not manage downloads, so your browser may still save the file as usual.');
+        // Mingle never intercepted it: the user's own browser handles the file as it normally does.
+        this.addNotice('A download started in your browser. Mingle does not manage downloads, so your browser may still save the file as usual.');
       }
       this.deps.notify();
     });
     // A file chooser listener makes Playwright intercept the native picker, so only a headless (managed) tab gets one.
     if (entry.managed) {
       on('filechooser', () => {
-        this.addNotice('File uploads are not supported in Relay\'s shared browser yet.');
+        this.addNotice('File uploads are not supported in Mingle\'s shared browser yet.');
         this.deps.notify();
       });
     }
   }
 
-  /** Stops sharing a tab that natively navigated somewhere Relay must not touch; it is picked up again if it returns to http(s). */
+  /** Stops sharing a tab that natively navigated somewhere Mingle must not touch; it is picked up again if it returns to http(s). */
   private unshare(entry: TabEntry, generation: number): void {
     if (generation !== this.generation) return;
     const { page } = entry;
-    this.removeTab(entry, generation, 'The tab is no longer shared with Relay.');
+    this.removeTab(entry, generation, 'The tab is no longer shared with Mingle.');
     if (!page.isClosed()) this.watchForEligibility(page, generation);
-    this.addNotice('A tab was navigated to a browser-internal page and is no longer shared with Relay.');
+    this.addNotice('A tab was navigated to a browser-internal page and is no longer shared with Mingle.');
     this.deps.notify();
   }
 
-  /** Throws when `entry` currently shows a page Relay must not read or drive (it also drops the tab from sharing). */
+  /** Throws when `entry` currently shows a page Mingle must not read or drive (it also drops the tab from sharing). */
   assertShareable(entry: TabEntry): void {
     if (isEligibleTabUrl(entry.page.url())) return;
     this.unshare(entry, this.generation);
-    throw new BrowserError(403, 'This tab is showing a browser-internal page (file:, chrome:, devtools: or similar) and is no longer shared with Relay.');
+    throw new BrowserError(403, 'This tab is showing a browser-internal page (file:, chrome:, devtools: or similar) and is no longer shared with Mingle.');
   }
 
   private removeTab(entry: TabEntry, generation: number, reason = 'The tab was closed.'): void {

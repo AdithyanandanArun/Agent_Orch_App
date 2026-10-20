@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Download, Globe, LogIn } from 'lucide-react';
-import type { BrowserConnect as ConnectRequest, BrowserSessionState } from '@relay/contracts';
+import type { BrowserConnect as ConnectRequest, BrowserSessionState } from '@mingle/contracts';
 import { api, errorMessage } from '../../lib/api';
 import { useRelay } from '../../store/store';
 import { Button, InlineError } from '../ui';
@@ -35,8 +35,8 @@ export function BrowserConnect({ sessionId, state, onState }: { sessionId: strin
 
   const managed = (
     <section className="browser-card" aria-labelledby="browser-managed-title">
-      <header><Globe size={15} aria-hidden="true" /><h3 id="browser-managed-title">Relay browser</h3></header>
-      <p>A separate Chromium that Relay opens for this session. It starts without your personal logins.</p>
+      <header><Globe size={15} aria-hidden="true" /><h3 id="browser-managed-title">Mingle browser</h3></header>
+      <p>A separate Chromium that Mingle opens for this session. It starts without your personal logins.</p>
       {discovery?.managedExecutable ? <code className="browser-card__path" title={discovery.managedExecutable}>{discovery.managedExecutable}</code> : null}
       {discovery && !discovery.managedAvailable ? (
         <div className="browser-card__actions">
@@ -54,7 +54,7 @@ export function BrowserConnect({ sessionId, state, onState }: { sessionId: strin
   const existing = (
     <section className="browser-card" aria-labelledby="browser-existing-title">
       <header><LogIn size={15} aria-hidden="true" /><h3 id="browser-existing-title">Your running browser</h3></header>
-      <p>Use the logins and open tabs of a Chromium browser that is already running. Relay attaches to it; nothing is copied.</p>
+      <p>Use the logins and open tabs of a Chromium browser that is already running. Mingle attaches to it; nothing is copied.</p>
       <BrowserSourcePicker
         idPrefix="connect" discovery={discovery} loading={loading} sourceId={sourceId} endpoint={endpoint}
         onSource={setSourceId} onEndpoint={setEndpoint} onRefresh={() => void refresh()} disabled={busy !== null}

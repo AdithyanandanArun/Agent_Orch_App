@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { BrowserSessionState, BrowserTab } from '@relay/contracts';
+import type { BrowserSessionState, BrowserTab } from '@mingle/contracts';
 
 interface BrowserUiState {
   /** Last session state the visible pane fetched; lets other surfaces (tab marker) read it without polling. */

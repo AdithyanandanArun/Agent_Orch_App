@@ -4,14 +4,14 @@ import { createServer } from 'node:net';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { AppSettings } from '@relay/contracts';
+import type { AppSettings } from '@mingle/contracts';
 import { ProviderError, TextTail, abortError, cleanEnv, errorMessage, isRecord, redactSecrets, truncate } from '../common.js';
 import { resolveExecutableCached, type ExecutableSource, type ResolvedExecutable } from '../discovery.js';
 import { runProbe, shutdownChild, type ChildLike } from '../process.js';
 import { OpencodeConnection, type AcpCloseInfo } from './rpc.js';
 
 export type OpencodeSpawn = (file: string, args: string[], options: Parameters<typeof spawn>[2]) => ChildLike;
-export const OPENCODE_CLIENT_INFO = { name: 'relay', title: 'Relay', version: '0.1.0' } as const;
+export const OPENCODE_CLIENT_INFO = { name: 'mingle', title: 'Mingle', version: '0.1.0' } as const;
 const SESSION_TIMEOUT = 60_000;
 /** Native OpenCode session identifiers; used for metadata sessions, adapter sessions and the argv of `session delete`. */
 export const SESSION_ID = /^ses_[A-Za-z0-9]{8,64}$/;
@@ -33,11 +33,11 @@ export function environmentSecrets(env: NodeJS.ProcessEnv): string[] {
 }
 
 /**
- * Child environment. The auto-update check is disabled so a Relay run never replaces the executable, and the loopback HTTP server
+ * Child environment. The auto-update check is disabled so a Mingle run never replaces the executable, and the loopback HTTP server
  * that `opencode acp` starts gets a random password so no other local process can drive the conversation. Both stay out of argv.
  */
 export function opencodeEnvironment(base: NodeJS.ProcessEnv, permission?: Record<string, unknown>): Record<string, string> {
-  return cleanEnv(base, ['OPENCODE_PERMISSION'], {
+  return cleanEnv(base, ['OPENCODE_PERMISSION', 'MINGLE_TEAM_MCP_TOKEN', 'MINGLE_BROWSER_MCP_TOKEN', 'RELAY_TEAM_MCP_TOKEN', 'RELAY_BROWSER_MCP_TOKEN'], {
     OPENCODE_DISABLE_AUTOUPDATE: '1',
     OPENCODE_SERVER_PASSWORD: randomBytes(24).toString('hex'),
     ...(permission ? { OPENCODE_PERMISSION: JSON.stringify(permission) } : {}),
@@ -111,7 +111,7 @@ export async function startOpencode(executable: string, options: StartOptions): 
   child.stderr?.on('data', (chunk: string | Buffer) => stderr.push(chunk.toString()));
   const conn = new OpencodeConnection(child, {
     notification: (method, params) => options.notification?.(method, params),
-    request: (method, params) => options.request ? options.request(method, params) : Promise.reject(new ProviderError(`Relay does not provide ACP client method ${method}.`)),
+    request: (method, params) => options.request ? options.request(method, params) : Promise.reject(new ProviderError(`Mingle does not provide ACP client method ${method}.`)),
     closeMessage: (info: AcpCloseInfo) => `OpenCode ACP ${info.error ? `could not run (${safeOpencodeError(info.error, secrets, 200)})` : `exited with ${info.signal ?? `code ${info.exitCode}`}`}${stderr.isEmpty ? '' : `: ${stderr.summary(500, secrets)}`}`,
   });
   const runtime: OpencodeRuntime = { child, conn, version: '', capabilities: {}, stderr, secrets };
@@ -157,7 +157,7 @@ export function closeOpencode(runtime: OpencodeRuntime): Promise<void> {
   return pending;
 }
 
-/** Stops every live OpenCode child; used when the Relay server shuts down. */
+/** Stops every live OpenCode child; used when the Mingle server shuts down. */
 export async function closeAllOpencode(): Promise<void> {
   shuttingDown = true;
   const pending = [...probes];

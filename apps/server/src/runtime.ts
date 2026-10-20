@@ -1,7 +1,7 @@
-import { ProviderTaskPlanSchema } from '@relay/contracts';
+import { ProviderTaskPlanSchema } from '@mingle/contracts';
 import type { ProjectIntelligenceService } from './project-intelligence/service.ts';
 import { existsSync, statSync } from 'node:fs';
-import type { ProviderTaskPlan, AdapterEvent, Approval, Message, ProviderSkill, RunChanges, Session, ToolActivity, ToolCall } from '@relay/contracts';
+import type { ProviderTaskPlan, AdapterEvent, Approval, Message, ProviderSkill, RunChanges, Session, ToolActivity, ToolCall } from '@mingle/contracts';
 import type { Hub } from './hub.ts';
 import type { Store } from './store.ts';
 import type { TaskService } from './tasks.ts';
@@ -12,7 +12,7 @@ import type { GroupService } from './groups/service.ts';
 import type { TeamMcpBridge } from './team-mcp.ts';
 import type { BrowserMcpBridge } from './browser-mcp.ts';
 import type { AttachmentService } from './attachments/service.ts';
-import type { NativeInvocation, RunAttachment } from '@relay/contracts';
+import type { NativeInvocation, RunAttachment } from '@mingle/contracts';
 
 export interface RuntimeOptions {
   /** Milliseconds to wait after an abort before declaring an unresponsive adapter interrupted. */

@@ -1,4 +1,4 @@
-import type { GroupMode, GroupMember } from '@relay/contracts';
+import type { GroupMode, GroupMember } from '@mingle/contracts';
 import { redactSecrets, truncate } from '../util.ts';
 import type { DeliveryKind } from './repo.ts';
 
@@ -30,7 +30,7 @@ const COORDINATOR_COMPLETION = 'Final answer to the human: begin with the outcom
 /** Bounded per-run guidance. Native history, roster and request excerpt only; never other members' transcripts. */
 export function buildInstructions(d: InstructionData): string {
   const lines = [
-    `[Relay group conversation "${clean(d.title, 80)}" · ${MODE_LABEL[d.mode]}]`,
+    `[Mingle group conversation "${clean(d.title, 80)}" · ${MODE_LABEL[d.mode]}]`,
     `You are @${d.self.handle} (${d.self.role}). ${ROLE_RULE[d.self.role]}`,
   ];
   if (d.mode === 'cowork') {
@@ -48,7 +48,7 @@ export function buildInstructions(d: InstructionData): string {
     '',
     'Rules: your own earlier conversation is in your native history; other members\' transcripts are not shared, so ask with team_message or read team_inbox.',
     'Use the team_* tools to reach teammates. Writing @handle in prose never dispatches anything. Tool success means queued or recorded, not completed.',
-    'team_message expectsReply:false records information without waking a model. Set expectsReply:true only when the recipient needs a turn, including an answer that should let a blocked teammate continue. Use replyToId when answering so Relay can cancel a redundant queued question turn.',
+    'team_message expectsReply:false records information without waking a model. Set expectsReply:true only when the recipient needs a turn, including an answer that should let a blocked teammate continue. Use replyToId when answering so Mingle can cancel a redundant queued question turn.',
     'Report completion in your final answer; a human reviews task results before they are marked done.',
     d.canAssign
       ? 'You may prepare integration in your own scoped worktree under the selected permission policy. Never push or publish, or modify the human-selected checkout, without explicit human authorization.'
@@ -62,7 +62,7 @@ export function buildInstructions(d: InstructionData): string {
   return truncate([...lines, body, ...rules].join('\n'), LIMITS.instructions);
 }
 
-export function describeSender(handle: string | null): string { return handle ? `@${handle}` : 'Relay'; }
+export function describeSender(handle: string | null): string { return handle ? `@${handle}` : 'Mingle'; }
 
 export function requestDeliveryText(d: { content: string; handle: string; planner: boolean; mode: GroupMode; directed: boolean }): string {
   const lines = ['Request from the human in the group conversation:', clean(d.content, 100_000)];

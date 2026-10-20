@@ -1,4 +1,4 @@
-import type { AttachmentRef } from '@relay/contracts';
+import type { AttachmentRef } from '@mingle/contracts';
 import { api } from '../lib/api';
 import './attachment-history.css';
 

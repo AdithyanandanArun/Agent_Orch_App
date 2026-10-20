@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useState } from 'react';
-import type { AgentConfiguration, AppSettings, GroupDefaults, ProviderInfo } from '@relay/contracts';
+import type { AgentConfiguration, AppSettings, GroupDefaults, ProviderInfo } from '@mingle/contracts';
 import { Button } from './ui';
 import { SelectMenu } from './SelectMenu';
 import { SettingRow } from './SettingRow';
@@ -74,7 +74,7 @@ export function AgentsSettings({ settings, providers, disabled, update }: {
       <div className="settings-page__section-head"><h2>Agents & orchestration</h2><p>Defaults for new groups and new participants. Existing participants and independent sessions keep their own settings.</p></div>
       {configRow('Default orchestrator', 'Used only when Orchestrated mode creates a separate coordinator. It is previewed before anything is added.', orchestrator, setOrchestrator, 'orchestrator', 'Choose when adding')}
       {configRow('Default worker', 'Starting point for each new agent, using what its provider currently advertises.', worker, setWorker, 'worker', 'Use new-session defaults')}
-      <div className="settings-page__section-head settings-page__section-head--next"><h2>Limits</h2><p>Automatic work pauses with a visible reason when a bound is reached. Relay cannot enforce an exact spend cap because provider cost is not always reported.</p></div>
+      <div className="settings-page__section-head settings-page__section-head--next"><h2>Limits</h2><p>Automatic work pauses with a visible reason when a bound is reached. Mingle cannot enforce an exact spend cap because provider cost is not always reported.</p></div>
       {(Object.keys(LIMITS) as LimitKey[]).map((key) => (
         <SettingRow key={key} title={LIMITS[key].label} description={`${LIMITS[key].description} From ${LIMITS[key].min} to ${LIMITS[key].max}.`} htmlFor={`${id}-${key}`}>
           <input id={`${id}-${key}`} className="input" type="number" inputMode="numeric" min={LIMITS[key].min} max={LIMITS[key].max} step={1} value={limits[key]} disabled={disabled}

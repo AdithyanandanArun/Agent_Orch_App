@@ -1,4 +1,4 @@
-import type { ProjectContext } from '@relay/contracts';
+import type { ProjectContext } from '@mingle/contracts';
 import type { RepoInfo } from '../git.ts';
 import { git, parsePorcelain } from '../git.ts';
 import { isDeniedName } from '../paths.ts';

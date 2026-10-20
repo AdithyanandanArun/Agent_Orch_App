@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronDown, ChevronRight, FileDiff, FolderOpen, X } from 'lucide-react';
-import type { RunChangedFile, RunChanges as RunChangesData, RunChangesSummary } from '@relay/contracts';
+import type { RunChangedFile, RunChanges as RunChangesData, RunChangesSummary } from '@mingle/contracts';
 import { api, errorMessage } from '../lib/api';
 import { parseDiff } from '../lib/diff';
 

@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { ExternalLink, RefreshCw } from 'lucide-react';
-import type { GitHubState, RepositoryState } from '@relay/contracts';
+import type { GitHubState, RepositoryState } from '@mingle/contracts';
 import { cx, relativeTime, useNow } from '../../lib/format';
 import { Badge, Button } from '../ui';
 import { Popover } from './Popover';

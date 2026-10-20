@@ -1,5 +1,5 @@
-import type { TaskOverride, Task, TaskStatus, WorkspaceEvent } from '@relay/contracts';
-import { CreateTaskSchema, UpdateTaskSchema } from '@relay/contracts';
+import type { TaskOverride, Task, TaskStatus, WorkspaceEvent } from '@mingle/contracts';
+import { CreateTaskSchema, UpdateTaskSchema } from '@mingle/contracts';
 import type { z } from 'zod';
 import { checkTransition, findCycle, unfinishedDeps } from './dag.ts';
 import type { Store } from './store.ts';
@@ -131,4 +131,3 @@ export class TaskService {
     });
   }
 }
-

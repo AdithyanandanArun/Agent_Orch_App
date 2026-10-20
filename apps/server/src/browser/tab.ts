@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import type { BrowserTab } from '@relay/contracts';
+import type { BrowserTab } from '@mingle/contracts';
 import { TabControl } from './control.ts';
 import { DEFAULT_VIEWPORT, DETACH_TIMEOUT_MS } from './limits.ts';
 import type { Dialog, Page } from './playwright.ts';

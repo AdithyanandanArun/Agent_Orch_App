@@ -49,6 +49,6 @@ export async function ghApi(endpoint: string, signal?: AbortSignal): Promise<GhR
   try {
     return { ok: true, data: JSON.parse(result.stdout) as unknown };
   } catch {
-    return { ok: false, failure: { kind: 'other', status: null, message: 'GitHub returned a response Relay could not read.' } };
+    return { ok: false, failure: { kind: 'other', status: null, message: 'GitHub returned a response Mingle could not read.' } };
   }
 }

@@ -16,7 +16,7 @@ const runtime = JSON.parse(await readFile(join(root, 'packaging/node-runtime.jso
 const target = `${process.platform}-${process.arch}`;
 if (target !== 'linux-x64') throw new Error('Desktop release packaging currently supports Linux x86-64 only. Build on a Linux x86-64 machine.');
 if (!/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/.test(pkg.version)) throw new Error('Desktop version must be a semantic version.');
-const name = `relay-workspace-${pkg.version}-${target}`;
+const name = `mingle-${pkg.version}-${target}`;
 const release = join(root, 'release');
 const stage = join(release, name);
 const cache = join(release, '.cache/node');
@@ -58,17 +58,17 @@ delete environment.NODE_OPTIONS;
 delete environment.NODE_PATH;
 delete environment.ELECTRON_RUN_AS_NODE;
 
-console.log(`Staging Relay ${pkg.version} for ${target}…`);
+console.log(`Staging Mingle ${pkg.version} for ${target}…`);
 await rm(stage, { recursive: true, force: true });
 const electron = require('electron');
 await cp(dirname(electron), stage, { recursive: true, dereference: true });
-await rename(join(stage, 'electron'), join(stage, 'relay-workspace'));
+await rename(join(stage, 'electron'), join(stage, 'mingle'));
 await rm(join(stage, 'resources/default_app.asar'), { force: true });
 const appDir = join(stage, 'resources/app');
 await mkdir(appDir, { recursive: true });
 await copyFile(join(root, 'apps/desktop/main.mjs'), join(appDir, 'main.mjs'));
 await writeFile(join(appDir, 'package.json'), JSON.stringify({
-  name: 'relay-workspace', productName: 'Relay', version: pkg.version, type: 'module', main: 'main.mjs',
+  name: 'mingle', productName: 'Mingle', version: pkg.version, type: 'module', main: 'main.mjs',
 }, null, 2) + '\n');
 const workspace = join(stage, 'resources/workspace');
 const server = join(workspace, 'apps/server');
@@ -85,12 +85,12 @@ for (const project of ['apps/server', 'apps/web', 'apps/desktop', 'packages/cont
 for (const project of ['apps/server', 'packages/contracts']) await cp(join(root, project, 'src'), join(deployWorkspace, project, 'src'), { recursive: true });
 try {
   // No source-workspace install is needed: deploy installs the selected production graph directly.
-  await run('pnpm', ['--config.verify-deps-before-run=false', '--dir', deployWorkspace, '--filter', '@relay/server', 'deploy', '--legacy', '--prod', server], { env: environment });
+  await run('pnpm', ['--config.verify-deps-before-run=false', '--dir', deployWorkspace, '--filter', '@mingle/server', 'deploy', '--legacy', '--prod', server], { env: environment });
 } finally { await rm(deployWorkspace, { recursive: true, force: true }); }
-// Relay uses separately installed provider CLIs. Do not redistribute the optional native Claude CLI.
+// Mingle uses separately installed provider CLIs. Do not redistribute the optional native Claude CLI.
 const virtualStore = join(server, 'node_modules/.pnpm');
 // Legacy deploy hoists a self-reference to its source workspace. Keep that link inside the release.
-const selfLink = join(virtualStore, 'node_modules/@relay/server');
+const selfLink = join(virtualStore, 'node_modules/@mingle/server');
 await rm(selfLink, { force: true });
 await symlink(relative(dirname(selfLink), server), selfLink);
 for (const entry of await readdir(virtualStore)) {
@@ -121,7 +121,7 @@ for (const file of ['node_modules/.modules.yaml', 'node_modules/.pnpm-workspace-
 await build({
   entryPoints: [join(root, 'apps/server/src/index.ts')], outfile: join(server, 'dist/index.mjs'),
   bundle: true, platform: 'node', format: 'esm', target: 'node26', packages: 'external',
-  alias: { '@relay/contracts': join(root, 'packages/contracts/src/index.ts') },
+  alias: { '@mingle/contracts': join(root, 'packages/contracts/src/index.ts') },
   logLevel: 'info',
 });
 await rm(join(server, 'src'), { recursive: true, force: true });
@@ -130,14 +130,14 @@ await cp(join(root, 'apps/web/dist'), join(workspace, 'apps/web/dist'), { recurs
 await mkdir(join(stage, 'resources/runtime/bin'), { recursive: true });
 await copyFile(node, join(stage, 'resources/runtime/bin/node'));
 await chmod(join(stage, 'resources/runtime/bin/node'), 0o755);
-await copyFile(join(root, 'apps/web/public/relay.svg'), join(stage, 'relay-workspace.svg'));
-await writeFile(join(stage, 'relay-workspace.desktop'), `[Desktop Entry]\nType=Application\nName=Relay\nComment=Local workspace for coding agent sessions\nExec=relay-workspace %U\nIcon=relay-workspace\nTerminal=false\nCategories=Development;IDE;\nStartupWMClass=relay-workspace\n`);
+await copyFile(join(root, 'apps/web/public/mingle.svg'), join(stage, 'mingle.svg'));
+await writeFile(join(stage, 'mingle.desktop'), `[Desktop Entry]\nType=Application\nName=Mingle\nComment=Local workspace for independent coding-agent sessions\nExec=mingle %U\nIcon=mingle\nTerminal=false\nCategories=Development;IDE;\nStartupWMClass=mingle\n`);
 
 const licenses = join(stage, 'resources/licenses');
 await mkdir(licenses, { recursive: true });
 await copyFile(join(nodeDir, 'LICENSE'), join(licenses, 'Node-LICENSE'));
 await copyFile(join(stage, 'LICENSE'), join(licenses, 'Electron-LICENSE'));
-await writeFile(join(licenses, 'Relay-NOTICE'), 'Relay source: https://github.com/AdithyanandanArun/Agent_Orch_App\nThe project owner has not selected a license for Relay source code. This package does not grant a new license.\nThird-party components retain their own licenses, reproduced alongside their packages and in this directory.\n');
+await writeFile(join(licenses, 'Mingle-NOTICE'), 'Mingle source: https://github.com/AdithyanandanArun/Agent_Orch_App\nThe project owner has not selected a license for Mingle source code. This package does not grant a new license.\nThird-party components retain their own licenses, reproduced alongside their packages and in this directory.\n');
 const inventory = [];
 const inventoried = new Set();
 async function inventoryPackage(packageDir) {

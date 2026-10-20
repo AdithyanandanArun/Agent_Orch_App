@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ArrowLeft, ArrowRight, Globe, Maximize2, Minimize2, Plus, RefreshCw, Scan, Unplug, X } from 'lucide-react';
-import type { BrowserAction, BrowserSessionState, BrowserTab, Session } from '@relay/contracts';
+import type { BrowserAction, BrowserSessionState, BrowserTab, Session } from '@mingle/contracts';
 import { api, errorMessage } from '../../lib/api';
 import { cx } from '../../lib/format';
 import { resolveTab, useBrowserStore } from '../../store/browser';
@@ -160,7 +160,7 @@ export function BrowserPane({ session, active }: { session: Session; active: boo
               />
               {expanded && canInput ? <IconButton label="Fit browser to this window" onClick={fitViewport}><Scan size={14} /></IconButton> : null}
               <IconButton label={expanded ? 'Exit full view' : 'Open full view'} onClick={() => setExpanded((v) => !v)}>{expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}</IconButton>
-              <IconButton label="Disconnect browser" title={state.mode === 'existing' ? 'Disconnect (your browser stays open)' : 'Disconnect and close the Relay browser'} disabled={busy === 'disconnect'} onClick={() => void disconnect()}><Unplug size={14} /></IconButton>
+              <IconButton label="Disconnect browser" title={state.mode === 'existing' ? 'Disconnect (your browser stays open)' : 'Disconnect and close the Mingle browser'} disabled={busy === 'disconnect'} onClick={() => void disconnect()}><Unplug size={14} /></IconButton>
             </form>
             {addressError ? <p className="browser-addr-error" role="alert">{addressError}</p> : null}
             {tab.dialog ? <PageDialog tab={tab} canInput={canInput} act={act} /> : null}
@@ -171,7 +171,7 @@ export function BrowserPane({ session, active }: { session: Session; active: boo
                 : canInput ? <Button size="sm" data-browser-focus-exit onClick={() => stream.setControl('agent')}>Release to agent</Button>
                   : <Button size="sm" variant="primary" disabled={stream.status !== 'live'} why="Waiting for the stream" onClick={() => stream.setControl('human')}>Take control</Button>}
             </div>
-            {canInput ? <p className="browser-hint">Keys and clicks go to the page. Alt+Shift+Esc moves focus back to Relay. Paste with {navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}+V.</p> : null}
+            {canInput ? <p className="browser-hint">Keys and clicks go to the page. Alt+Shift+Esc moves focus back to Mingle. Paste with {navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}+V.</p> : null}
             {stream.error ? <div className="browser-stream-error"><InlineError>{stream.error}</InlineError><button type="button" className="link-btn" onClick={stream.dismissError}>Dismiss</button></div> : null}
           </>
         ) : (
@@ -206,7 +206,7 @@ function ConnectingView({ state }: { state: BrowserSessionState }) {
     <div className="browser-center" role="status">
       <Spinner label="Connecting" />
       <strong>Connecting to the browser…</strong>
-      <span>{state.mode === 'existing' ? 'If your browser shows a permission prompt, approve it to continue.' : 'Starting the Relay browser.'}</span>
+      <span>{state.mode === 'existing' ? 'If your browser shows a permission prompt, approve it to continue.' : 'Starting the Mingle browser.'}</span>
     </div>
   );
 }

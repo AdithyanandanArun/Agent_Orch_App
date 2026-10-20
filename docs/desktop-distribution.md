@@ -38,19 +38,19 @@ The repository does not currently declare a project license. The recipe records 
 
 ## Installed behavior and updates
 
-The package installs a real desktop entry and the `relay-workspace` command. The desktop process selects a free loopback port, starts its packaged backend, opens the workspace and shuts the backend down when the app exits. The renderer retains context isolation and Chromium sandboxing. The installed app runs from its resource directory and stores the database, example workspace and session worktrees in `app.getPath('userData')/workspace`, outside the read-only installation directory.
+The package installs a real desktop entry and the `relay-workspace` command. The desktop process selects a free loopback port, starts its packaged backend, opens the workspace and shuts thepens the workspace and shuts the backend down when the app exits. The renderer retains context isolation and Chromium sandboxing. A fresh install stores data in `appData/Mingle/workspace`; if initialized legacy state exists, it selects `appData/Relay/workspace` in place and keeps Electron's user-data root there. Existing absolute worktree and profile paths are preserved. See [Mingle rename and data continuity](mingle-rename.md).
 
-Claude Code and Codex remain separately installed provider tools. The optional SDK-bundled native Claude executable is excluded from the release; Relay keeps its JavaScript Agent SDK adapter and discovers the user's installed CLI/login normally. No provider calls run during a package build.
+Claude Code and Codex remain separately installed provider tools. The optional SDK-bundled native Claude executable is excluded from the release; Mingle keeps its JavaScript Agent SDK adapter and discovers the user's installed CLI/login normally. No provider calls run during a package build.
 
-The current development checkout's `.relay` database is not silently imported into the installed application. Earlier desktop-launcher data uses the desktop user-data location and is retained. Package upgrades replace application files while retaining user data; removing the package likewise leaves that user data for the owner to manage.
+The previous installed app may have created its database and browser profile under `appData/Relay`; the rebranded desktop selects this root in place when it contains initialized workspace data. It does not copy or rewrite it. Package upgrades replace application files while retaining user data; removing the package likewise leaves that user data for the owner to manage.
 
 There is no automatic updater. Until an AUR listing exists, install newer package files with `pacman -U`; after publication, an AUR helper can rebuild/install new versions. The package is currently unsigned; signing and a package repository are separate release work.
 
 ## Publishing checklist
 
-1. Select and document Relay's project license; replace `unknown` metadata. Third-party license notices do not grant rights to Relay itself.
+1. Select and document Mingle's project license; replace `unknown` metadata. Third-party license notices do not grant rights to Mingle itself.
 2. Build the intended version and perform installation/launch verification on Arch. Type checking and package creation do not substitute for that check.
 3. Review the generated archive/package checksums. Copy the generated recipe into the AUR publication checkout, regenerate `.SRCINFO`, and ensure its source URL names the exact release asset.
-4. With the owner's approval, publish the versioned archive/package and checksums as a GitHub release, then register/update `relay-workspace-bin` on the AUR using the owner's AUR account.
+4. With the owner's approval, publish the versioned archive/package and checksums as a GitHub release, then register/update `mingle-bin` on the AUR using the owner's AUR account.
 
 A GitHub repository or local `PKGBUILD` alone does not make the package available through `yay`. `pacman -S` would require inclusion in a configured package repository; the supported local-file command is `pacman -U` ([ArchWiki](https://wiki.archlinux.org/title/Arch_User_Repository)).

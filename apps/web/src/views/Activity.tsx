@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { Activity as ActivityIcon, ChevronRight } from 'lucide-react';
-import type { SessionRun, Task, ToolCall } from '@relay/contracts';
+import type { SessionRun, Task, ToolCall } from '@mingle/contracts';
 import { useRelay, useProject } from '../store/store';
 import { useProjectContext } from '../store/projectContext';
 import { clockTime, cx, dayLabel, relativeTime, useNow } from '../lib/format';
@@ -26,7 +26,7 @@ const toneFor = (type: string): Tone => {
 interface Entry {
   key: string; at: number; order: number; type: string; tone: Tone; summary: string; createdAt: string;
   sessionId: string | null; origin: string; detail?: ReactNode; payload?: Record<string, unknown>; source?: Task['source'];
-  identity?: { handle: string; key: string; provider?: import('@relay/contracts').Provider };
+  identity?: { handle: string; key: string; provider?: import('@mingle/contracts').Provider };
 }
 
 const RUN_TONE: Record<SessionRun['status'], Tone> = { running: 'info', completed: 'ok', failed: 'err', interrupted: 'warn' };
@@ -99,7 +99,7 @@ export function ActivityView() {
 
   const sessionName = useMemo(() => new Map((sessions ?? []).map((s) => [s.id, s.name])), [sessions]);
   const groupIdentityBySession = useMemo(() => {
-    const identities = new Map<string, { handle: string; key: string; provider?: import('@relay/contracts').Provider }>();
+    const identities = new Map<string, { handle: string; key: string; provider?: import('@mingle/contracts').Provider }>();
     for (const group of groupSnapshots ?? []) for (const member of group.members) {
       const session = sessions?.find((item) => item.id === member.sessionId);
       identities.set(member.sessionId, { handle: member.handle, key: member.sessionId, provider: session?.provider });

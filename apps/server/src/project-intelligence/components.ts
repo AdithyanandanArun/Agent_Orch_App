@@ -1,5 +1,5 @@
 import path from 'node:path';
-import type { ProjectContext } from '@relay/contracts';
+import type { ProjectContext } from '@mingle/contracts';
 import { isSamplePath, readBoundedText } from './fileset.ts';
 import type { Budget } from './limits.ts';
 import { LIMITS } from './limits.ts';

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
-import { mergeTextDelta } from '@relay/contracts/stream';
+import { mergeTextDelta } from '@mingle/contracts/stream';
 import { EXAMPLE_ARTIFACT_PATH, EXAMPLE_CLIENT_SESSION_ID, EXAMPLE_CONTRACT_SESSION_ID, EXAMPLE_PROJECT_ID } from './example.ts';
 import { deferred, startTestApp, waitFor, type TestApp } from './test-utils.ts';
 

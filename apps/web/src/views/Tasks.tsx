@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { ArrowRightLeft, GitMerge, ListPlus, Lock, Play, X } from 'lucide-react';
-import type { Session, Task, TaskStatus } from '@relay/contracts';
+import type { Session, Task, TaskStatus } from '@mingle/contracts';
 import { useRelay, useProject } from '../store/store';
 import { api, errorMessage } from '../lib/api';
 import { cx, relativeTime, useNow } from '../lib/format';

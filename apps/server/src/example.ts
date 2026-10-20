@@ -11,12 +11,12 @@ export const EXAMPLE_CLIENT_SESSION_ID = 'ses_example_client';
 export const EXAMPLE_ARTIFACT_PATH = 'api/users.v1.openapi.json';
 const SEED_KEY = 'example_workspace_v1';
 
-const README = `# Relay example workspace
+const README = `# Mingle example workspace
 
-> **This is an example workspace** created by Relay so you can explore the interface. It is not one of your projects,
-> Relay starts no model calls when creating it, and every starter task here is sample data you can change freely.
+> **This is an example workspace** created by Mingle so you can explore the interface. It is not one of your projects,
+> Mingle starts no model calls when creating it, and every starter task here is sample data you can change freely.
 
-The folder is a small Git repository. Relay created two example sessions (both idle) in separate Git worktrees:
+The folder is a small Git repository. Mingle created two example sessions (both idle) in separate Git worktrees:
 
 - **Example · Contract author** works on the versioned API artifact \`${EXAMPLE_ARTIFACT_PATH}\`.
 - **Example · Client builder** consumes that artifact. Use *handoff* to send it a committed revision of the contract.
@@ -37,7 +37,7 @@ Rules for contributors (human or agent):
 
 const OPENAPI = {
   openapi: '3.1.0',
-  info: { title: 'Example Users API', version: '1.0.0', description: 'Sample contract for the Relay example workspace.' },
+  info: { title: 'Example Users API', version: '1.0.0', description: 'Sample contract for the Mingle example workspace.' },
   paths: {
     '/users': {
       get: { summary: 'List users', operationId: 'listUsers', responses: { '200': { description: 'A page of users', content: { 'application/json': { schema: { type: 'array', items: { $ref: '#/components/schemas/User' } } } } } } },
@@ -57,7 +57,7 @@ const OPENAPI = {
 
 const GITIGNORE = 'node_modules/\n.env\n.env.*\n';
 
-const SAMPLE_IDENTITY = ['user.name=Relay Example', 'user.email=example@relay.invalid', 'commit.gpgsign=false'];
+const SAMPLE_IDENTITY = ['user.name=Mingle Example', 'user.email=example@mingle.invalid', 'commit.gpgsign=false'];
 
 /**
  * Creates the clearly labelled example workspace once per data directory: a real Git repository under the data dir, two
@@ -92,14 +92,14 @@ export async function seedExampleWorkspace(store: Store, dataDir: string, log: L
       });
       return fsp.realpath(target);
     };
-    const contractTree = await make(EXAMPLE_CONTRACT_SESSION_ID, 'relay/example-contract-author');
-    const clientTree = await make(EXAMPLE_CLIENT_SESSION_ID, 'relay/example-client-builder');
+    const contractTree = await make(EXAMPLE_CONTRACT_SESSION_ID, 'mingle/example-contract-author');
+    const clientTree = await make(EXAMPLE_CLIENT_SESSION_ID, 'mingle/example-client-builder');
 
     store.tx(() => {
-      const project = store.insertProject({ id: EXAMPLE_PROJECT_ID, name: 'Relay example workspace', path: real, isExample: true });
+      const project = store.insertProject({ id: EXAMPLE_PROJECT_ID, name: 'Mingle example workspace', path: real, isExample: true });
       const note = (id: string) => store.insertMessage({ sessionId: id, role: 'system', kind: 'info', content: 'Example session created without invoking a model. Sending a message uses your configured provider and credentials.' });
-      const a = store.insertSession({ id: EXAMPLE_CONTRACT_SESSION_ID, projectId: project.id, name: 'Example · Contract author', provider: 'codex', model: 'gpt-6.1-sol', effort: 'high', policy: 'supervised', isolated: true, worktreePath: contractTree, branch: 'relay/example-contract-author' });
-      const b = store.insertSession({ id: EXAMPLE_CLIENT_SESSION_ID, projectId: project.id, name: 'Example · Client builder', provider: 'claude', model: 'claude-sonnet-5-5', effort: 'high', policy: 'supervised', isolated: true, worktreePath: clientTree, branch: 'relay/example-client-builder' });
+      const a = store.insertSession({ id: EXAMPLE_CONTRACT_SESSION_ID, projectId: project.id, name: 'Example · Contract author', provider: 'codex', model: 'gpt-6.1-sol', effort: 'high', policy: 'supervised', isolated: true, worktreePath: contractTree, branch: 'mingle/example-contract-author' });
+      const b = store.insertSession({ id: EXAMPLE_CLIENT_SESSION_ID, projectId: project.id, name: 'Example · Client builder', provider: 'claude', model: 'claude-sonnet-5-5', effort: 'high', policy: 'supervised', isolated: true, worktreePath: clientTree, branch: 'mingle/example-client-builder' });
       note(a.id);
       note(b.id);
       const t1 = store.insertTask({ id: 'tsk_example_contract', projectId: project.id, title: 'Review and tighten the users API v1 contract', description: `[Example task] Review ${EXAMPLE_ARTIFACT_PATH}, add missing error responses and commit the result.`, acceptanceCriteria: 'Every operation documents its error responses; the file is committed.', sessionId: a.id, dependsOn: [], status: 'ready' });

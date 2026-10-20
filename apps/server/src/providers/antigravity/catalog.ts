@@ -1,4 +1,4 @@
-import type { AppSettings, ProviderCatalog, Session } from '@relay/contracts';
+import type { AppSettings, ProviderCatalog, Session } from '@mingle/contracts';
 import { resolveAntigravity, cachedAntigravityMetadata } from './runtime.js';
 import { probeAuthenticatedAntigravity } from './auth.js';
 
@@ -17,7 +17,7 @@ export async function getAntigravityCatalog(session: Session, settings: AppSetti
   const resolved = await resolveAntigravity(settings);
   if (!resolved.ok) return { commands: [], skills: [], warnings: [resolved.reason] };
   let cached = cachedAntigravityMetadata(resolved.executable.path);
-  const warnings = ['Relay-selected Antigravity skills are unavailable. Native provider skill loading remains under Antigravity’s control.'];
+  const warnings = ['Mingle-selected Antigravity skills are unavailable. Native provider skill loading remains under Antigravity’s control.'];
   if (!cached?.commands.length) {
     // An empty picker should not require a paid conversation just to discover native commands.
     // This uses an isolated metadata session and aborts if Google asks for browser authentication.

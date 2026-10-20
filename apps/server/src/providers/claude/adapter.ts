@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { ATTACHMENT_LIMITS, type AdapterEvent, type AgentAdapter, type AppSettings, type RunOptions } from '@relay/contracts';
+import { ATTACHMENT_LIMITS, type AdapterEvent, type AgentAdapter, type AppSettings, type RunOptions } from '@mingle/contracts';
 import type { Options, PermissionResult, Query, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { ProviderError, TextTail, abortError, errorMessage, isAbortError, isRecord, redactSecrets } from '../common.js';
 import { bundledClaudeCandidates, resolveExecutableCached, type ResolveResult } from '../discovery.js';
@@ -23,7 +23,7 @@ export function resolveClaudeExecutable(settings: AppSettings, env: NodeJS.Proce
   return resolveExecutableCached({ name: 'claude', override: settings.claudeExecutable, env, extraCandidates: bundledClaudeCandidates() });
 }
 
-const TEAM_TOOL_NAMES: ReadonlySet<string> = new Set(['team_members', 'team_inbox', 'team_assign', 'team_message', 'team_artifact', 'team_status'].map((name) => `mcp__relay_team__${name}`));
+const TEAM_TOOL_NAMES: ReadonlySet<string> = new Set(['team_members', 'team_inbox', 'team_assign', 'team_message', 'team_artifact', 'team_status'].map((name) => `mcp__mingle_team__${name}`));
 
 function promptWithSelectedClaudeSkill(prompt: string, skillName: string): string {
   const escapedName = skillName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -84,8 +84,8 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): AgentAdapter 
       // Never allow a tool call to proceed on an approval that has not been answered, and never past an abort.
       const canUseTool = async (toolName: string, input: Record<string, unknown>, context: { signal: AbortSignal; title?: string }): Promise<PermissionResult> => {
         if (signal.aborted || context.signal.aborted) return { behavior: 'deny', message: 'The run was interrupted.', interrupt: true };
-        // Relay's authenticated browser gateway enforces this run's policy and shared-control ownership.
-        if (run.browserMcp && toolName.startsWith('mcp__relay_browser__')) return { behavior: 'allow', updatedInput: input };
+        // Mingle's authenticated browser gateway enforces this run's policy and shared-control ownership.
+        if (run.browserMcp && toolName.startsWith('mcp__mingle_browser__')) return { behavior: 'allow', updatedInput: input };
         // Only the six host-backed team tools; the bridge re-checks the run, membership and delivery on every call.
         if (run.teamMcp && TEAM_TOOL_NAMES.has(toolName)) return { behavior: 'allow', updatedInput: input };
         if (toolName === 'AskUserQuestion') {
@@ -113,8 +113,8 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): AgentAdapter 
       };
 
       const mcpServers: NonNullable<Options['mcpServers']> = {};
-      if (run.browserMcp) mcpServers.relay_browser = { type: 'http', url: run.browserMcp.url, headers: { Authorization: `Bearer ${run.browserMcp.token}` } };
-      if (run.teamMcp) mcpServers.relay_team = { type: 'http', url: run.teamMcp.url, headers: { Authorization: `Bearer ${run.teamMcp.token}` } };
+      if (run.browserMcp) mcpServers.mingle_browser = { type: 'http', url: run.browserMcp.url, headers: { Authorization: `Bearer ${run.browserMcp.token}` } };
+      if (run.teamMcp) mcpServers.mingle_team = { type: 'http', url: run.teamMcp.url, headers: { Authorization: `Bearer ${run.teamMcp.token}` } };
 
       const options: Options = {
         cwd: session.worktreePath,
@@ -168,7 +168,7 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): AgentAdapter 
           if (session.providerSessionId && isRecord(message) && message.type === 'system' && message.subtype === 'init' && !message.parent_tool_use_id &&
             typeof message.session_id === 'string' && message.session_id !== session.providerSessionId) {
             controller.abort();
-            throw new ProviderError('Claude resumed a different conversation. Relay stopped the run to preserve the selected conversation.', { code: 'resume_failed' });
+            throw new ProviderError('Claude resumed a different conversation. Mingle stopped the run to preserve the selected conversation.', { code: 'resume_failed' });
           }
           const compaction = describeClaudeCompaction(message, compactPercent);
           if (compaction) emit({ type: 'info', content: compaction });

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { ArrowLeft, ArrowUp, ChevronRight, Eye, EyeOff, Folder, FolderPlus, GitBranch, HardDrive, LoaderCircle, Search, X } from 'lucide-react';
-import type { DirectoryListing, LocalDirectory, Project } from '@relay/contracts';
+import type { DirectoryListing, LocalDirectory, Project } from '@mingle/contracts';
 import { api, errorMessage } from '../lib/api';
 import { basename } from '../lib/format';
 import { useRelay } from '../store/store';
@@ -311,7 +311,7 @@ export function ProjectDialog() {
           </div>
           {view !== 'local' ? <div className="project-picker__form-fields">
             {view === 'clone' ? <label className="project-picker__field"><span>Git URL</span><input id="project-url" className="input input--mono" value={url} disabled={busy} onChange={(event) => setUrl(event.target.value)} placeholder="https://github.com/owner/repository.git" spellCheck={false} autoComplete="url" /><small>HTTPS and SSH URLs are supported, including private hosts and custom ports. Do not include credentials.</small></label> : null}
-            <label className="project-picker__field"><span>Project name</span><input id="project-name" className="input" value={name} disabled={busy} maxLength={100} onChange={(event) => setName(event.target.value)} placeholder="My project" />{view === 'new' ? <small>Relay initializes the new repository with an empty commit. Configure your Git author name and email first.</small> : null}</label>
+            <label className="project-picker__field"><span>Project name</span><input id="project-name" className="input" value={name} disabled={busy} maxLength={100} onChange={(event) => setName(event.target.value)} placeholder="My project" />{view === 'new' ? <small>Mingle initializes the new repository with an empty commit. Configure your Git author name and email first.</small> : null}</label>
           </div> : null}
           <div className="project-picker__directory-head">
             <strong>Directories</strong>

@@ -1,4 +1,4 @@
-import type { ProviderTaskPlan, Session, Task, TaskStatus } from '@relay/contracts';
+import type { ProviderTaskPlan, Session, Task, TaskStatus } from '@mingle/contracts';
 import { findCycle } from '../dag.ts';
 import type { Store } from '../store.ts';
 import { redactSecrets } from '../util.ts';
@@ -20,7 +20,7 @@ export function planPrefix(session: Session, planId: string, parentTaskId: strin
   return `provider:${session.id}:${parentTaskId ? `parent:${parentTaskId}` : `run:${runId}`}:${planId}:`;
 }
 
-/** What Relay shows for a provider-reported step. Completed means "ready for a person to review", never done. */
+/** What Mingle shows for a provider-reported step. Completed means "ready for a person to review", never done. */
 function desiredStatus(reported: Step['status'], runActive: boolean): TaskStatus {
   if (reported === 'completed') return 'review';
   if (reported === 'blocked') return 'blocked';

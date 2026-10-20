@@ -3,7 +3,7 @@ import { closeSync, constants, fstatSync, mkdirSync, openSync, readFileSync, rea
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { z } from 'zod';
-import { PolicySchema } from '@relay/contracts';
+import { PolicySchema } from '@mingle/contracts';
 import type { AntigravityMetadata } from './runtime.js';
 
 // Public discovery results only. Authentication state, credentials and authorization links never enter this file.
@@ -26,17 +26,17 @@ const metadataSchema = z.object({
 });
 const envelope = z.object({ schema: z.literal(1), savedAt: z.number().finite(), metadata: metadataSchema });
 
-function directory(env: NodeJS.ProcessEnv): string {
+function directory(env: NodeJS.ProcessEnv, productName = 'Mingle'): string {
   const preferred = process.platform === 'win32' ? env.LOCALAPPDATA : process.platform === 'darwin' ? undefined : env.XDG_CACHE_HOME;
   const base = preferred && isAbsolute(preferred) ? preferred : process.platform === 'win32' ? join(homedir(), 'AppData', 'Local') : process.platform === 'darwin' ? join(homedir(), 'Library', 'Caches') : join(homedir(), '.cache');
-  return join(base, 'Relay', 'antigravity');
+  return join(base, productName, 'antigravity');
 }
 
-function filename(executable: string, context: string, env: NodeJS.ProcessEnv): string {
+function filename(executable: string, context: string, env: NodeJS.ProcessEnv, productName = 'Mingle'): string {
   // A replaced runtime must not inherit choices from its predecessor, even at the same configured path.
   const stat = statSync(executable);
   const key = createHash('sha256').update(JSON.stringify([context, stat.size, stat.mtimeMs, stat.ctimeMs])).digest('hex');
-  return join(directory(env), `${key}.json`);
+  return join(directory(env, productName), `${key}.json`);
 }
 
 function prune(env: NodeJS.ProcessEnv): void {
@@ -50,16 +50,19 @@ function prune(env: NodeJS.ProcessEnv): void {
 }
 
 export function readAntigravityMetadata(executable: string, context: string, env: NodeJS.ProcessEnv): AntigravityMetadata | undefined {
-  let fd: number | undefined;
-  try {
-    fd = openSync(filename(executable, context, env), constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-    const stat = fstatSync(fd);
-    if (!stat.isFile() || stat.size > MAX_BYTES) return;
-    const result = envelope.safeParse(JSON.parse(readFileSync(fd, 'utf8')));
-    if (!result.success || result.data.savedAt > Date.now() + 60_000 || Date.now() - result.data.savedAt > MAX_AGE) return;
-    return result.data.metadata;
-  } catch { return; }
-  finally { if (fd !== undefined) closeSync(fd); }
+  for (const productName of ['Mingle', 'Relay']) {
+    let fd: number | undefined;
+    try {
+      fd = openSync(filename(executable, context, env, productName), constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+      const stat = fstatSync(fd);
+      if (!stat.isFile() || stat.size > MAX_BYTES) continue;
+      const result = envelope.safeParse(JSON.parse(readFileSync(fd, 'utf8')));
+      if (!result.success || result.data.savedAt > Date.now() + 60_000 || Date.now() - result.data.savedAt > MAX_AGE) continue;
+      return result.data.metadata;
+    } catch { /* Try the legacy cache when the canonical cache is absent or invalid. */ }
+    finally { if (fd !== undefined) closeSync(fd); }
+  }
+  return;
 }
 
 export function writeAntigravityMetadata(executable: string, context: string, env: NodeJS.ProcessEnv, value: AntigravityMetadata): void {

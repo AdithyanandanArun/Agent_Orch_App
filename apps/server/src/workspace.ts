@@ -1,8 +1,8 @@
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { CreateProjectSchema, CreateSessionSchema, UpdateSessionSchema } from '@relay/contracts';
-import type { Project, ProviderInfo, Session } from '@relay/contracts';
+import type { CreateProjectSchema, CreateSessionSchema, UpdateSessionSchema } from '@mingle/contracts';
+import type { Project, ProviderInfo, Session } from '@mingle/contracts';
 import type { z } from 'zod';
 import { addWorktree, repoInfo } from './git.ts';
 import type { RuntimeLike } from './app-types.ts';
@@ -64,7 +64,7 @@ export class WorkspaceService {
     });
   }
 
-  /** Removes the project from Relay. Sessions, native history, repository files and worktrees remain intact. */
+  /** Removes the project from Mingle. Sessions, native history, repository files and worktrees remain intact. */
   removeProject(id: string): string[] {
     const project = this.store.getProject(id);
     if (!project) throw notFound('Project not found');
@@ -77,7 +77,7 @@ export class WorkspaceService {
     if (dispatching) throw conflict('Stop the project’s team work before removing it.');
     this.store.tx(() => {
       this.store.removeProject(id);
-      this.store.recordEvent({ projectId: id, type: 'project.removed', summary: `Project removed from Relay: ${project.name}`, payload: { projectId: id, filesKept: true } });
+      this.store.recordEvent({ projectId: id, type: 'project.removed', summary: `Project removed from Mingle: ${project.name}`, payload: { projectId: id, filesKept: true } });
     });
     return sessions.map((session) => session.id);
   }
@@ -111,7 +111,7 @@ export class WorkspaceService {
     if (isolated) {
       if (!info.isRepo) throw unprocessable('This project is not a Git repository. Choose Project folder in Settings → General → Workspace to work directly in this folder, then create the session again.');
       if (!info.hasHead) throw unprocessable('This repository has no commits yet. Make an initial commit, or choose Project folder in Settings → General → Workspace, then create the session again.');
-      branch = `relay/${slugify(name)}-${id.slice(4, 12)}`;
+      branch = `mingle/${slugify(name)}-${id.slice(4, 12)}`;
       const target = path.join(this.dataDir, 'worktrees', project.id, id);
       await addWorktree(project.path, target, branch);
       // A project that lives in a sub-directory of its repository keeps the same relative position in the worktree.

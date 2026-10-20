@@ -2,7 +2,7 @@ import { HttpError, unprocessable } from '../util.ts';
 import { normalizeRelative } from '../paths.ts';
 
 /** Handles that would be ambiguous with provider aliases or addressing words. */
-export const RESERVED_HANDLES = new Set(['codex', 'claude', 'antigravity', 'opencode', 'all', 'everyone', 'team', 'group', 'user', 'human', 'relay', 'system']);
+export const RESERVED_HANDLES = new Set(['codex', 'claude', 'antigravity', 'opencode', 'all', 'everyone', 'team', 'group', 'user', 'human', 'mingle', 'relay', 'system']);
 
 /**
  * Handles addressed in user prose. Fenced and indented code, inline code, quoted lines, URLs and e-mail addresses

@@ -32,12 +32,12 @@ importers:
       '@anthropic-ai/claude-agent-sdk':
         specifier: ^0.3.276
         version: 0.3.302(@anthropic-ai/sdk@0.135.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.1(supports-color@8.1.1)(zod@4.6.7))(zod@4.6.7)
+      '@mingle/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@modelcontextprotocol/sdk':
         specifier: 1.32.1
         version: 1.32.1(supports-color@8.1.1)(zod@4.6.7)
-      '@relay/contracts':
-        specifier: workspace:*
-        version: link:../../packages/contracts
       node-pty:
         specifier: ^1.1.0
         version: 1.1.0
@@ -63,12 +63,12 @@ importers:
 
   apps/web:
     dependencies:
+      '@mingle/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@monaco-editor/react':
         specifier: ^4.7.0
         version: 4.7.0(monaco-editor@0.52.2)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
-      '@relay/contracts':
-        specifier: workspace:*
-        version: link:../../packages/contracts
       '@xterm/addon-fit':
         specifier: ^0.10.0
         version: 0.10.0(@xterm/xterm@5.5.0)

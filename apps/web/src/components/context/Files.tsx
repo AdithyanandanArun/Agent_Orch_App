@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { ChevronRight, File as FileIcon, Folder, FolderOpen, RefreshCw } from 'lucide-react';
-import type { FileEntry } from '@relay/contracts';
+import type { FileEntry } from '@mingle/contracts';
 import { api, errorMessage } from '../../lib/api';
 import { useRelay, useActiveSession } from '../../store/store';
 import { useEditor } from '../../store/editor';

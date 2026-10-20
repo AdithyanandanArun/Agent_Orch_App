@@ -1,4 +1,4 @@
-import type { ProjectContext } from '@relay/contracts';
+import type { ProjectContext } from '@mingle/contracts';
 
 /** Everything a scan derives, minus volatile fields (scan time, live task count). Equal signatures mean "nothing meaningful changed". */
 export function contextSignature(context: ProjectContext): string {

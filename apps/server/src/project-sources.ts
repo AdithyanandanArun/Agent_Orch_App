@@ -2,7 +2,7 @@ import fsp from 'node:fs/promises';
 import { isIP } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import type { CloneProjectSchema, NewProjectSchema, Project } from '@relay/contracts';
+import type { CloneProjectSchema, NewProjectSchema, Project } from '@mingle/contracts';
 import type { z } from 'zod';
 import type { WorkspaceService } from './workspace.ts';
 import { git } from './git.ts';
@@ -37,7 +37,7 @@ export class ProjectSources {
         maxBuffer: GIT_OUTPUT_LIMIT,
       });
     } catch (error) {
-      if (isGitExecutableError(error)) throw unprocessable(`Git could not be started. Install Git and make it available to Relay. The new folder was kept at ${destination}.`);
+      if (isGitExecutableError(error)) throw unprocessable(`Git could not be started. Install Git and make it available to Mingle. The new folder was kept at ${destination}.`);
       if (isGitIdentityError(error)) {
         throw unprocessable(`The new folder was created at ${destination}, but Git could not make its initial commit. Configure your Git user.name and user.email, then remove or rename this folder before trying again.`);
       }
@@ -64,7 +64,7 @@ export class ProjectSources {
     } catch (error) {
       // Keep the partial clone for user inspection/recovery. Never include Git stderr or URL
       // in an error response: either can contain credential-shaped remote information.
-      if (isGitExecutableError(error)) throw unprocessable(`Git could not be started. Install Git and make it available to Relay. The new folder was kept at ${destination}.`);
+      if (isGitExecutableError(error)) throw unprocessable(`Git could not be started. Install Git and make it available to Mingle. The new folder was kept at ${destination}.`);
       throw unprocessable(`Git clone failed or exceeded its time limit. Check the URL, network connection and your existing Git login. The folder was kept at ${destination}; inspect it or remove it before trying again.`);
     }
 

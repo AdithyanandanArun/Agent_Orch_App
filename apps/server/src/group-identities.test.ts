@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import type { GroupMember } from '@relay/contracts';
+import type { GroupMember } from '@mingle/contracts';
 import { AGENT_PALETTE, groupAgentColors } from '../../web/src/lib/agentColors';
 
 const at = (minute: number) => new Date(Date.UTC(2026, 0, 1, 0, minute)).toISOString();

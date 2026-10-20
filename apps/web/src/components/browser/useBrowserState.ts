@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { BrowserSessionState } from '@relay/contracts';
+import type { BrowserSessionState } from '@mingle/contracts';
 import { api, errorMessage } from '../../lib/api';
 import { useBrowserStore } from '../../store/browser';
 

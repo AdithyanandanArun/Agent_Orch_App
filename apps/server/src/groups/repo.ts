@@ -1,7 +1,7 @@
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import type {
   ConversationGroup, GroupAssignment, GroupDelivery, GroupMember, GroupMessage, GroupMode, GroupRequest, GroupInvocation,
-} from '@relay/contracts';
+} from '@mingle/contracts';
 import { AttachmentRepo } from '../attachments/repo.ts';
 import { newId as baseId, nowIso } from '../util.ts';
 

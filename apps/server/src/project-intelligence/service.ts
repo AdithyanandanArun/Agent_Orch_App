@@ -1,4 +1,4 @@
-import type { Project, ProjectContext, ProviderTaskPlan, Session, Task, WorkspaceEvent } from '@relay/contracts';
+import type { Project, ProjectContext, ProviderTaskPlan, Session, Task, WorkspaceEvent } from '@mingle/contracts';
 import type { Store } from '../store.ts';
 import type { TaskService } from '../tasks.ts';
 import type { Logger } from '../types.ts';
@@ -28,7 +28,7 @@ interface ProjectState { active: Promise<void> | null; next: Deferred | null; la
 
 const MAX_WAIT_MS = 5_000;
 const RUN_FINISHED = /^session\.run\.(?:completed|failed|interrupted)$/;
-const EXAMPLE_NOTICE = 'Example workspace: automatic indexing and task tracking are off. Open your own project to have Relay map it and track its work.';
+const EXAMPLE_NOTICE = 'Example workspace: automatic indexing and task tracking are off. Open your own project to have Mingle map it and track its work.';
 
 const deferred = (): Deferred => {
   let resolve!: (context: ProjectContext) => void;

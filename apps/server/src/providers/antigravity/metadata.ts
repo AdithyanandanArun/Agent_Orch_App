@@ -1,4 +1,4 @@
-import type { ProviderModel } from '@relay/contracts';
+import type { ProviderModel } from '@mingle/contracts';
 import { isRecord, redactSecrets, truncate } from '../common.js';
 import type { AntigravityMetadata } from './runtime.js';
 import { ANTIGRAVITY_POLICIES, ANTIGRAVITY_DEFAULT } from './runtime.js';

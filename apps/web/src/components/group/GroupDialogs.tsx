@@ -1,6 +1,6 @@
 import { useId, useMemo, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
-import type { AgentConfiguration, GroupMode } from '@relay/contracts';
+import type { AgentConfiguration, GroupMode } from '@mingle/contracts';
 import { useRelay } from '../../store/store';
 import { api, errorMessage, type SessionPatch } from '../../lib/api';
 import { shortPath } from '../../lib/format';

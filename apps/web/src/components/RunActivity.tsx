@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode, type SyntheticEvent } from 'react';
 import { Bot, ChevronRight, CircleAlert, FileCode2, Globe2, LoaderCircle, Search, Terminal, Wrench } from 'lucide-react';
-import type { SessionRun, ToolCall, ToolCategory } from '@relay/contracts';
+import type { SessionRun, ToolCall, ToolCategory } from '@mingle/contracts';
 import { api } from '../lib/api';
 import { cx } from '../lib/format';
 import { formatElapsed, runElapsed, runStatusLabel } from '../lib/activity';

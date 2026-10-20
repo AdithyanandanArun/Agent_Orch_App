@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { Background, BackgroundVariant, Controls, Handle, Position, ReactFlow, type Node, type NodeProps } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { ArrowRightLeft, Boxes, ListChecks, MessagesSquare, Network, Package, Play, Settings2, Folder, Bot } from 'lucide-react';
-import type { Session, Task, ToolCall } from '@relay/contracts';
+import type { Session, Task, ToolCall } from '@mingle/contracts';
 import { useRelay, useProject } from '../store/store';
 import { useProjectContext } from '../store/projectContext';
 import { clockTime, cx } from '../lib/format';

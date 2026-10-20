@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
-import { ATTACHMENT_LIMITS, RASTER_IMAGE_TYPES, type NativeInvocation, type RasterImageType, type RunAttachment } from '@relay/contracts';
+import { ATTACHMENT_LIMITS, RASTER_IMAGE_TYPES, type NativeInvocation, type RasterImageType, type RunAttachment } from '@mingle/contracts';
 import { ProviderError } from './common.js';
 
 export const imagesOf = (attachments: readonly RunAttachment[] | undefined): RunAttachment[] => (attachments ?? []).filter((item) => item.kind === 'image');
@@ -12,7 +12,7 @@ const size = (bytes: number): string => bytes >= 1024 * 1024 ? `${(bytes / (1024
 export function fileNote(files: readonly RunAttachment[]): string | null {
   if (!files.length) return null;
   return [
-    '[Relay attachments] The user attached these files to this message. Each is a read-only copy outside the project, available only for this turn:',
+    '[Mingle attachments] The user attached these files to this message. Each is a read-only copy outside the project, available only for this turn:',
     ...files.map((file) => `- ${file.name} (${file.mimeType}, ${size(file.size)}): ${file.path}`),
     'Read them with your file tools when relevant. Their contents are not inlined; if a format cannot be decoded, say so rather than guessing.',
   ].join('\n');

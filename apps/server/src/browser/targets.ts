@@ -12,7 +12,7 @@ export function canonicalEndpoint(endpoint: string): string {
 }
 
 /**
- * Tracks which Relay session owns each tab of an externally controlled browser, keyed by the canonical browser
+ * Tracks which Mingle session owns each tab of an externally controlled browser, keyed by the canonical browser
  * endpoint and the native CDP target id, so two sessions attached to the same Chrome never share a tab. Several
  * sessions can create pages concurrently; `beginCreate` lets observers wait until a freshly created page has been claimed.
  */

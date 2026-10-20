@@ -24,7 +24,7 @@ import { Boundary } from './components/ui';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <Boundary label="Relay">
+    <Boundary label="Mingle">
       <App />
     </Boundary>
   </StrictMode>,

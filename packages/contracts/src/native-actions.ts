@@ -3,14 +3,14 @@ import type { AttachmentCapabilities } from './attachments';
 import type { Provider } from './provider-config';
 import type { ProviderCommand, ProviderSkill } from './index';
 
-/** Local Relay controls win over provider commands with the same name and are never offered as provider actions. */
-export const RELAY_RESERVED_COMMANDS: ReadonlySet<string> = new Set([
+/** Local Mingle controls win over provider commands with the same name and are never offered as provider actions. */
+export const MINGLE_RESERVED_COMMANDS: ReadonlySet<string> = new Set([
   'new', 'stop', 'settings', 'model', 'effort', 'permissions', 'tier', 'skills', 'usage', 'import', 'status', 'diff', 'help', 'members', 'agent',
 ]);
 
 /**
  * Provider controls, account commands and interactive terminal flows. They configure the provider or its terminal UI rather than perform
- * a task, and Relay already owns model, effort, policy and tier through the member's settings.
+ * a task, and Mingle already owns model, effort, policy and tier through the member's settings.
  */
 const CONTROL_COMMANDS: Record<Provider, ReadonlySet<string>> = {
   claude: new Set([
@@ -28,12 +28,12 @@ const CONTROL_COMMANDS: Record<Provider, ReadonlySet<string>> = {
 
 const safeName = (name: string): boolean => /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/.test(name);
 
-/** Commands that perform a task when addressed to one agent; controls, Relay-reserved names and internal entries are dropped. */
+/** Commands that perform a task when addressed to one agent; controls, Mingle-reserved names and internal entries are dropped. */
 export function nativeActionCommands(provider: Provider, commands: readonly ProviderCommand[]): ProviderCommand[] {
   const controls = CONTROL_COMMANDS[provider];
   return commands.filter((command) => {
     const name = command.name.toLowerCase();
-    return safeName(command.name) && !name.startsWith('__') && !RELAY_RESERVED_COMMANDS.has(name) && !controls.has(name);
+    return safeName(command.name) && !name.startsWith('__') && !MINGLE_RESERVED_COMMANDS.has(name) && !controls.has(name);
   });
 }
 

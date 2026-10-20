@@ -1,4 +1,4 @@
-import type { Approval, GroupMember, GroupSnapshot, Session, SessionRun } from '@relay/contracts';
+import type { Approval, GroupMember, GroupSnapshot, Session, SessionRun } from '@mingle/contracts';
 
 export type PresenceState = 'working' | 'approval' | 'queued' | 'paused' | 'error' | 'interrupted' | 'idle' | 'unavailable' | 'offline';
 export interface MemberPresence {

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Activity, ArrowDownToLine, ChevronsUpDown, FolderOpen, FolderPlus, FolderMinus, Kanban, LayoutPanelLeft, MoreHorizontal, Network, Search, Settings, SquarePen, Loader2, Pin } from 'lucide-react';
-import type { Project, Session } from '@relay/contracts';
+import type { Project, Session } from '@mingle/contracts';
 import { useRelay, useProject, type View } from '../store/store';
 import { copyText } from '../lib/clipboard';
 import { errorMessage } from '../lib/api';
@@ -88,7 +88,7 @@ export function Sidebar() {
   ] : [];
 
   return <><aside className={cx('sidebar', sidebarOpen && 'is-open')} aria-label="Primary">
-    <div className="sidebar__brand"><span className="brand-name">Relay</span><span className="sidebar__local">local</span></div>
+    <div className="sidebar__brand"><img className="sidebar__logo" src="/mingle.svg" width="20" height="20" alt="" aria-hidden="true" /><span className="brand-name">Mingle</span><span className="sidebar__local">local</span></div>
     <div className="sidebar__toolbar">
       <button type="button" className="sidebar__search" onClick={() => openDialog({ kind: 'palette' })} aria-label="Search sessions and commands"><Search size={15} /><span>Search</span></button>
       <IconButton label="Open project" onClick={() => openDialog({ kind: 'project' })}><FolderPlus size={15} /></IconButton>
@@ -136,7 +136,7 @@ export function Sidebar() {
         })}
       </div>
     </div>
-    {menu && target ? <ContextMenu key={`${menu.sessionId}:${menu.x}:${menu.y}`} x={menu.x} y={menu.y} items={menuItems} returnFocus={menu.returnFocus} onClose={() => setMenu(null)} /> : null}
+    {menu && targget ? <ContextMenu key={`${menu.sessionId}:${menu.x}:${menu.y}`} x={menu.x} y={menu.y} items={menuItems} returnFocus={menu.returnFocus} onClose={() => setMenu(null)} /> : null}
     <footer className="sidebar__foot">
       <IconButton label="Settings" active={view === 'settings'} onClick={() => useRelay.getState().openSettings()}><Settings size={15} /></IconButton>
       <IconButton label="Workspace" active={view === 'workspace'} onClick={() => setView('workspace')}><LayoutPanelLeft size={15} /></IconButton>

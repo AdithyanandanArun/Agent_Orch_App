@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { create } from 'zustand';
-import type { ProjectContext } from '@relay/contracts';
+import type { ProjectContext } from '@mingle/contracts';
 import { api, errorMessage } from '../lib/api';
 import { useRelay } from './store';
 

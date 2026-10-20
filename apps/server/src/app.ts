@@ -47,7 +47,7 @@ export interface ApplicationOptions extends ConfigOptions {
   terminal?: TerminalOptions;
 }
 
-export interface RelayApplication {
+export interface MingleApplication {
   readonly config: ServerConfig;
   readonly store: Store;
   readonly server: Server;
@@ -69,7 +69,7 @@ export interface RelayApplication {
 }
 
 const defaultLogger: Logger = (level, message, detail) => {
-  const line = `[relay] ${message}${detail ? ` ${errorMessage(detail)}` : ''}`;
+  const line = `[mingle] ${message}${detail ? ` ${errorMessage(detail)}` : ''}`;
   if (level === 'error') console.error(line);
   else if (level === 'warn') console.warn(line);
   else console.log(line);
@@ -88,7 +88,7 @@ export function recoverInterruptedState(store: Store, log: Logger): { sessions: 
     const sessions = store.sessionsInStatus(['running', 'waiting']);
     for (const session of sessions) {
       store.updateSession(session.id, { status: 'interrupted', error: 'The server restarted while this run was active.' });
-      store.insertMessage({ sessionId: session.id, role: 'system', kind: 'info', content: 'The Relay server restarted while this run was active. The run was interrupted; partial output above (if any) was kept.' });
+      store.insertMessage({ sessionId: session.id, role: 'system', kind: 'info', content: 'The Mingle server restarted while this run was active. The run was interrupted; partial output above (if any) was kept.' });
       store.recordEvent({ projectId: session.projectId, sessionId: session.id, type: 'session.run.interrupted', summary: `Run interrupted by restart: ${session.name}`, payload: { reason: 'server restarted' } });
     }
     const messages = store.finalizeStreamingMessages('partial');
@@ -106,7 +106,7 @@ export function recoverInterruptedState(store: Store, log: Logger): { sessions: 
  * Builds the whole local runtime (database, services, HTTP + WebSocket server) without listening, so tests can pass a
  * temporary `dataDir`, a fake `providers` implementation and `port: 0`.
  */
-export function createApplication(options: ApplicationOptions): RelayApplication {
+export function createApplication(options: ApplicationOptions): MingleApplication {
   const log = options.log ?? defaultLogger;
   const config = resolveConfig(options, options.env);
   const store = new Store(openDatabase(path.join(config.dataDir, 'relay.sqlite')));
@@ -163,10 +163,10 @@ export function createApplication(options: ApplicationOptions): RelayApplication
 
   const handle = async (req: IncomingMessage, res: ServerResponse) => {
     try {
-      if (closing) return send(res, 503, { error: 'Relay is shutting down.' });
+      if (closing) return send(res, 503, { error: 'Mingle is shutting down.' });
       const verdict = security.checkHttp(req);
       if (!verdict.ok) return send(res, 403, { error: verdict.reason ?? 'Forbidden' });
-      const url = new URL(req.url ?? '/', 'http://relay.local');
+      const url = new URL(req.url ?? '/', 'http://mingle.local');
       if (url.pathname === '/api/team/mcp') return await teamMcp.handle(req, res);
       if (url.pathname === '/api/browser/mcp') return await browserMcp.handle(req, res);
       if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
@@ -192,7 +192,7 @@ export function createApplication(options: ApplicationOptions): RelayApplication
   const server = createServer((req, res) => { void handle(req, res); });
   server.on('upgrade', (req, socket, head) => {
     let pathname: string;
-    try { pathname = new URL(req.url ?? '/', 'http://relay.local').pathname; } catch { socket.destroy(); return; }
+    try { pathname = new URL(req.url ?? '/', 'http://mingle.local').pathname; } catch { socket.destroy(); return; }
     if (pathname === '/ws/browser') browser.handleUpgrade(req, socket, head, security);
     else hub.handleUpgrade(req, socket, head);
   });
@@ -206,7 +206,7 @@ export function createApplication(options: ApplicationOptions): RelayApplication
 
   const address = () => ({ host: config.host, port: boundPort, url: `http://${config.host.includes(':') ? `[${config.host}]` : config.host}:${boundPort}` });
 
-  const app: RelayApplication = {
+  const app: MingleApplication = {
     config, store, server, runtime, groups, terminals, hub, providers, browser, intelligence, repository, attachments,
     initialize() {
       initialized ??= (async () => {
@@ -226,7 +226,7 @@ export function createApplication(options: ApplicationOptions): RelayApplication
         });
       });
       boundPort = (server.address() as AddressInfo).port;
-      store.recordEvent({ type: 'runtime.started', summary: `Relay server started on ${address().url}`, payload: { version: config.version, port: boundPort } });
+      store.recordEvent({ type: 'runtime.started', summary: `Mingle server started on ${address().url}`, payload: { version: config.version, port: boundPort } });
       if (options.detectOnStart !== false) providers.warm();
       return address();
     },

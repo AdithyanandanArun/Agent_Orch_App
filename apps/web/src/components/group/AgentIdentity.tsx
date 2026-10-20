@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react';
-import type { Provider } from '@relay/contracts';
+import type { Provider } from '@mingle/contracts';
 import { cx } from '../../lib/format';
 import { useRelay } from '../../store/store';
 import { previewAgentColor, recordedAgentColor } from '../../lib/agentColors';

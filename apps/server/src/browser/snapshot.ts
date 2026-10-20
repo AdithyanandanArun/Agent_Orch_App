@@ -1,4 +1,4 @@
-import type { BrowserSnapshot } from '@relay/contracts';
+import type { BrowserSnapshot } from '@mingle/contracts';
 import { refreshViewport } from './actions.ts';
 import { BrowserError, withTimeout } from './errors.ts';
 import { isEligibleTabUrl } from './url-policy.ts';

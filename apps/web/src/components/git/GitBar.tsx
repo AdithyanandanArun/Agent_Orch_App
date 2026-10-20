@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { ArrowUp, Check, ChevronDown, ExternalLink, FolderGit2, GitBranch, GitCommitHorizontal, GitPullRequest, Loader2, Plus, RefreshCw } from 'lucide-react';
-import type { Project, RepositoryState, Session } from '@relay/contracts';
+import type { Project, RepositoryState, Session } from '@mingle/contracts';
 import { api, errorMessage } from '../../lib/api';
 import { copyText } from '../../lib/clipboard';
 import { cx } from '../../lib/format';
@@ -147,7 +147,7 @@ export function GitBar({ project, session }: { project: Project; session: Sessio
       : repo.detached ? 'Detached HEAD has no branch to open a pull request from'
         : !githubOk ? (github?.status === 'available' ? (githubError ? `GitHub status could not be refreshed: ${githubError}` : 'GitHub status is updating') : github?.notices[0] ?? githubError ?? 'GitHub is not available for this repository')
           : pr ? `Pull request #${pr.number} already exists`
-            : !repo.upstream ? 'This branch has no upstream configured — push it first; Relay never pushes for you' : null);
+            : !repo.upstream ? 'This branch has no upstream configured — push it first; Mingle never pushes for you' : null);
   const branchWhy = guard ?? (!repo?.head && !repo?.branches.length ? 'No branches yet — make a first commit' : null);
 
   const whereButton = (

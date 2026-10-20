@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { create } from 'zustand';
-import type { GitHubState, RepositoryMutationResult, RepositoryState } from '@relay/contracts';
+import type { GitHubState, RepositoryMutationResult, RepositoryState } from '@mingle/contracts';
 import { api, errorMessage } from '../lib/api';
 import { useRelay } from './store';
 
@@ -145,7 +145,7 @@ export function useMutationGuard(scope: RepoScope | null): string | null {
     // The project folder is shared by every non-isolated session.
     return sessions.find((x) => x.projectId === scope.projectId && !x.isolated && (x.status === 'running' || x.status === 'waiting'))?.name ?? '';
   });
-  if (connection !== 'online') return 'Disconnected from the Relay server';
+  if (connection !== 'online') return 'Disconnected from the Mingle server';
   if (busy) return `${busy} is running — wait for it to finish or interrupt it before changing Git state`;
   return null;
 }

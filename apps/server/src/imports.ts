@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { ConversationIdSchema } from '@relay/contracts';
-import type { ExternalConversationDetails, ExternalConversationList, ImportConversationResult, Provider } from '@relay/contracts';
+import { ConversationIdSchema } from '@mingle/contracts';
+import type { ExternalConversationDetails, ExternalConversationList, ImportConversationResult, Provider } from '@mingle/contracts';
 import type { RuntimeLike } from './app-types.ts';
 import { repoInfo } from './git.ts';
 import type { ProviderService } from './provider-service.ts';

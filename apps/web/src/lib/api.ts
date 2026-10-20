@@ -1,9 +1,9 @@
 import type {
   AddGroupAgent, AntigravityAuthState, AntigravityInstallState, Approval, AppSettings, Bootstrap, BrowserAction, BrowserConnect, BrowserDiscovery, BrowserSessionState, BrowserTab, CreateGroup, DirectoryListing, ExternalConversationDetails, ExternalConversationList, FileEntry, GitHubState, GitStatus, GroupMode, GroupSnapshot, ImportConversationResult, Project, ProjectContext, ProviderCatalog, ProviderInfo,
   RepositoryBranch, RepositoryCommit, RepositoryMutationResult, RepositoryPullRequest, RepositoryPush, RepositoryState, RunChanges, SendGroupMessage, Session, SessionUsage, ToolCall, Task, TaskStatus, WorkspaceEvent,
-} from '@relay/contracts';
-import type { AttachmentRef, NativeActionCatalog } from '@relay/contracts';
-export type { ProviderCatalog } from '@relay/contracts';
+} from '@mingle/contracts';
+import type { AttachmentRef, NativeActionCatalog } from '@mingle/contracts';
+export type { ProviderCatalog } from '@mingle/contracts';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -28,7 +28,7 @@ async function readError(res: Response): Promise<string> {
     }
     if (text.length < 300 && !text.trimStart().startsWith('<')) return text.trim();
   }
-  if (res.status === 502 || res.status === 503 || res.status === 504) return 'The local runtime is not reachable. Restart Relay or its development server.';
+  if (res.status === 502 || res.status === 503 || res.status === 504) return 'The local runtime is not reachable. Restart Mingle or its development server.';
   return `Request failed with status ${res.status}`;
 }
 
@@ -38,7 +38,7 @@ async function request(path: string, init?: RequestInit): Promise<Response> {
     res = await fetch(path, init);
   } catch (cause) {
     if (cause instanceof DOMException && cause.name === 'AbortError') throw cause;
-    throw new ApiError('Cannot reach the local runtime. Check that Relay is still running.', 0);
+    throw new ApiError('Cannot reach the local runtime. Check that Mingle is still running.', 0);
   }
   if (!res.ok) throw new ApiError(await readError(res), res.status);
   return res;

@@ -1,4 +1,4 @@
-import type { GroupSnapshot } from '@relay/contracts';
+import type { GroupSnapshot } from '@mingle/contracts';
 import { useRelay } from '../store/store';
 import { api, errorMessage } from './api';
 

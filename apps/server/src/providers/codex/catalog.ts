@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
-import type { AppSettings, ProviderCatalog, ProviderSkill, Session } from '@relay/contracts';
+import type { AppSettings, ProviderCatalog, ProviderSkill, Session } from '@mingle/contracts';
 import { cleanEnv, isRecord, redactSecrets, truncate } from '../common.js';
 import { resolveExecutableCached } from '../discovery.js';
 import { shutdownChild, type ChildLike } from '../process.js';
@@ -67,7 +67,7 @@ export async function getCodexCatalog(session: Session, settings: AppSettings): 
       onIssue: (message) => result.warnings.push(truncate(redactSecrets(message), 300)),
     });
     await conn.request('initialize', {
-      clientInfo: { name: 'relay', title: 'Relay', version: '0.1.0' },
+      clientInfo: { name: 'mingle', title: 'Mingle', version: '0.1.0' },
       capabilities: { experimentalApi: false, optOutNotificationMethods: [] },
     }, CATALOG_TIMEOUT_MS);
     conn.notify('initialized', {});

@@ -25,7 +25,7 @@ export function ConnectionBanner() {
       <WifiOff size={14} aria-hidden="true" />
       <div>
         {connection === 'online' ? <><strong>Data may be out of date.</strong> {staleError}</> : <>
-          <strong>Disconnected from the Relay server.</strong> {connection === 'connecting' ? 'Reconnecting…' : `Retrying in ${secs}s (attempt ${attempt}).`} Showing the last known state; sending and running are paused.
+          <strong>Disconnected from the Mingle server.</strong> {connection === 'connecting' ? 'Reconnecting…' : `Retrying in ${secs}s (attempt ${attempt}).`} Showing the last known state; sending and running are paused.
         </>}
       </div>
       <Button size="sm" onClick={() => useRelay.getState().reconnect()}><RefreshCw size={12} /> Retry now</Button>
@@ -58,14 +58,14 @@ export function StartupScreen() {
         <span className="brand-glyph brand-glyph--lg"><RelayGlyph size={26} /></span>
         {error ? (
           <>
-            <h1>Can’t reach the Relay server</h1>
+            <h1>Can’t reach the Mingle server</h1>
             <p>{error}</p>
-            <p className="muted small">Start it with <code>pnpm dev</code> (API on 127.0.0.1:4310). Relay keeps retrying{attempt > 0 ? ` — attempt ${attempt}` : ''}.</p>
+            <p className="muted small">Start it with <code>pnpm dev</code> (API on 127.0.0.1:4310). Mingle keeps retrying{attempt > 0 ? ` — attempt ${attempt}` : ''}.</p>
             <Button variant="primary" onClick={() => useRelay.getState().reconnect()}><RefreshCw size={13} /> Retry now</Button>
           </>
         ) : (
           <>
-            <h1>Starting Relay</h1>
+            <h1>Starting Mingle</h1>
             <Spinner label="Loading workspace" />
           </>
         )}

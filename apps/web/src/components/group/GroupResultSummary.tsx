@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { GroupSnapshot, Message, Session, SessionRun, Task } from '@relay/contracts';
+import type { GroupSnapshot, Message, Session, SessionRun, Task } from '@mingle/contracts';
 import { cx } from '../../lib/format';
 import {
   CHANGE_STATUS_LABEL, buildGroupResultModel, reportPreview, type GroupResultStatus, type ResultAgent, type ResultLead, type ResultReport,

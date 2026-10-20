@@ -1,4 +1,4 @@
-import type { Task } from '@relay/contracts';
+import type { Task } from '@mingle/contracts';
 import type { Store } from '../store.ts';
 import { LIMITS } from './limits.ts';
 import type { RepoItem, ScanResult } from './scan.ts';

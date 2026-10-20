@@ -1,7 +1,7 @@
 import { tmpdir } from 'node:os';
 import { chmod, mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { AppSettings, ProviderUsage, Session } from '@relay/contracts';
+import type { AppSettings, ProviderUsage, Session } from '@mingle/contracts';
 import { isRecord, truncate } from '../common.js';
 import { closeAntigravity, isAntigravityAuthenticated, resolveAntigravity, safeAntigravityError, safeAntigravityText, startAntigravity, type AntigravityRuntime } from './runtime.js';
 import { object } from './metadata.js';
@@ -30,7 +30,7 @@ function parseReport(report: string, clipped: boolean): ProviderUsage {
   }
   return { provider: 'antigravity', fetchedAt: new Date().toISOString(), status: windows.length ? 'partial' : 'unavailable', plan: null, windows, credits: null, resets: null,
     notices: [windows.length ? 'These are values from Antigravity’s native quota report. Reset times retain the provider’s minute precision.' : 'Antigravity did not return recognized quota percentages. Unknown fields remain blank.',
-      'Antigravity does not expose credit balances or reset grants through this report.', ...(clipped ? ['The native report exceeded Relay’s display limit.'] : []), truncate(safeAntigravityText(report.trim()), 8000)] };
+      'Antigravity does not expose credit balances or reset grants through this report.', ...(clipped ? ['The native report exceeded Mingle’s display limit.'] : []), truncate(safeAntigravityText(report.trim()), 8000)] };
 }
 /** Literal /usage is intercepted before inference in the publicly inspected Google ACP 1.4.1 release. */
 export async function getAntigravityUsage(session: Session, settings: AppSettings): Promise<ProviderUsage> {
@@ -63,7 +63,7 @@ export async function getAntigravityUsage(session: Session, settings: AppSetting
         }
       },
     });
-    if (runtime.version !== '1.4.1') return unavailable(`ACP ${runtime.version} was not queried. Relay has verified the no-inference /usage behavior only in Google’s 1.4.1 release.`);
+    if (runtime.version !== '1.4.1') return unavailable(`ACP ${runtime.version} was not queried. Mingle has verified the no-inference /usage behavior only in Google’s 1.4.1 release.`);
     // A separate empty maintenance session avoids replaying or concurrently resuming the user's active conversation.
     const response: unknown = await runtime.conn.request('session/new', { cwd: workspace, mcpServers: [] }, 35_000);
     if (!isRecord(response) || typeof response.sessionId !== 'string' || !response.sessionId) return unavailable('Antigravity did not return a maintenance session.');

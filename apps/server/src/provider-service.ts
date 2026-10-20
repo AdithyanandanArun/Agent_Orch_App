@@ -1,4 +1,4 @@
-import type { AppSettings, Provider, ProviderCatalog, ProviderInfo, ProviderUsage, Session } from '@relay/contracts';
+import type { AppSettings, Provider, ProviderCatalog, ProviderInfo, ProviderUsage, Session } from '@mingle/contracts';
 import type { Logger, ProviderRuntime } from './types.ts';
 import { errorMessage, redactSecrets, truncate } from './util.ts';
 import { providerExecutable, providerName } from './provider-config.ts';

@@ -62,7 +62,7 @@ describe('codex adapter', () => {
     expect((spawned[0]?.options.env as Record<string, string>).ANTHROPIC_API_KEY).toBeUndefined();
 
     const [init] = child.requestsFor('initialize');
-    expect(init?.params.clientInfo.name).toBe('relay');
+    expect(init?.params.clientInfo.name).toBe('mingle');
     expect(init?.params.capabilities.experimentalApi).toBe(false);
     expect(child.received.map((m) => m.method).slice(0, 2)).toEqual(['initialize', 'initialized']);
     expect(child.requestsFor('thread/start')[0]?.params).toMatchObject({ model: 'gpt-6.1-sol', cwd: '/tmp/relay-test-worktree', approvalPolicy: 'on-request', sandbox: 'workspace-write' });

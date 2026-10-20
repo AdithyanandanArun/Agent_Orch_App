@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { ChevronRight, FileCode2, GitBranch, RefreshCw } from 'lucide-react';
-import type { GitStatus } from '@relay/contracts';
+import type { GitStatus } from '@mingle/contracts';
 import { api, errorMessage } from '../../lib/api';
 import { useActiveSession, useRelay } from '../../store/store';
 import { useEditor } from '../../store/editor';
@@ -95,7 +95,7 @@ export function Changes({ active }: { active: boolean }) {
               {filter ? <button type="button" className="link-btn small" onClick={() => setFilter(null)}>Show all</button> : null}
             </div>
             {git.files.length === 0 ? (
-              <EmptyState title="No changes yet">Edits from the session or the editor will show up here as a read-only diff. Relay has no push or merge actions in this version.</EmptyState>
+              <EmptyState title="No changes yet">Edits from the session or the editor will show up here as a read-only diff. Mingle has no push or merge actions in this version.</EmptyState>
             ) : (
               <ul className="flist">
                 {git.files.map((f) => (

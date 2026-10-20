@@ -1,5 +1,5 @@
 {
-  "name": "relay-workspace",
+  "name": "mingle-workspace",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -8,13 +8,13 @@
     "node": ">=24.13.0"
   },
   "scripts": {
-    "dev": "concurrently -k -n server,web -c cyan,magenta \"pnpm --filter @relay/server dev\" \"pnpm --filter @relay/web dev\"",
-    "build": "pnpm --filter @relay/web build && pnpm --filter @relay/server build",
+    "dev": "concurrently -k -n server,web -c cyan,blue \"pnpm --filter @mingle/server dev\" \"pnpm --filter @mingle/web dev\"",
+    "build": "pnpm --filter @mingle/web build && pnpm --filter @mingle/server build",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm --filter @relay/server test",
+    "test": "pnpm --filter @mingle/server test",
     "smoke": "node scripts/smoke.mjs",
-    "start": "pnpm --filter @relay/server start",
-    "desktop": "pnpm --filter @relay/desktop start",
+    "start": "pnpm --filter @mingle/server start",
+    "desktop": "pnpm --filter @mingle/desktop start",
     "package:linux": "pnpm build && node scripts/package-desktop.mjs",
     "package:arch": "pnpm package:linux && node scripts/package-arch.mjs"
   },

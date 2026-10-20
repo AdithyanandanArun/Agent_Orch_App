@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState, type ClipboardEventHandler } from 'react';
 import { Paperclip, RotateCcw, X } from 'lucide-react';
-import { ATTACHMENT_LIMITS, type AttachmentRef } from '@relay/contracts';
+import { ATTACHMENT_LIMITS, type AttachmentRef } from '@mingle/contracts';
 import { api, errorMessage } from '../lib/api';
 import { cx } from '../lib/format';
 
@@ -66,7 +66,7 @@ export function useAttachmentDraft(scope: Scope, attachments: AttachmentRef[], o
     try {
       if (ctx.loadError) await restore(ctx);
       if (!current(ctx)) return;
-      if (ctx.loadError) throw new Error('Existing attachments could not be loaded. Retry when Relay reconnects.');
+      if (ctx.loadError) throw new Error('Existing attachments could not be loaded. Retry when Mingle reconnects.');
       const row = await api.uploadAttachment(ctx.scope, item.file, ctx.controller.signal);
       if (!current(ctx)) return;
       setRows(ctx, [...ctx.rows, row]); forgetUpload(ctx, item.id);

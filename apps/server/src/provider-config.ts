@@ -1,4 +1,4 @@
-import type { AppSettings, Provider } from '@relay/contracts';
+import type { AppSettings, Provider } from '@mingle/contracts';
 
 const PROVIDER_NAMES: Record<Provider, string> = {
   codex: 'Codex',

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { constants, type BigIntStats } from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import type { Project, RepositoryChange, RepositoryState, Session } from '@relay/contracts';
+import type { Project, RepositoryChange, RepositoryState, Session } from '@mingle/contracts';
 import { isDeniedName } from '../paths.ts';
 import { git } from './git-run.ts';
 import { locate, operationInProgress, remotes as readRemotes, tracking as readTracking, type RemoteInfo, type Tracking } from './inspect.ts';
@@ -149,11 +149,11 @@ async function digest(abs: string, stat: BigIntStats, budget: ReadBudget): Promi
   return { hash };
 }
 
-/** Decides whether a changed path may be committed by Relay; returns its content identity (stat + hash) for the fingerprint. */
+/** Decides whether a changed path may be committed by Mingle; returns its content identity (stat + hash) for the fingerprint. */
 async function assess(top: string, prefix: string, raw: Raw, budget: ReadBudget): Promise<{ reason?: string; identity: string }> {
   const none = (reason?: string) => ({ ...(reason ? { reason } : {}), identity: '' });
-  if (raw.kind === 'unmerged') return none('Resolve the merge conflict outside Relay first');
-  if (raw.submodule) return none('Submodule changes are not committed from Relay');
+  if (raw.kind === 'unmerged') return none('Resolve the merge conflict outside Mingle first');
+  if (raw.submodule) return none('Submodule changes are not committed from Mingle');
   if (raw.path.endsWith('/')) return none('Nested Git repository; commit it from its own folder');
   if (!inScope(prefix, raw.path) || (raw.originalPath !== undefined && !inScope(prefix, raw.originalPath))) return none('Outside this project folder');
   for (const file of [raw.path, raw.originalPath]) {
@@ -267,11 +267,11 @@ export async function readSnapshot(scope: Scope, signal?: AbortSignal): Promise<
   const notices: string[] = [];
   if (detached) notices.push('HEAD is detached. Switch to or create a branch before committing, pushing or opening a pull request.');
   if (unborn) notices.push('This repository has no commits yet.');
-  if (operation) notices.push(`A ${operation} is in progress. Finish or abort it outside Relay before committing or switching branches.`);
+  if (operation) notices.push(`A ${operation} is in progress. Finish or abort it outside Mingle before committing or switching branches.`);
   if (prefix) notices.push('This project is a sub-folder of its Git repository; only files inside it can be committed from here.');
   if (scope.session && !scope.session.isolated) notices.push('This session works directly in the shared project folder, so commits affect that folder.');
   if (!remotes.length) notices.push('No Git remote is configured.');
-  for (const remote of remotes.filter((r) => r.credentials)) notices.push(`Remote "${remote.name}" embeds credentials in its URL. Relay will not push to it; use SSH or a Git credential helper.`);
+  for (const remote of remotes.filter((r) => r.credentials)) notices.push(`Remote "${remote.name}" embeds credentials in its URL. Mingle will not push to it; use SSH or a Git credential helper.`);
   if (parsed.upstream && parsed.ahead === null) notices.push(`The upstream branch ${parsed.upstream} no longer exists.`);
   if (insideScope.length > MAX_CHANGES) notices.push(`Showing the first ${MAX_CHANGES} of ${insideScope.length} changed paths in this folder; commit some to see the rest.`);
   if (outsideScope.length) notices.push(`${outsideScope.length} changed path${outsideScope.length === 1 ? ' is' : 's are'} outside this project folder and cannot be committed from here.`);

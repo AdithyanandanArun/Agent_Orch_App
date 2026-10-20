@@ -1,10 +1,10 @@
 import { open } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { AppSettings } from '@relay/contracts';
+import type { AppSettings } from '@mingle/contracts';
 import { isRecord } from './common.js';
 
-/** Highest threshold Relay accepts; a harness may still compact earlier by its own native rules. */
+/** Highest threshold Mingle accepts; a harness may still compact earlier by its own native rules. */
 export const AUTO_COMPACT_MIN_PERCENT = 1;
 export const AUTO_COMPACT_MAX_PERCENT = 95;
 
@@ -33,7 +33,7 @@ export function claudeCompactEnv(percent: number | null): Record<string, string>
 /** Visible note for compaction progress reported by Claude Code SDK system messages, or null for unrelated messages. */
 export function describeClaudeCompaction(message: unknown, percent: number | null): string | null {
   if (!isRecord(message) || message.type !== 'system') return null;
-  const setting = percent === null ? '' : `(Relay threshold: ${percent}%.)`;
+  const setting = percent === null ? '' : `(Mingle threshold: ${percent}%.)`;
   if (message.subtype === 'compact_boundary' && isRecord(message.compact_metadata)) {
     const meta = message.compact_metadata;
     const trigger = meta.trigger === 'manual' ? 'manually' : meta.trigger === 'auto' ? 'automatically' : null;
@@ -197,7 +197,7 @@ export async function planCodexCompaction(input: CodexCompactionInput): Promise<
     }
   }
   if (!window || !source) {
-    return { ...none(`Codex has not reported the context window of ${model}, so Relay could not apply the ${percent}% auto-compaction threshold. Native Codex auto-compaction remains in effect.`), cacheKey };
+    return { ...none(`Codex has not reported the context window of ${model}, so Mingle could not apply the ${percent}% auto-compaction threshold. Native Codex auto-compaction remains in effect.`), cacheKey };
   }
   const limit = codexCompactLimit(percent, window);
   return { config: { [CODEX_COMPACT_KEY]: limit }, window, limit, percent, source, notice: null, cacheKey };
@@ -206,11 +206,11 @@ export async function planCodexCompaction(input: CodexCompactionInput): Promise<
 /** Compares the assumed window with the first window Codex reports; returns a notice when they disagree. */
 export function verifyCodexWindow(plan: CodexCompactionPlan, reported: number): string | null {
   if (plan.window === null || plan.percent === null || plan.window === reported) return null;
-  return `Relay derived the ${plan.percent}% auto-compaction threshold (${formatTokens(plan.limit ?? 0)} tokens) from a ${formatTokens(plan.window)}-token window, but Codex reports ${formatTokens(reported)} tokens. The next run uses ${formatTokens(codexCompactLimit(plan.percent, reported))} tokens.`;
+  return `Mingle derived the ${plan.percent}% auto-compaction threshold (${formatTokens(plan.limit ?? 0)} tokens) from a ${formatTokens(plan.window)}-token window, but Codex reports ${formatTokens(reported)} tokens. The next run uses ${formatTokens(codexCompactLimit(plan.percent, reported))} tokens.`;
 }
 
 /** Visible note for a completed Codex compaction item. */
 export function describeCodexCompaction(plan: CodexCompactionPlan | null): string {
   const base = 'Codex compacted the conversation context.';
-  return plan?.limit && plan.percent !== null ? `${base} (Relay threshold: ${plan.percent}% ≈ ${formatTokens(plan.limit)} tokens.)` : base;
+  return plan?.limit && plan.percent !== null ? `${base} (Mingle threshold: ${plan.percent}% ≈ ${formatTokens(plan.limit)} tokens.)` : base;
 }

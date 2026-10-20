@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
-import { BrowserClientMessageSchema, type BrowserAction, type BrowserServerMessage, type BrowserTab } from '@relay/contracts';
+import { BrowserClientMessageSchema, type BrowserAction, type BrowserServerMessage, type BrowserTab } from '@mingle/contracts';
 import { WebSocketServer, type RawData, type WebSocket } from 'ws';
 import type { Security } from '../security.ts';
 import type { Logger } from '../types.ts';

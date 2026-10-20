@@ -1,4 +1,4 @@
-import type { Policy, ProviderModel } from '@relay/contracts';
+import type { Policy, ProviderModel } from '@mingle/contracts';
 import { isRecord, truncate } from '../common.js';
 
 export const CODEX_POLICIES: Policy[] = ['supervised', 'balanced', 'auto', 'full-access'];

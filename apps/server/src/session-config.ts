@@ -1,4 +1,4 @@
-import type { Policy, Provider, ProviderInfo } from '@relay/contracts';
+import type { Policy, Provider, ProviderInfo } from '@mingle/contracts';
 import { badRequest } from './util.ts';
 
 export interface RunConfig {

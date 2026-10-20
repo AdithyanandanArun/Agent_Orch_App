@@ -1,5 +1,5 @@
 import { AlertTriangle, Loader2, RefreshCw } from 'lucide-react';
-import type { ProjectContext } from '@relay/contracts';
+import type { ProjectContext } from '@mingle/contracts';
 import { useProjectContext } from '../../store/projectContext';
 import { relativeTime, useNow } from '../../lib/format';
 import { Badge, Button } from '../ui';

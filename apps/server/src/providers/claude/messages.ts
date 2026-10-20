@@ -1,10 +1,10 @@
 import { nativePlanSteps } from '../plans.js';
-import type { ProviderTaskPlan, AdapterEvent, Policy, ToolActivity, ToolCategory } from '@relay/contracts';
+import type { ProviderTaskPlan, AdapterEvent, Policy, ToolActivity, ToolCategory } from '@mingle/contracts';
 import { ProviderError, describeValue, isRecord, truncate } from '../common.js';
 
 export type ClaudeSdkPermissionMode = 'default' | 'acceptEdits' | 'auto' | 'bypassPermissions';
 
-/** Relay policy names map directly to Claude Code permission modes. */
+/** Mingle policy names map directly to Claude Code permission modes. */
 export function claudePermissionMode(policy: Policy): ClaudeSdkPermissionMode {
   switch (policy) {
     case 'supervised': return 'default';
@@ -104,7 +104,7 @@ export class ClaudeMessageMapper {
 
   private toolActivity(id: string, name: string, input: string, parentId: string | null, status: ToolActivity['status'], output?: string, durationMs?: number, summaryOverride?: string, details?: { cwd?: string; exitCode?: number; processId?: string }): void {
     const category: ToolCategory = name === 'Bash' ? 'command'
-      : /^mcp__relay_team__team_/.test(name) ? 'agent'
+      : /^mcp__mingle_team__team_/.test(name) ? 'agent'
       : /websearch|search/i.test(name) ? 'search'
       : /webfetch|browser|playwright/i.test(name) || /mcp__t3_code__preview_/i.test(name) ? 'browser'
       : /^(Agent|Task)$/.test(name) ? 'agent'
@@ -178,7 +178,7 @@ export class ClaudeMessageMapper {
         this.emit({ type: 'info', content: `Claude API request failed (${String(message.error ?? 'error')}${message.error_status ? ` HTTP ${String(message.error_status)}` : ''}); retry ${String(message.attempt)} of ${String(message.max_retries)}.` });
         return;
       case 'model_refusal_fallback':
-        throw new ProviderError(`Claude retried on a fallback model (${String(message.original_model)} → ${String(message.fallback_model)}). Relay does not allow automatic model substitution, so the run was stopped.`, { code: 'model_substitution' });
+        throw new ProviderError(`Claude retried on a fallback model (${String(message.original_model)} → ${String(message.fallback_model)}). Mingle does not allow automatic model substitution, so the run was stopped.`, { code: 'model_substitution' });
       case 'model_refusal_no_fallback':
         this.emit({ type: 'info', content: truncate(str(message.content) ?? `${String(message.original_model)} declined to respond.`, 600) });
         return;

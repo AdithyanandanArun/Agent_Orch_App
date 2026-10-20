@@ -25,7 +25,7 @@ export const STREAM_JPEG_QUALITY = 88;
 export const STREAM_MAX_PENDING_INPUTS = 100;
 export const STREAM_MAX_PENDING_MOVES = 16;
 
-/** Relay session and tab ids end up in profile paths and URLs, so keep them to a conservative alphabet. */
+/** Mingle session and tab ids end up in profile paths and URLs, so keep them to a conservative alphabet. */
 export const ID_PATTERN = /^[A-Za-z0-9_-]{1,80}$/;
 
 /** evaluate: the whole expression (including awaiting a returned promise) gets this long; a synchronous run is cut off by V8 after the exec limit. */

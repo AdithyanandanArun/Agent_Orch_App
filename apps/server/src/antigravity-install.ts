@@ -5,11 +5,11 @@ import { join } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { crc32, createInflateRaw } from 'node:zlib';
-import type { AntigravityInstallState } from '@relay/contracts';
+import type { AntigravityInstallState } from '@mingle/contracts';
 import { errorMessage, redactSecrets, truncate } from './util.ts';
 
 // Google's official ACP registry release, pinned locally rather than executing an install script.
-// Archive digests are recorded from dl.google.com; they are Relay pins, not Google signatures.
+// Archive digests are recorded from dl.google.com; they are Mingle pins, not Google signatures.
 const VERSION = '1.4.1';
 const RELEASES: Record<string, { platform: string; archive: string; sha256: string }> = {
   'linux-x64': { platform: 'linux', archive: 'linux-x86_64', sha256: '2e37012ceb2a5c7fc7309b6e6596234fb637ee3c62a5199f65d4cbe777871384' },

@@ -1,4 +1,4 @@
-import type { AppSettings, ProviderUsage, Session, UsageWindow } from '@relay/contracts';
+import type { AppSettings, ProviderUsage, Session, UsageWindow } from '@mingle/contracts';
 import type { SDKControlGetUsageResponse } from '@anthropic-ai/claude-agent-sdk';
 import { redactSecrets } from '../common.js';
 import { withClaudeMetadataQuery } from './capabilities.js';

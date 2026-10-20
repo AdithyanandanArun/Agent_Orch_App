@@ -1,6 +1,6 @@
-import type { AppSettings, ProviderUsage, Session } from '@relay/contracts';
+import type { AppSettings, ProviderUsage, Session } from '@mingle/contracts';
 
-/** OpenCode ACP exposes no account quota, plan or credit surface, and Relay does not read its credential store. */
+/** OpenCode ACP exposes no account quota, plan or credit surface, and Mingle does not read its credential store. */
 export async function getOpencodeUsage(session: Session, _settings: AppSettings): Promise<ProviderUsage> {
   return {
     provider: 'opencode', fetchedAt: new Date().toISOString(), status: 'unavailable', plan: null, windows: [], credits: null, resets: null,

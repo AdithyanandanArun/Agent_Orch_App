@@ -8,8 +8,8 @@ let root: string;
 let outside: string;
 
 beforeAll(() => {
-  root = tmpDir('relay-root-');
-  outside = tmpDir('relay-outside-');
+  root = tmpDir('mingle-root-');
+  outside = tmpDir('mingle-outside-');
   writeFileSync(path.join(outside, 'secret.txt'), 'top secret');
   mkdirSync(path.join(root, 'src'));
   mkdirSync(path.join(root, '.git'));

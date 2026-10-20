@@ -1,5 +1,5 @@
 import { useEffect, useState, type RefObject } from 'react';
-import type { GroupMode } from '@relay/contracts';
+import type { GroupMode } from '@mingle/contracts';
 
 /** Illustrative flow only: nothing here reflects a live run. */
 export function ModeDiagram({ mode, existing, added, svgRef }: { mode: GroupMode; existing: string; added: string; svgRef?: (el: SVGSVGElement | null) => void }) {

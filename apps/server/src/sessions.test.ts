@@ -19,7 +19,7 @@ describe('session creation', () => {
     const b = (await t.api('POST', '/api/sessions', body)).json;
     expect(a.worktreePath).not.toBe(b.worktreePath);
     expect(a.branch).not.toBe(b.branch);
-    expect(a.branch).toMatch(/^relay\/same-name-/);
+    expect(a.branch).toMatch(/^mingle\/same-name-/);
     expect(a.worktreePath).not.toBe(project.path);
 
     const plain = (await t.api('POST', '/api/projects', { name: 'plain', path: (await import('./test-utils.ts')).tmpDir() })).json;

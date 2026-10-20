@@ -1,6 +1,6 @@
 import { existsSync, statSync } from 'node:fs';
 import { z } from 'zod';
-import type { ClientEvent } from '@relay/contracts';
+import type { ClientEvent } from '@mingle/contracts';
 import type { WebSocket } from 'ws';
 import type { Hub } from './hub.ts';
 import type { Store } from './store.ts';
@@ -117,7 +117,7 @@ export class TerminalManager {
     if (!existsSync(cwd) || !statSync(cwd).isDirectory()) return this.fail(socket, 'Working directory does not exist');
     const id = newId('trm');
     const env: Record<string, string> = {};
-    for (const [key, value] of Object.entries(process.env)) if (value !== undefined && !key.startsWith('RELAY_')) env[key] = value;
+    for (const [key, value] of Object.entries(process.env)) if (value !== undefined && !key.startsWith('MINGLE_') && !key.startsWith('RELAY_')) env[key] = value;
     env.TERM = 'xterm-256color';
     env.COLORTERM = 'truecolor';
     let pty: PtyHandle;

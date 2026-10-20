@@ -23,7 +23,7 @@ export const LIMITS = {
 export const EXCLUDED_DIRS = new Set([
   'node_modules', 'vendor', 'third_party', 'third-party', 'bower_components', 'dist', 'build', 'out', 'target', '.next', '.nuxt', '.svelte-kit',
   '.output', 'coverage', '__pycache__', '.venv', 'venv', '.tox', '.mypy_cache', '.pytest_cache', '.gradle', '.idea', '.vscode', 'pods',
-  '.terraform', '.cache', '.turbo', '.parcel-cache', '.yarn', '.pnpm-store', 'site-packages', '.relay', '.git',
+  '.terraform', '.cache', '.turbo', '.parcel-cache', '.yarn', '.pnpm-store', 'site-packages', '.mingle', '.relay', '.git',
 ]);
 
 /** Directories whose contents are examples or test data, so their TODO markers and checklists are not project work. */

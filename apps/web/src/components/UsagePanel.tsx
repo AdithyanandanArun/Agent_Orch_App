@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Clock3, Coins, RefreshCw, RotateCcw, X } from 'lucide-react';
-import type { Session, SessionUsage, UsageResetGrant, UsageWindow } from '@relay/contracts';
+import type { Session, SessionUsage, UsageResetGrant, UsageWindow } from '@mingle/contracts';
 import { api, errorMessage } from '../lib/api';
 import { PROVIDER_NAME } from './ui';
 
@@ -202,7 +202,7 @@ function Dialog({ session, onClose }: { session: Session; onClose: () => void })
               {!hasAccountDetails ? <p className="usage__unknown">{usage.status === 'unavailable' ? 'Account usage details are unavailable.' : 'No account usage limits, credits, or reset details were reported.'}</p> : null}
               {usage.windows.length ? <div className="usage-windows">{usage.windows.map((item) => <LimitWindow key={item.id} item={item} now={now} />)}</div> : null}
               <div className="usage-account-grid">
-                <section className="usage-subsection"><h3><Coins size={14} /> Credits</h3><CreditDetails usage={usage} now={now} /></section>
+                <section className="usage-subsection"><h3><Coins size={14} /> Credits</h3><CreditDetaiils usage={usage} now={now} /></section>
                 <section className="usage-subsection"><h3><RotateCcw size={14} /> Resets</h3><ResetDetails usage={usage} now={now} /></section>
               </div>
             </section>

@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDown, FolderPlus } from 'lucide-react';
-import type { Session, SessionRun, ToolCall } from '@relay/contracts';
+import type { Session, SessionRun, ToolCall } from '@mingle/contracts';
 import { useRelay, useProject, useActiveSession, useActiveGroup } from '../store/store';
 import type { DisplayMessage } from '../lib/conversation';
 import { Button, EmptyState, PROVIDER_NAME } from './ui';
@@ -108,7 +108,7 @@ function SingleSessionPane() {
   if (!project) {
     return (
       <EmptyState icon={<FolderPlus size={20} />} title="Open a project to begin" action={<Button variant="primary" onClick={() => openDialog({ kind: 'project' })}>Open project…</Button>}>
-        Relay works inside a local folder. Add one to start isolated agent sessions.
+        Mingle works inside a local folder. Add one to start isolated agent sessions.
       </EmptyState>
     );
   }
@@ -157,7 +157,7 @@ function SingleSessionPane() {
               </Fragment>
             );
           })}
-          {unplacedRuns.map(run => <Fragment key={run.id}><RunActivity run={run} initialCalls={toolCallsByRun.get(run.id) ?? EMPTY_TOOL_CALLS} />{run.status !== 'running' ? <RunChanges runId={run.id} summary={run.changes} /> : null}</Fragment>)}
+           {unplacedRuns.map(run => <Fragment key={run.id}><RunActivity run={run} initialCalls={toolCallsByRun.get(run.id) ?? EMPTY_TOOL_CALLS} />{run.status !== 'running' ? <RunChanges runId={run.id} summary={run.changes} /> : null}</Fragment>)}
           {session.status === 'running' && !runs.some(run => run.status === 'running') ? (
             <div className="working" role="status"><span className="activity-shimmer">{PROVIDER_NAME[session.provider]} is working…</span></div>
           ) : null}

@@ -10,8 +10,23 @@ export const DEFAULT_PORT = 4310;
 export const WEB_DEV_PORT = 5173;
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
 
+function environmentValue(env: NodeJS.ProcessEnv, currentName: string, legacyName: string): string | undefined {
+  return env[currentName] !== undefined ? env[currentName] : env[legacyName];
+}
+
+/** Keep an existing checkout's local state in place when adopting the Mingle default. */
+function defaultDataDirectory(sourceRoot: string): string {
+  const current = path.join(sourceRoot, '.mingle');
+  const legacy = path.join(sourceRoot, '.relay');
+  const legacyDatabase = existsSync(path.join(legacy, 'relay.sqlite'));
+  const currentDatabase = existsSync(path.join(current, 'relay.sqlite'));
+  if (legacyDatabase || (!currentDatabase && existsSync(legacy))) return legacy;
+  if (currentDatabase) return current;
+  return current;
+}
+
 export interface ConfigOptions {
-  /** Directory for the database, example workspace and session worktrees. Defaults to RELAY_DATA_DIR or <sourceRoot>/.relay. */
+  /** Directory for the database, example workspace and session worktrees. Defaults to MINGLE_DATA_DIR (or legacy RELAY_DATA_DIR) or <sourceRoot>/.mingle, reusing an existing .relay directory. */
   dataDir?: string;
   host?: string;
   /** 0 picks a free port (tests). */
@@ -75,22 +90,23 @@ function readVersion(sourceRoot: string): string {
 
 export function resolveConfig(options: ConfigOptions = {}, env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const sourceRoot = options.sourceRoot ? path.resolve(options.sourceRoot) : SOURCE_ROOT;
-  const dataSetting = options.dataDir ?? (env.RELAY_DATA_DIR?.trim() || path.join(sourceRoot, '.relay'));
+  const dataEnv = environmentValue(env, 'MINGLE_DATA_DIR', 'RELAY_DATA_DIR')?.trim();
+  const dataSetting = options.dataDir ?? (dataEnv || defaultDataDirectory(sourceRoot));
   const dataDir = path.resolve(dataSetting);
   mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-  const host = options.host ?? (env.RELAY_HOST?.trim() || DEFAULT_HOST);
-  if (!isLoopbackHost(host)) throw new Error(`Relay only binds loopback addresses (got ${host}).`);
-  const port = options.port ?? parsePort(env.RELAY_PORT, DEFAULT_PORT);
+  const host = options.host ?? (environmentValue(env, 'MINGLE_HOST', 'RELAY_HOST')?.trim() || DEFAULT_HOST);
+  if (!isLoopbackHost(host)) throw new Error(`Mingle only binds loopback addresses (got ${host}).`);
+  const port = options.port ?? parsePort(environmentValue(env, 'MINGLE_PORT', 'RELAY_PORT'), DEFAULT_PORT);
   let webDistDir: string | null;
   if (options.webDistDir !== undefined) webDistDir = options.webDistDir;
-  else if (env.RELAY_WEB_DIST) webDistDir = path.resolve(env.RELAY_WEB_DIST);
+  else if (environmentValue(env, 'MINGLE_WEB_DIST', 'RELAY_WEB_DIST')?.trim()) webDistDir = path.resolve(environmentValue(env, 'MINGLE_WEB_DIST', 'RELAY_WEB_DIST')!.trim());
   else {
     const candidate = path.join(sourceRoot, 'apps/web/dist');
     webDistDir = existsSync(path.join(candidate, 'index.html')) ? candidate : null;
   }
   if (webDistDir && !(existsSync(webDistDir) && statSync(webDistDir).isDirectory())) webDistDir = null;
   if (webDistDir) webDistDir = realpathSync(webDistDir);
-  const envOrigins = (env.RELAY_ALLOWED_ORIGINS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  const envOrigins = (environmentValue(env, 'MINGLE_ALLOWED_ORIGINS', 'RELAY_ALLOWED_ORIGINS') ?? '').split(',').map((s) => s.trim()).filter(Boolean);
   return {
     sourceRoot,
     dataDir: realpathSync(dataDir),
@@ -98,7 +114,7 @@ export function resolveConfig(options: ConfigOptions = {}, env: NodeJS.ProcessEn
     port,
     webDistDir,
     allowedOrigins: [...(options.allowedOrigins ?? []), ...envOrigins],
-    webDevPort: options.webDevPort ?? parsePort(env.RELAY_WEB_PORT, WEB_DEV_PORT),
+    webDevPort: options.webDevPort ?? parsePort(environmentValue(env, 'MINGLE_WEB_PORT', 'RELAY_WEB_PORT'), WEB_DEV_PORT),
     csp: options.csp === undefined ? DEFAULT_CSP : options.csp,
     version: readVersion(sourceRoot),
   };

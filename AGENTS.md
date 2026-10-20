@@ -1,6 +1,6 @@
 # Project instructions
 
-Relay is an original local development environment for independent coding sessions. The user has authorized parallel Claude Code Sonnet 5.5 high workers, with GPT-6 Luna high as fallback if Claude quota is exhausted. The orchestrator coordinates integration.
+Mingle is an original local development environment for independent coding sessions. The user has authorized parallel Claude Code Sonnet 5.5 high workers, with GPT-6 Luna high as fallback if Claude quota is exhausted. The orchestrator coordinates integration.
 
 - Implement original code. T3 Code is an architectural and UX research reference, never a code dependency or source to copy.
 - Use React, TypeScript, Vite, Node, WebSockets and SQLite. Keep provider runtimes separate from UI. Electron wraps the local application.

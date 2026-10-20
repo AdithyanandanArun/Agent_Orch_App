@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { AppSettings, Provider, ProviderInfo } from '@relay/contracts';
+import type { AppSettings, Provider, ProviderInfo } from '@mingle/contracts';
 import { Button } from './ui';
 import '../styles/provider-executable.css';
 

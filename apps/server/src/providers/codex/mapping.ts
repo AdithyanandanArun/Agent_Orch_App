@@ -1,5 +1,5 @@
 import { resolve } from 'node:path';
-import type { Policy, ToolActivity, ToolCategory, ToolStatus } from '@relay/contracts';
+import type { Policy, ToolActivity, ToolCategory, ToolStatus } from '@mingle/contracts';
 import { describeValue, isRecord, truncate, truncateTail } from '../common.js';
 
 /**
@@ -13,7 +13,7 @@ export interface CodexPolicy {
   sandboxPolicy: { type: 'readOnly' } | { type: 'workspaceWrite'; writableRoots: string[]; networkAccess: boolean } | { type: 'dangerFullAccess' };
 }
 
-/** Map Relay policies directly to app-server policy values; no policy is silently downgraded. */
+/** Map Mingle policies directly to app-server policy values; no policy is silently downgraded. */
 export function codexPolicy(policy: Policy, worktreePath: string): CodexPolicy {
   if (policy === 'full-access') {
     return { approvalPolicy: 'never', approvalsReviewer: 'user', sandbox: 'danger-full-access', sandboxPolicy: { type: 'dangerFullAccess' } };
@@ -207,7 +207,7 @@ export function itemToolActivity(item: Record<string, unknown>, phase: 'started'
       const name = `mcp:${str(item.server) ?? '?'}/${str(item.tool) ?? '?'}`;
       const failure = isRecord(item.error) ? str(item.error.message) : str(item.error);
       const identity = `${str(item.server) ?? ''} ${str(item.tool) ?? ''}`.toLowerCase();
-      const category: ToolCategory = str(item.server) === 'relay_team' && /^team_/.test(str(item.tool) ?? '') ? 'agent'
+      const category: ToolCategory = str(item.server) === 'mingle_team' && /^team_/.test(str(item.tool) ?? '') ? 'agent'
         : /browser|playwright|puppeteer/.test(identity) || (/t3_code/.test(identity) && /preview_/.test(identity)) ? 'browser' : 'other';
       const output = [failure, done ? mcpResultText(item.result) : undefined].filter(Boolean).join('\n');
       return { ...base, name, category, summary: name, ...(item.arguments !== undefined ? { input: describeValue(item.arguments, 4_000) } : {}), ...(output ? { output: truncate(output, 20_000) } : {}) };
@@ -215,7 +215,7 @@ export function itemToolActivity(item: Record<string, unknown>, phase: 'started'
     case 'dynamicToolCall': {
       const name = str(item.tool) ?? '?';
       const identity = `${str(item.namespace) ?? ''} ${name}`.toLowerCase();
-      const category: ToolCategory = (str(item.namespace) === 'relay_team' && /^team_/.test(name)) || /^mcp__relay_team__team_/.test(name) ? 'agent'
+      const category: ToolCategory = (str(item.namespace) === 'mingle_team' && /^team_/.test(name)) || /^mcp__mingle_team__team_/.test(name) ? 'agent'
         : /browser|playwright/.test(identity) || (/t3_code/.test(identity) && /preview_/.test(identity)) ? 'browser' : 'other';
       const output = done ? dynamicResultText(item.contentItems) : undefined;
       return { ...base, name: `tool:${name}`, category, summary: truncate(name, 300), ...(item.arguments !== undefined ? { input: describeValue(item.arguments, 4_000) } : {}), ...(output ? { output } : {}) };

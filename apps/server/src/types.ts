@@ -1,4 +1,4 @@
-import type { AgentAdapter, AppSettings, ConversationListOptions, ExternalConversationDetails, ExternalConversationList, Provider, ProviderCatalog, ProviderInfo, ProviderUsage, Session } from '@relay/contracts';
+import type { AgentAdapter, AppSettings, ConversationListOptions, ExternalConversationDetails, ExternalConversationList, Provider, ProviderCatalog, ProviderInfo, ProviderUsage, Session } from '@mingle/contracts';
 
 /** The provider module surface (apps/server/src/providers/index.ts) as consumed by the runtime. */
 export interface ProviderRuntime {

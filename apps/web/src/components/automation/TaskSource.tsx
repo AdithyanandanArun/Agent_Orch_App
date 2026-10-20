@@ -1,5 +1,5 @@
 import { ExternalLink, FileText } from 'lucide-react';
-import type { Session, SessionRun, Task, TaskOverride, TaskSource } from '@relay/contracts';
+import type { Session, SessionRun, Task, TaskOverride, TaskSource } from '@mingle/contracts';
 import { useEditor } from '../../store/editor';
 import { useRelay } from '../../store/store';
 import { Badge } from '../ui';

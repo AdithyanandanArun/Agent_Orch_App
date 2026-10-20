@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { Play, Settings2, Square, UserMinus, UserPlus } from 'lucide-react';
-import type { GroupMember, GroupSnapshot, Session } from '@relay/contracts';
+import type { GroupMember, GroupSnapshot, Session } from '@mingle/contracts';
 import { useRelay } from '../../store/store';
 import { shortPath } from '../../lib/format';
 import { interruptMember, removeMember, resumeMember } from '../../lib/groupActions';

@@ -4,8 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import type {
   GitHubState, RepositoryBranch, RepositoryCommit, RepositoryMutationResult, RepositoryPullRequest, RepositoryPush, RepositoryState,
-} from '@relay/contracts';
-import type { Session } from '@relay/contracts';
+} from '@mingle/contracts';
+import type { Session } from '@mingle/contracts';
 import type { SessionRuntime } from '../runtime.ts';
 import type { Store } from '../store.ts';
 import type { Logger } from '../types.ts';
@@ -164,12 +164,12 @@ export class RepositoryService {
       const notices: string[] = [];
       if (input.create) {
         if (exists) throw conflict(`Branch "${input.name}" already exists.`);
-        if (snap.dirty) throw conflict('The working tree has uncommitted changes. Commit them before creating or switching branches; Relay never discards or stashes work.');
+        if (snap.dirty) throw conflict('The working tree has uncommitted changes. Commit them before creating or switching branches; Mingle never discards or stashes work.');
         await this.switchBranch(top, ['switch', '--no-recurse-submodules', '-q', '-c', input.name]);
       } else {
         if (!exists) throw notFound(`Branch "${input.name}" does not exist.`);
         if (state.branch === input.name) return { state, notices: [`Already on ${input.name}.`] };
-        if (snap.dirty) throw conflict('The working tree has uncommitted changes. Commit them before creating or switching branches; Relay never discards or stashes work.');
+        if (snap.dirty) throw conflict('The working tree has uncommitted changes. Commit them before creating or switching branches; Mingle never discards or stashes work.');
         await this.switchBranch(top, ['switch', '--no-guess', '--no-recurse-submodules', '-q', '--', input.name]);
       }
       const updated = await this.syncSessionBranches(top, input.name);
@@ -198,8 +198,8 @@ export class RepositoryService {
         name = preferred;
       }
       const remote = snap.remotes.find((r) => r.name === name)!;
-      if (remote.credentials) throw unprocessable(`Remote "${name}" embeds credentials in its URL. Relay will not push to it; use an SSH URL or a Git credential helper.`);
-      if (await isMirrorRemote(top, name, signal)) throw unprocessable(`Remote "${name}" is configured as a mirror, which would overwrite remote branches. Relay will not push to it.`);
+      if (remote.credentials) throw unprocessable(`Remote "${name}" embeds credentials in its URL. Mingle will not push to it; use an SSH URL or a Git credential helper.`);
+      if (await isMirrorRemote(top, name, signal)) throw unprocessable(`Remote "${name}" is configured as a mirror, which would overwrite remote branches. Mingle will not push to it.`);
 
       const merge = snap.tracking.remote === name && snap.tracking.merge?.startsWith('refs/heads/') ? snap.tracking.merge : `refs/heads/${state.branch}`;
       if ((await git(top, ['check-ref-format', merge], { allowFailure: true, signal })).code !== 0) throw unprocessable('The configured upstream branch name is not valid.');
@@ -233,7 +233,7 @@ export class RepositoryService {
       if (!state.upstream || !remote || !tracking.merge?.startsWith('refs/heads/')) throw unprocessable('Push this branch to GitHub first; it has no upstream branch.');
       if (remote.host !== 'github.com' || !remote.repository) throw unprocessable('Pull requests can only be opened for github.com remotes.');
       if (state.ahead === null) throw conflict('The upstream branch no longer exists. Push this branch again before opening a pull request.');
-      if (state.ahead > 0) throw conflict(`${state.ahead} commit${state.ahead === 1 ? ' is' : 's are'} not pushed yet. Push this branch before opening a pull request; Relay never pushes implicitly.`);
+      if (state.ahead > 0) throw conflict(`${state.ahead} commit${state.ahead === 1 ? ' is' : 's are'} not pushed yet. Push this branch before opening a pull request; Mingle never pushes implicitly.`);
       const repository = remote.repository;
       const headBranch = tracking.merge.slice('refs/heads/'.length);
       if (!(await isValidBranchName(top, input.base))) throw badRequest(`"${scrub(input.base, 80)}" is not a valid base branch name.`);
@@ -249,7 +249,7 @@ export class RepositoryService {
         return { state, url: open.url, notices };
       }
 
-      const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'relay-pr-'));
+      const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'mingle-pr-'));
       try {
         const bodyFile = path.join(dir, 'body.md');
         await fsp.writeFile(bodyFile, input.body, { mode: 0o600 });
@@ -406,7 +406,7 @@ export class RepositoryService {
   }
 
   private requireNoOperation(snap: Snapshot): void {
-    if (snap.operation) throw conflict(`A ${snap.operation} is in progress. Finish or abort it outside Relay first.`);
+    if (snap.operation) throw conflict(`A ${snap.operation} is in progress. Finish or abort it outside Mingle first.`);
   }
 
   private async switchBranch(top: string, args: string[]): Promise<void> {
@@ -433,10 +433,10 @@ export class RepositoryService {
   private pushFailure(stderr: string): HttpError {
     const text = stderr.toLowerCase();
     if (/non-fast-forward|fetch first|\(stale info\)|tip of your current branch is behind/.test(text)) {
-      return new HttpError(409, 'The remote has commits that this branch does not. Integrate them outside Relay, then push again; Relay never force-pushes.');
+      return new HttpError(409, 'The remote has commits that this branch does not. Integrate them outside Mingle, then push again; Mingle never force-pushes.');
     }
     if (/permission denied|authentication failed|could not read username|could not read password|terminal prompts disabled|invalid username or password|publickey/.test(text)) {
-      return new HttpError(502, 'The remote rejected the credentials. Relay cannot prompt for them; configure an SSH key or Git credential helper and try again.');
+      return new HttpError(502, 'The remote rejected the credentials. Mingle cannot prompt for them; configure an SSH key or Git credential helper and try again.');
     }
     if (/protected branch|declined|hook declined|rejected/.test(text)) return new HttpError(409, `The remote rejected the push: ${failureSummary(stderr)}`);
     return new HttpError(502, `Push failed: ${failureSummary(stderr)}`);

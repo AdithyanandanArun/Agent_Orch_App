@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ExternalLink } from 'lucide-react';
-import type { GitHubState, RepositoryMutationResult, RepositoryState } from '@relay/contracts';
+import type { GitHubState, RepositoryMutationResult, RepositoryState } from '@mingle/contracts';
 import { api, errorMessage } from '../../lib/api';
 import { useRelay } from '../../store/store';
 import { cx } from '../../lib/format';
@@ -78,7 +78,7 @@ export function CommitDialog({ projectId, sessionId, repo, adopt, refresh, block
       </>}
     >
       <div className="form gitdlg">
-        <Field label="Commit message" htmlFor="commit-message" hint="You write the message; Relay never commits on its own.">
+        <Field label="Commit message" htmlFor="commit-message" hint="You write the message; Mingle never commits on its own.">
           <textarea
             id="commit-message" className="textarea" rows={3} value={message} data-autofocus maxLength={10000}
             onChange={(e) => setMessage(e.target.value)}
@@ -189,8 +189,8 @@ export function PushDialog({ projectId, sessionId, repo, adopt, refresh, blocked
         ) : (
           <p className="small">Remote <code>{remote || 'none'}</code>{target?.repository ? <> · {target.repository}</> : null}</p>
         )}
-        {repo.behind ? <InlineError>The upstream has {repo.behind} commit{repo.behind === 1 ? '' : 's'} this branch lacks, so the push may be rejected. Relay has no force-push option.</InlineError> : null}
-        <p className="field__hint">A normal push of the current branch only. Relay does not push automatically.</p>
+        {repo.behind ? <InlineError>The upstream has {repo.behind} commit{repo.behind === 1 ? '' : 's'} this branch lacks, so the push may be rejected. Mingle has no force-push option.</InlineError> : null}
+        <p className="field__hint">A normal push of the current branch only. Mingle does not push automatically.</p>
         {error ? <InlineError>{error}</InlineError> : null}
       </div>
     </Modal>
@@ -269,7 +269,7 @@ export function PullRequestDialog({ projectId, sessionId, repo, github, adopt, r
   const unpushed = repo.upstream ? (repo.ahead ?? 0) : 0;
   const baseProblem = !base.trim() ? 'Choose the branch the pull request targets.' : /[\0\r\n]/.test(base) ? 'The base branch contains invalid characters.' : base.trim() === repo.branch ? 'The base branch must differ from the current branch.' : null;
   const problem = blocked ?? (!repo.branch ? 'Detached HEAD has no branch to open a pull request from'
-    : unpublished ? 'No upstream is configured — push the branch first; Relay never pushes for you'
+    : unpublished ? 'No upstream is configured — push the branch first; Mingle never pushes for you'
       : !title.trim() ? 'Enter a title' : baseProblem);
 
   useEffect(() => { if (created) document.getElementById('pr-done')?.focus(); }, [created]);
@@ -322,7 +322,7 @@ export function PullRequestDialog({ projectId, sessionId, repo, github, adopt, r
     >
       {step === 'edit' ? (
         <div className="form gitdlg">
-          {unpublished ? <InlineError>This branch has no upstream configured, so Relay can’t confirm it is on the remote. Push it first; creating a pull request does not push.</InlineError> : unpushed > 0 ? <p className="gitdlg__warn" role="status">{unpushed} local commit{unpushed === 1 ? ' is' : 's are'} not pushed and will not be in the pull request until you push.</p> : null}
+          {unpublished ? <InlineError>This branch has no upstream configured, so Mingle can’t confirm it is on the remote. Push it first; creating a pull request does not push.</InlineError> : unpushed > 0 ? <p className="gitdlg__warn" role="status">{unpushed} local commit{unpushed === 1 ? ' is' : 's are'} not pushed and will not be in the pull request until you push.</p> : null}
           <Field label="Title" htmlFor="pr-title"><input id="pr-title" className="input" value={title} data-autofocus maxLength={250} onChange={(e) => setTitle(e.target.value)} /></Field>
           <Field label="Description" htmlFor="pr-body"><textarea id="pr-body" className="textarea" rows={6} value={body} maxLength={50000} onChange={(e) => setBody(e.target.value)} placeholder="Optional. Markdown is supported." /></Field>
           <Field label="Base branch" htmlFor="pr-base" hint={<>Merge <code>{repo.branch ?? 'HEAD'}</code> into this branch.</>} error={base && baseProblem ? baseProblem : null}>

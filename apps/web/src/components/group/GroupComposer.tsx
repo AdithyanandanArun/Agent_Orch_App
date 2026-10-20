@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowUp, AtSign, Square, UserPlus, X } from 'lucide-react';
-import type { AttachmentRef, GroupSnapshot, NativeActionCatalog, Provider, Session } from '@relay/contracts';
+import type { AttachmentRef, GroupSnapshot, NativeActionCatalog, Provider, Session } from '@mingle/contracts';
 import { useRelay } from '../../store/store';
 import { api, errorMessage } from '../../lib/api';
 import { cx } from '../../lib/format';
@@ -29,7 +29,7 @@ const COMMANDS = [
   { name: 'import', description: 'Import a local supported provider conversation' },
   { name: 'status', description: 'Show this group’s mode and members' },
   { name: 'diff', description: 'Open the Changes pane' },
-  { name: 'help', description: 'List Relay commands' },
+  { name: 'help', description: 'List Mingle commands' },
 ] as const;
 const LOCAL_COMMAND = new RegExp(`^/(${COMMANDS.map((command) => command.name).join('|')})(?:\\s.*)?$`, 'i');
 const MAX_RECIPIENTS = 8;
@@ -94,7 +94,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
     const state = session && providers ? providerAvailability(providers, session.provider) : null;
     return state && !state.available ? `@${member.handle}: ${providerName(session!.provider)} needs setup — ${state.reason}` : null;
   }).find(Boolean) ?? null;
-  const blocker = connection !== 'online' ? 'Disconnected from the Relay server — reconnect to send.'
+  const blocker = connection !== 'online' ? 'Disconnected from the Mingle server — reconnect to send.'
     : recipients.length === 0 ? 'No agent is set to receive unaddressed messages. Mention an agent or choose a recipient.'
       : recipients.length > MAX_RECIPIENTS ? `A message can address at most ${MAX_RECIPIENTS} agents.`
         : unavailable;
@@ -129,7 +129,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
   const triggerStart = caretIndex - trigger.length;
   const suggestions: Suggestion[] = (() => {
     if (commandMatch) {
-      const localCommands = COMMANDS.filter((command) => command.name.startsWith(trigger.slice(1).toLowerCase())).map((command) => ({ key: `c:${command.name}`, token: `/${command.name}`, description: command.description, group: 'Relay' }));
+      const localCommands = COMMANDS.filter((command) => command.name.startsWith(trigger.slice(1).toLowerCase())).map((command) => ({ key: `c:${command.name}`, token: `/${command.name}`, description: command.description, group: 'Mingle' }));
       const nativeCommands = actionTargetId ? (nativeCatalog?.commands ?? []).filter((command) => command.name.toLowerCase().startsWith(trigger.slice(1).toLowerCase())).map((command) => ({
         key: `native-command:${command.id}`, token: `/${command.name}`, description: command.description || 'Provider command', group: 'Provider', action: { kind: 'command' as const, id: command.id, name: command.name },
       })) : [];
@@ -198,7 +198,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
         store.toast('info', `${MODE_LABEL[snapshot.group.mode]} · ${members.map((member) => `@${member.handle}`).join(', ')}${lead ? ` · ${lead.handle} ${snapshot.group.mode === 'orchestrated' ? 'coordinates' : 'leads'}` : ''}${snapshot.group.paused ? ' · paused' : ''}`);
         return;
       }
-      case 'help': store.toast('info', `Relay commands: ${COMMANDS.map((command) => `/${command.name}`).join(', ')}. Type @ to address an agent.`); return;
+      case 'help': store.toast('info', `Mingle commands: ${COMMANDS.map((command) => `/${command.name}`).join(', ')}. Type @ to address an agent.`); return;
       case 'usage': {
         if (staleSelectionError) throw new Error(staleSelectionError);
         const resolved = resolveMentions(draft, candidates, retired);
@@ -238,7 +238,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
     // Prose may contain paths or shell variables; only leading syntax, optionally after mentions, is an action.
     const actionToken = /^\s*(?:@[A-Za-z0-9_-]+(?:\s*,\s*|\s+))*([/$])([A-Za-z0-9][A-Za-z0-9_.:-]*)(?:\s|$)/.exec(content);
     const nativeIntent = Boolean(actionToken);
-    let invocation: import('@relay/contracts').NativeInvocationInput | undefined;
+    let invocation: import('@mingle/contracts').NativeInvocationInput | undefined;
     if (actionMatch && actionTargetId && nativeCatalog) {
       const symbol = actionMatch[2];
       const name = actionMatch[3]!;

@@ -1,5 +1,5 @@
 import fsp from 'node:fs/promises';
-import type { ProjectContext } from '@relay/contracts';
+import type { ProjectContext } from '@mingle/contracts';
 import { repoInfo } from '../git.ts';
 import { redactSecrets } from '../util.ts';
 import { analyseComponents } from './components.ts';

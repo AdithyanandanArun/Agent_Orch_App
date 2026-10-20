@@ -1,4 +1,4 @@
-import type { BrowserAction } from '@relay/contracts';
+import type { BrowserAction } from '@mingle/contracts';
 import { BrowserError, withTimeout } from './errors.ts';
 import { evaluateExpression } from './evaluate.ts';
 import { ACTION_TIMEOUT_MS } from './limits.ts';

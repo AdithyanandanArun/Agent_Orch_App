@@ -62,7 +62,7 @@ describe('bootstrap and example workspace', () => {
 
     const second = await boot({ dataDir, keepData: false });
     const after = (await second.api('GET', '/api/bootstrap')).json;
-    expect(after.projects.map((p: any) => p.name).sort()).toEqual(['Relay example workspace', 'mine']);
+    expect(after.projects.map((p: any) => p.name).sort()).toEqual(['Mingle example workspace', 'mine']);
     expect(after.projects).toHaveLength(2);
     expect(after.messages.filter((m: any) => m.sessionId === session.id)).toEqual(mine);
     const restored = after.sessions.find((s: any) => s.id === session.id);
@@ -189,29 +189,28 @@ describe('static serving', () => {
   it('serves the built web app safely and never exposes other files', async () => {
     const { mkdirSync, writeFileSync, symlinkSync } = await import('node:fs');
     const { tmpDir } = await import('./test-utils.ts');
-    const dist = tmpDir('relay-dist-');
+    const dist = tmpDir('mingle-dist-');
     mkdirSync(path.join(dist, 'assets'));
-    writeFileSync(path.join(dist, 'index.html'), '<!doctype html><title>Relay</title>');
+    writeFileSync(path.join(dist, 'index.html'), '<!doctype html><title>Mingle</title>');
     writeFileSync(path.join(dist, 'assets/app.js'), 'console.log(1)');
     writeFileSync(path.join(dist, '.hidden'), 'nope');
     symlinkSync('/etc/passwd', path.join(dist, 'passwd-link'));
     const t = await boot({ webDistDir: dist });
-    expect((await rawRequest(t.port, 'GET', '/')).text).toContain('Relay');
+    expect((await rawRequest(t.port, 'GET', '/')).text).toContain('Mingle');
     expect((await rawRequest(t.port, 'GET', '/')).headers['content-security-policy']).toContain("default-src 'self'");
-    expect((await rawRequest(t.port, 'GET', '/some/client/route')).text).toContain('Relay');
+    expect((await rawRequest(t.port, 'GET', '/some/client/route')).text).toContain('Mingle');
     expect((await rawRequest(t.port, 'GET', '/assets/app.js')).headers['content-type']).toMatch(/javascript/);
     for (const bad of ['/.hidden', '/..%2f..%2fetc%2fpasswd', '/%2e%2e/%2e%2e/etc/passwd', '/assets/..%5c..%5cx', '/missing.js']) {
       const res = await rawRequest(t.port, 'GET', bad);
       expect(res.text, bad).not.toContain('root:');
       // Either refused outright, or normalised by the URL parser to an in-dist path that falls back to the SPA shell.
-      if (res.status !== 404) expect(res.text, bad).toContain('<title>Relay</title>');
+      if (res.status !== 404) expect(res.text, bad).toContain('<title>Mingle</title>');
     }
     expect((await rawRequest(t.port, 'GET', '/.hidden')).status).toBe(404);
     expect((await rawRequest(t.port, 'GET', '/missing.js')).status).toBe(404);
     // A symlink pointing outside dist is never followed; the extensionless path falls back to the SPA shell.
     const link = await rawRequest(t.port, 'GET', '/passwd-link');
     expect(link.text).not.toContain('root:');
-    expect(link.text).toContain('<title>Relay</title>');
+    expect(link.text).toContain('<title>Mingle</title>');
   });
 });
-

@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { AgentConfiguration, Provider } from '@relay/contracts';
+import type { AgentConfiguration, Provider } from '@mingle/contracts';
 import { useRelay } from '../../store/store';
 import {
   POLICY_DESCRIPTION, effortChoices, modelOf, normalizeConfig, policyChoices, policyLabel, providerAvailability, providerName, tierChoices,

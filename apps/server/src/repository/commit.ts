@@ -36,7 +36,7 @@ function parseRawDiff(output: string): RawChange[] {
  */
 export async function createCommit(top: string, branch: string, head: string | null, paths: string[], message: string, options: CommitOptions): Promise<CreatedCommit> {
   const { signal } = options;
-  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'relay-index-'));
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'mingle-index-'));
   try {
     const env = { GIT_INDEX_FILE: path.join(dir, 'index') };
     if (head) await git(top, ['read-tree', head], { env, signal });
@@ -53,7 +53,7 @@ export async function createCommit(top: string, branch: string, head: string | n
     const changes = parseRawDiff(raw.stdout);
     for (const change of changes) {
       if (!listed.has(change.path)) throw conflict('Committing the selection would also change files that were not selected (a path replaced by a directory?). Nothing was committed.');
-      if (change.newMode === '160000' || change.oldMode === '160000') throw unprocessable('Submodule changes are not committed from Relay.');
+      if (change.newMode === '160000' || change.oldMode === '160000') throw unprocessable('Submodule changes are not committed from Mingle.');
       if (change.path.split('/').some(isDeniedName)) throw unprocessable('A protected file was part of the selection. Nothing was committed.');
     }
 
@@ -96,7 +96,7 @@ async function writeCommit(top: string, tree: string, head: string | null, messa
     // Never fall back to an unsigned commit when the user's configuration asks for signing.
     throw new HttpError(422, error.timedOut
       ? 'Commit signing timed out waiting for your signing key. Nothing was committed. Unlock the key (for example with your gpg-agent) and try again.'
-      : `Commit signing failed and nothing was committed. Relay cannot show a passphrase prompt, so unlock your signing key (for example with your gpg-agent) or change commit.gpgsign in your Git configuration. ${error.message}`);
+      : `Commit signing failed and nothing was committed. Mingle cannot show a passphrase prompt, so unlock your signing key (for example with your gpg-agent) or change commit.gpgsign in your Git configuration. ${error.message}`);
   }
 }
 

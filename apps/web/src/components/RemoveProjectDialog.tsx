@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { Project } from '@relay/contracts';
+import type { Project } from '@mingle/contracts';
 import { useRelay } from '../store/store';
 import { api, errorMessage } from '../lib/api';
 import { Button, InlineError, Modal } from './ui';
@@ -16,7 +16,7 @@ export function RemoveProjectDialog({ project, onClose }: { project: Project; on
       await useRelay.getState().refreshNow();
       const state = useRelay.getState();
       if (state.view === 'settings' && state.settingsProjectId === project.id) state.openSettings({ section: 'general' });
-      state.toast(result.notices.length ? 'info' : 'success', result.notices[0] ?? 'Project removed from Relay. Your files are kept.');
+      state.toast(result.notices.length ? 'info' : 'success', result.notices[0] ?? 'Project removed from Mingle. Your files are kept.');
       onClose();
     } catch (cause) { setError(errorMessage(cause)); }
     finally { setBusy(false); }

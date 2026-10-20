@@ -17,7 +17,7 @@ export interface GitRunOptions {
   env?: Record<string, string>;
   /** Talks to a remote: keeps the user's SSH selection, disables every interactive prompt and drops the controlling terminal. */
   network?: boolean;
-  /** Runs without a controlling terminal so tools such as gpg cannot block on a prompt Relay cannot show. */
+  /** Runs without a controlling terminal so tools such as gpg cannot block on a prompt Mingle cannot show. */
   detached?: boolean;
   signal?: AbortSignal;
   allowFailure?: boolean;
@@ -48,7 +48,7 @@ export async function git(cwd: string, args: string[], options: GitRunOptions = 
   if (result.spawnError) throw new GitFailure(result.spawnError.code === 'ENOENT' ? 'Git is not installed, is not on PATH, or the folder no longer exists' : `Git could not be started: ${failureSummary(result.spawnError.message)}`, '', null);
   if (result.aborted) throw new GitFailure('Git was cancelled because the server is shutting down', '', null);
   if (result.timedOut) throw new GitFailure(`git ${args[0] ?? ''} timed out`, result.stderr, null, true);
-  if (result.truncated) throw new GitFailure(`git ${args[0] ?? ''} produced more output than Relay will read`, result.stderr, result.code);
+  if (result.truncated) throw new GitFailure(`git ${args[0] ?? ''} produced more output than Mingle will read`, result.stderr, result.code);
   if (result.code !== 0 && !options.allowFailure) throw new GitFailure(`git ${args[0] ?? ''} failed: ${failureSummary(result.stderr || result.stdout)}`, result.stderr, result.code);
   return result;
 }

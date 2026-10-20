@@ -1,6 +1,6 @@
 import { create } from 'zustand';
-import { mergeTextDelta } from '@relay/contracts/stream';
-import type { Approval, Bootstrap, GroupSnapshot, Message, Project, ServerEvent, ClientEvent, Session, Task, WorkspaceEvent } from '@relay/contracts';
+import { mergeTextDelta } from '@mingle/contracts/stream';
+import type { Approval, Bootstrap, GroupSnapshot, Message, Project, ServerEvent, ClientEvent, Session, Task, WorkspaceEvent } from '@mingle/contracts';
 import { api, errorMessage } from '../lib/api';
 import { terminalBus } from './terminalBus';
 import { resolveTab, useBrowserStore } from './browser';

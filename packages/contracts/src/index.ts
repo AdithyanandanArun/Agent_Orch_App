@@ -82,6 +82,7 @@ export interface AntigravityAuthState {
 }
 export interface ProviderCommand {
   id: string; name: string; description: string; argumentHint?: string;
+  /** `relay` is retained only to read catalog provenance stored before the Mingle rename. */
   source: 'provider' | 'project' | 'user' | 'relay'; kind: 'prompt' | 'action';
 }
 export interface ProviderSkill {

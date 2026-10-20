@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ClipboardEvent, type KeyboardEvent, type PointerEvent, type RefObject } from 'react';
-import type { BrowserAction, BrowserTab } from '@relay/contracts';
+import type { BrowserAction, BrowserTab } from '@mingle/contracts';
 import { chunkText, keyToAction } from '../../lib/browserKeys';
 import { cx } from '../../lib/format';
 import { Spinner } from '../ui';
@@ -112,7 +112,7 @@ export function BrowserSurface({ stream, tab, canvasRef, canInput }: { stream: B
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (!canInput) return;
-    // The page owns the keyboard while it has focus; keep Relay's own shortcuts (command menu, terminal) out of it.
+    // The page owns the keyboard while it has focus; keep Mingle's own shortcuts (command menu, terminal) out of it.
     e.stopPropagation();
     if (isFocusExit(e)) {
       e.preventDefault();

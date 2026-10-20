@@ -1,6 +1,6 @@
 import type {
   AgentConfiguration, AppSettings, GroupDelivery, GroupMember, GroupMode, GroupSnapshot, Policy, Provider, ProviderInfo, ProviderModel, Session, SessionStatus,
-} from '@relay/contracts';
+} from '@mingle/contracts';
 import { defaultProviderModel, PROVIDER_NAMES, usesNativeModelDefault } from './providers';
 
 export const MODE_LABEL: Record<GroupMode, string> = { cowork: 'Cowork', orchestrated: 'Orchestrated', 'current-leads': 'Current agent leads' };

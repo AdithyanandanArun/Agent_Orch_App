@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Download } from 'lucide-react';
-import type { AppSettings } from '@relay/contracts';
+import type { AppSettings } from '@mingle/contracts';
 import { cx } from '../../lib/format';
 import { Button, InlineError } from '../ui';
 import { SelectMenu } from '../SelectMenu';
@@ -34,15 +34,15 @@ export function BrowserSettings({ settings, disabled, update }: Props) {
   };
 
   return <div className="settings-page__section">
-    <div className="settings-page__section-head"><h2>Agent access</h2><p>Let sessions open and operate a shared browser that you can watch and take over. Relay never imports cookies or passwords.</p></div>
+    <div className="settings-page__section-head"><h2>Agent access</h2><p>Let sessions open and operate a shared browser that you can watch and take over. Mingle never imports cookies or passwords.</p></div>
     <SettingRow title="Let agents use the browser" description="Allow agents to inspect and operate shared tabs. Turning this off blocks their access immediately. You can still browse yourself." htmlFor="st-browser-agent">
       <button id="st-browser-agent" type="button" role="switch" aria-checked={agentEnabled} className={cx('switch', agentEnabled && 'is-on')} disabled={disabled} onClick={() => void update({ browserAgentEnabled: !agentEnabled }, 'browser-agent')}><i /></button>
     </SettingRow>
     <SettingRow title="Default browser" description="Preferred connection option. Existing browsers require an explicit connection." htmlFor="st-browser-mode">
-      <SelectMenu id="st-browser-mode" label="Default browser" value={settings.browserDefaultMode ?? 'managed'} disabled={disabled} options={[{ value: 'managed', label: 'Relay browser', description: 'A separate Chromium without your logins.' }, { value: 'existing', label: 'Your running browser', description: 'Attach to a browser you are already signed in to.' }]} onChange={(value) => void update({ browserDefaultMode: value as 'managed' | 'existing' }, 'browser-mode')} />
+      <SelectMenu id="st-browser-mode" label="Default browser" value={settings.browserDefaultMode ?? 'managed'} disabled={disabled} options={[{ value: 'managed', label: 'Mingle browser', description: 'A separate Chromium without your logins.' }, { value: 'existing', label: 'Your running browser', description: 'Attach to a browser you are already signed in to.' }]} onChange={(value) => void update({ browserDefaultMode: value as 'managed' | 'existing' }, 'browser-mode')} />
     </SettingRow>
 
-    <div className="settings-page__section-head settings-page__section-head--next"><h2>Relay browser</h2><p>A Chromium that Relay manages for sessions.</p></div>
+    <div className="settings-page__section-head settings-page__section-head--next"><h2>Mingle browser</h2><p>A Chromium that Mingle manages for sessions.</p></div>
     {error ? <InlineError onRetry={() => void refresh()}>{error}</InlineError> : null}
     <div className="settings-row browser-setting-status">
       <div className="settings-row__copy">
@@ -59,7 +59,7 @@ export function BrowserSettings({ settings, disabled, update }: Props) {
       <input id="st-browser-exe" className="input input--mono" value={executable} disabled={disabled} spellCheck={false} placeholder="Automatic" onChange={(e) => setExecutable(e.target.value)} onBlur={() => void saveExecutable()} onKeyDown={(e) => { if (e.key === 'Enter') void saveExecutable(); }} />
     </SettingRow>
 
-    <div className="settings-page__section-head settings-page__section-head--next"><h2>Your running browser</h2><p>Reuse the logins and open tabs of a Chromium browser you already use. Relay attaches to it when you connect a session; nothing is copied.</p></div>
+    <div className="settings-page__section-head settings-page__section-head--next"><h2>Your running browser</h2><p>Reuse the logins and open tabs of a Chromium browser you already use. Mingle attaches to it when you connect a session; nothing is copied.</p></div>
     <div className="browser-settings-existing">
       <BrowserSourcePicker
         idPrefix="st" discovery={discovery} loading={loading} sourceId={settings.browserExistingSourceId ?? ''} endpoint={endpoint} disabled={disabled}

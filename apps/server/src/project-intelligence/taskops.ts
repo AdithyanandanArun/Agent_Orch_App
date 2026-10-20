@@ -1,4 +1,4 @@
-import type { Task, TaskOverride, TaskSource, TaskStatus } from '@relay/contracts';
+import type { Task, TaskOverride, TaskSource, TaskStatus } from '@mingle/contracts';
 import { unfinishedDeps } from '../dag.ts';
 import type { Store } from '../store.ts';
 import type { TaskService } from '../tasks.ts';

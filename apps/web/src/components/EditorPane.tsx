@@ -44,7 +44,7 @@ export default function EditorPane({ tabKey }: { tabKey: string }) {
         ) : null}
         {tab.status === 'ready' ? (
           <Editor
-            path={tab.key} language={tab.language} value={tab.draft} theme={theme === 'light' ? 'relay-light' : 'relay-dark'}
+            path={tab.key} language={tab.language} value={tab.draft} theme={theme === 'light' ? 'mingle-light' : 'mingle-dark'}
             onChange={(v) => useEditor.getState().edit(tab.key, v ?? '')}
             loading={<div className="editor__state"><Spinner label="Starting editor" /></div>}
             options={{

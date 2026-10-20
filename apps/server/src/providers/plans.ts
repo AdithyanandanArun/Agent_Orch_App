@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { ProviderTaskPlan } from '@relay/contracts';
+import type { ProviderTaskPlan } from '@mingle/contracts';
 import { isRecord } from './common.js';
 
 /** Title identities survive status updates and reordering; duplicate titles retain occurrence identities. */

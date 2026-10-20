@@ -1,4 +1,4 @@
-import type { AntigravityAuthState, AppSettings } from '@relay/contracts';
+import type { AntigravityAuthState, AppSettings } from '@mingle/contracts';
 import { authenticateAntigravity, probeAuthenticatedAntigravity } from './providers/antigravity/auth.js';
 import { errorMessage, redactSecrets, truncate } from './util.ts';
 import { openGoogleAuthorization } from './providers/antigravity/auth-browser.js';

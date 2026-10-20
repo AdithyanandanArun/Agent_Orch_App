@@ -1,4 +1,4 @@
-import type { AdapterEvent, AgentAdapter, RunOptions, ToolActivity, ToolCategory } from '@relay/contracts';
+import type { AdapterEvent, AgentAdapter, RunOptions, ToolActivity, ToolCategory } from '@mingle/contracts';
 import { ProviderError, abortError, isRecord, truncate } from '../common.js';
 import { nativePlanSteps } from '../plans.js';
 import {
@@ -20,8 +20,8 @@ const json = (value: unknown, max = 20_000): string => { try { return truncate(t
 export function createAntigravityAdapter(deps: AntigravityAdapterDeps = {}): AgentAdapter {
   return { async run(options) {
     if (options.signal.aborted) throw abortError();
-    if (options.session.serviceTier && options.session.serviceTier !== 'standard') throw new ProviderError('Antigravity ACP does not expose Relay service tiers. Choose Standard.', { code: 'unsupported_service_tier' });
-    if ((options.skills ?? []).length || options.invocation?.kind === 'skill') throw new ProviderError('Relay-selected Antigravity skills are unavailable. Native provider skills remain provider-owned.', { code: 'unsupported_skills' });
+    if (options.session.serviceTier && options.session.serviceTier !== 'standard') throw new ProviderError('Antigravity ACP does not expose Mingle service tiers. Choose Standard.', { code: 'unsupported_service_tier' });
+    if ((options.skills ?? []).length || options.invocation?.kind === 'skill') throw new ProviderError('Mingle-selected Antigravity skills are unavailable. Native provider skills remain provider-owned.', { code: 'unsupported_skills' });
     if (!MODE[options.session.policy]) throw new ProviderError('Antigravity supports Supervised, Auto-accept edits and Full access. Auto is unavailable.', { code: 'unsupported_policy' });
     const env = deps.env ?? process.env;
     const resolved = await resolveAntigravity(options.settings, env);
@@ -81,15 +81,15 @@ class AntigravityRun {
         notification: (method, params) => this.onNotification(method, params), request: (method, params) => this.onRequest(method, params),
       });
       const { conn, capabilities } = this.runtime;
-      const connections = [this.options.browserMcp && { name: 'relay_browser', ...this.options.browserMcp }, this.options.teamMcp && { name: 'relay_team', ...this.options.teamMcp }].filter((value): value is { name: string; url: string; token: string } => Boolean(value));
-      if (connections.length && object(capabilities.mcpCapabilities).http !== true) throw new ProviderError('The selected Antigravity runtime did not advertise HTTP MCP support. Relay browser and team tools cannot be connected; no prompt was sent.', { code: 'mcp_unsupported' });
+      const connections = [this.options.browserMcp && { name: 'mingle_browser', ...this.options.browserMcp }, this.options.teamMcp && { name: 'mingle_team', ...this.options.teamMcp }].filter((value): value is { name: string; url: string; token: string } => Boolean(value));
+      if (connections.length && object(capabilities.mcpCapabilities).http !== true) throw new ProviderError('The selected Antigravity runtime did not advertise HTTP MCP support. Mingle browser and team tools cannot be connected; no prompt was sent.', { code: 'mcp_unsupported' });
       const mcpServers = connections.map((connection) => ({ type: 'http', name: connection.name, url: connection.url, headers: [{ name: 'Authorization', value: `Bearer ${connection.token}` }] }));
       const params = { cwd: this.options.session.worktreePath, mcpServers, _meta: { antigravity: { eagerMcpServers: connections.map((connection) => connection.name), mcpMaxOutputBytes: 64_000 } } };
       const existing = this.options.session.providerSessionId;
       if (existing) {
         this.sessionId = existing;
         const method = object(capabilities.sessionCapabilities).resume ? 'session/resume' : capabilities.loadSession === true ? 'session/load' : null;
-        if (!method) throw new ProviderError('This Antigravity runtime cannot resume the selected native conversation. Relay will not create a replacement.', { code: 'resume_unsupported' });
+        if (!method) throw new ProviderError('This Antigravity runtime cannot resume the selected native conversation. Mingle will not create a replacement.', { code: 'resume_unsupported' });
         this.selected = await this.race(conn.request(method, { ...params, sessionId: existing }, SESSION_TIMEOUT));
         const returned = object(this.selected).sessionId;
         if (returned !== undefined && returned !== existing) throw new ProviderError('Antigravity returned a different conversation ID. The run was stopped.', { code: 'resume_failed' });
@@ -105,7 +105,7 @@ class AntigravityRun {
       this.remember();
       markAntigravityAuthenticated(this.executable, this.env);
       if (this.options.session.model === 'default') this.info(`Antigravity selected its native default model: ${this.expectedModel}.`);
-      if (this.options.settings.autoCompactPercent != null) this.info('Relay’s automatic compaction threshold is not exposed by Antigravity ACP. Its native context management remains in effect.');
+      if (this.options.settings.autoCompactPercent != null) this.info('Mingle’s automatic compaction threshold is not exposed by Antigravity ACP. Its native context management remains in effect.');
       const prompt = await acpPrompt({ text: this.options.invocation ? invocationText(this.options.invocation) : this.options.prompt,
         attachments: this.options.attachments, capabilities: acpPromptCapabilities(capabilities), agent: 'Antigravity', context: this.options.context });
       if (this.signal.aborted) throw abortError();
@@ -114,7 +114,7 @@ class AntigravityRun {
       if (this.violation) throw this.violation;
       if (this.signal.aborted) throw abortError();
       const reason = object(response).stopReason;
-      if (reason === 'cancelled') throw new ProviderError('Antigravity canceled the turn without a Relay interruption.', { code: 'turn_interrupted' });
+      if (reason === 'cancelled') throw new ProviderError('Antigravity canceled the turn without a Mingle interruption.', { code: 'turn_interrupted' });
       if (reason === 'max_tokens' || reason === 'max_turn_requests') throw new ProviderError(`Antigravity stopped at its ${reason === 'max_tokens' ? 'token' : 'turn'} limit. Partial output was retained.`, { code: 'turn_limit' });
       if (reason !== 'end_turn' && reason !== 'refusal') throw new ProviderError('Antigravity returned an unrecognized completion state.', { code: 'protocol_error' });
     } catch (error) {
@@ -166,7 +166,7 @@ class AntigravityRun {
   }
 
   private async onRequest(method: string, params: unknown): Promise<unknown> {
-    if (method !== 'session/request_permission') throw new AcpRpcError(ACP_METHOD_NOT_FOUND, `Relay does not provide ACP client method ${method}.`);
+    if (method !== 'session/request_permission') throw new AcpRpcError(ACP_METHOD_NOT_FOUND, `Mingle does not provide ACP client method ${method}.`);
     const data = object(params); const call = object(data.toolCall);
     const cancelled = { outcome: { outcome: 'cancelled' } };
     if (this.phase !== 'prompt' || this.signal.aborted) return cancelled;
@@ -176,8 +176,8 @@ class AntigravityRun {
     const reject = options.find((option) => option.kind === 'reject_once' && typeof option.optionId === 'string');
     if (!allow || !reject) return cancelled;
     const mcp = object(object(call._meta).mcp);
-    const trustedTeam = this.options.teamMcp && mcp.server === 'relay_team' && typeof mcp.tool === 'string' && TEAM.has(mcp.tool);
-    const trustedBrowser = this.options.browserMcp && mcp.server === 'relay_browser' && typeof mcp.tool === 'string' && /^browser_[a-z_]+$/.test(mcp.tool);
+    const trustedTeam = this.options.teamMcp && mcp.server === 'mingle_team' && typeof mcp.tool === 'string' && TEAM.has(mcp.tool);
+    const trustedBrowser = this.options.browserMcp && mcp.server === 'mingle_browser' && typeof mcp.tool === 'string' && /^browser_[a-z_]+$/.test(mcp.tool);
     let approved = Boolean(trustedTeam || trustedBrowser);
     if (!approved) {
       try { approved = await Promise.race([this.options.requestApproval({ tool: truncate(text(call.title) ?? 'Antigravity tool', 200), description: truncate(text(call.title) ?? 'Antigravity requested tool permission', 1000), input: object(call.rawInput) }), this.interrupted.catch(() => false)]); }
@@ -205,10 +205,10 @@ class AntigravityRun {
       const model = nativeModelValue(state);
       const effort = configuration(state, 'thinking_level')?.currentValue;
       const mode = configuration(state, 'mode')?.currentValue;
-      if (model && model !== this.expectedModel) this.fail('Antigravity changed the selected model during the run. Relay stopped the turn rather than accepting an automatic substitution.', 'model_substitution');
+      if (model && model !== this.expectedModel) this.fail('Antigravity changed the selected model during the run. Mingle stopped the turn rather than accepting an automatic substitution.', 'model_substitution');
       if (this.expectedEffort && effort !== undefined && effort !== this.expectedEffort) this.fail('Antigravity changed the selected reasoning effort during the run.', 'effort_substitution');
-      if (mode !== undefined && mode !== MODE[this.options.session.policy]) this.fail('Antigravity changed the selected permission mode during the run. Relay stopped the turn.', 'permission_mode_changed');
-    } else if (kind === 'current_mode_update' && update.currentModeId !== MODE[this.options.session.policy]) this.fail('Antigravity changed the selected permission mode during the run. Relay stopped the turn.', 'permission_mode_changed');
+      if (mode !== undefined && mode !== MODE[this.options.session.policy]) this.fail('Antigravity changed the selected permission mode during the run. Mingle stopped the turn.', 'permission_mode_changed');
+    } else if (kind === 'current_mode_update' && update.currentModeId !== MODE[this.options.session.policy]) this.fail('Antigravity changed the selected permission mode during the run. Mingle stopped the turn.', 'permission_mode_changed');
     // Thoughts are provider-private. usage_update.used is context size, not input/output token usage.
   }
 
@@ -222,8 +222,8 @@ class AntigravityRun {
     const raw = object(input);
     const output = object(update.rawOutput);
     let category: ToolCategory = prior?.category ?? 'other';
-    if (mcp.server === 'relay_team') category = 'agent';
-    else if (mcp.server === 'relay_browser') category = 'browser';
+    if (mcp.server === 'mingle_team') category = 'agent';
+    else if (mcp.server === 'mingle_browser') category = 'browser';
     else if (update.kind === 'execute') category = 'command';
     else if (update.kind === 'search') category = 'search';
     else if (update.kind === 'fetch') category = 'browser';

@@ -1,4 +1,4 @@
-import type { AgentAdapter, AppSettings, ConversationListOptions, ExternalConversationDetails, ExternalConversationList, Provider, ProviderCatalog, ProviderInfo, ProviderUsage, Session } from '@relay/contracts';
+import type { AgentAdapter, AppSettings, ConversationListOptions, ExternalConversationDetails, ExternalConversationList, Provider, ProviderCatalog, ProviderInfo, ProviderUsage, Session } from '@mingle/contracts';
 import { createClaudeAdapter } from './claude/adapter.js';
 import { createCodexAdapter } from './codex/adapter.js';
 import { detectProviders as detect } from './detect.js';
@@ -17,7 +17,7 @@ import { getOpencodeCatalog } from './opencode/catalog.js';
 import { getOpencodeUsage } from './opencode/usage.js';
 import { ProviderError } from './common.js';
 
-export type { AdapterEvent, AgentAdapter, RunOptions } from '@relay/contracts';
+export type { AdapterEvent, AgentAdapter, RunOptions } from '@mingle/contracts';
 export { CLAUDE_DEFAULT_MODEL, CODEX_DEFAULT_MODEL } from './detect.js';
 export { ProviderError, isAbortError } from './common.js';
 
@@ -41,7 +41,7 @@ import { closeAllAntigravity } from './antigravity/runtime.js';
 import { closeAllOpencode } from './opencode/runtime.js';
 /** Runs after all session runs are stopped; ends leftover metadata probe children. */
 export async function close(): Promise<void> { await Promise.all([closeAllAntigravity(), closeAllOpencode()]); }
-const OPENCODE_IMPORT_NOTICE = 'OpenCode native conversation import is not supported by Relay. ACP can list sessions, but Relay has no verified bounded reader for their history; continue a Relay OpenCode session to resume its native conversation.';
+const OPENCODE_IMPORT_NOTICE = 'OpenCode native conversation import is not supported by Mingle. ACP can list sessions, but Mingle has no verified bounded reader for their history; continue a Mingle OpenCode session to resume its native conversation.';
 
 /** Native catalog metadata only: no prompt or model turn is submitted. */
 export function getCatalog(session: Session, settings: AppSettings): Promise<ProviderCatalog> {
@@ -67,7 +67,7 @@ export function listConversations(provider: Provider, settings: AppSettings, opt
   switch (provider) {
     case 'codex': return listCodexConversations(settings, options);
     case 'claude': return listClaudeConversations(settings, options);
-    case 'antigravity': return Promise.resolve({ conversations: [], nextCursor: null, notices: ['Antigravity native conversation import is not supported by Relay.'] });
+    case 'antigravity': return Promise.resolve({ conversations: [], nextCursor: null, notices: ['Antigravity native conversation import is not supported by Mingle.'] });
     case 'opencode': return Promise.resolve({ conversations: [], nextCursor: null, notices: [OPENCODE_IMPORT_NOTICE] });
   }
 }
@@ -76,7 +76,7 @@ export function readConversation(provider: Provider, settings: AppSettings, id: 
   switch (provider) {
     case 'codex': return readCodexConversation(settings, id);
     case 'claude': return readClaudeConversation(settings, id);
-    case 'antigravity': return Promise.reject(new ProviderError('Antigravity native conversation import is not supported by Relay.', { code: 'history_unsupported' }));
+    case 'antigravity': return Promise.reject(new ProviderError('Antigravity native conversation import is not supported by Mingle.', { code: 'history_unsupported' }));
     case 'opencode': return Promise.reject(new ProviderError(OPENCODE_IMPORT_NOTICE, { code: 'history_unsupported' }));
   }
 }

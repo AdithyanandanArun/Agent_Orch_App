@@ -1,4 +1,4 @@
-import type { AppSettings, ProviderCatalog, ProviderCommand, ProviderSkill, Session } from '@relay/contracts';
+import type { AppSettings, ProviderCatalog, ProviderCommand, ProviderSkill, Session } from '@mingle/contracts';
 import type { SlashCommand } from '@anthropic-ai/claude-agent-sdk';
 import { isRecord, redactSecrets, truncate } from '../common.js';
 import { withClaudeMetadataQuery } from './capabilities.js';
@@ -103,7 +103,7 @@ export async function getClaudeCatalog(session: Session, settings: AppSettings):
   }
 
   // The SDK couples user settings to user skills, so adding that source would also import user hooks and permission rules.
-  catalog.warnings.push('Personal Claude skills and commands are not loaded. The Agent SDK exposes user settings as a shared source for skills, hooks, and permission rules; Relay loads project customizations only.');
-  catalog.warnings.push('Claude does not report the source of unmarked commands. Relay labels these entries as provider commands.');
+  catalog.warnings.push('Personal Claude skills and commands are not loaded. The Agent SDK exposes user settings as a shared source for skills, hooks, and permission rules; Mingle loads project customizations only.');
+  catalog.warnings.push('Claude does not report the source of unmarked commands. Mingle labels these entries as provider commands.');
   return catalog;
 }

@@ -1,5 +1,5 @@
 {
-  "name": "@relay/desktop",
+  "name": "@mingle/desktop",
   "version": "0.1.0",
   "private": true,
   "type": "module",

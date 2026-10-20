@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
-import type { AppSettings, Project, ProviderInfo, ProviderModel } from '@relay/contracts';
+import type { AppSettings, Project, ProviderInfo, ProviderModel } from '@mingle/contracts';
 import { useRelay, type SettingsSection } from '../store/store';
 import { api, errorMessage } from '../lib/api';
 import { Button, InlineError } from './ui';
@@ -155,7 +155,7 @@ export function SettingsPage() {
         }} />)}
         {!boot.providers.length ? <p className="settings-page__hint">Provider information is loading. Re-check to request a fresh status.</p> : null}
         <AntigravityRuntimeSetup providerInfo={boot.providers.find((provider) => provider.id === 'antigravity')} onProviderChanged={refreshAntigravityAfterInstall} />
-        <div className="settings-page__login"><p>Sign in on this machine with <code>claude auth login</code> or <code>codex login</code>, then re-check. Antigravity sign-in opens its native Google browser flow. OpenCode uses its own provider logins (<code>opencode providers login</code>) and lists the models it exposes; Relay never reads its credential files.</p><p>Claude uses its existing login. An <code>ANTHROPIC_API_KEY</code> in the server environment takes precedence and uses API billing. Relay stores no credentials.</p></div>
+        <div className="settings-page__login"><p>Sign in on this machine with <code>claude auth login</code> or <code>codex login</code>, then re-check. Antigravity sign-in opens its native Google browser flow. OpenCode uses its own provider logins (<code>opencode providers login</code>) and lists the models it exposes; Mingle never reads its credential files.</p><p>Claude uses its existing login. An <code>ANTHROPIC_API_KEY</code> in the server environment takes precedence and uses API billing. Mingle stores no credentials.</p></div>
       </div> : null}
       {category === 'appearance' ? <div className="settings-page__section">
         <div className="settings-page__section-head"><h2>Appearance</h2><p>Simple surfaces, readable text and quiet controls.</p></div>
@@ -163,7 +163,7 @@ export function SettingsPage() {
           <SelectMenu id="st-theme" label="Theme" value={settings.theme} disabled={disabled} options={[{ value: 'dark', label: 'Dark' }, { value: 'light', label: 'Light' }]} onChange={(value) => void update({ theme: value as AppSettings['theme'] }, 'theme')} />
         </SettingRow>
       </div> : null}
-      <footer className="settings-page__foot">Relay {boot.version}<span>Local workspace</span></footer>
+      <footer className="settings-page__foot">Mingle {boot.version}<span>Local workspace</span></footer>
     </div>
   </div>;
 }
@@ -178,7 +178,7 @@ function AutoCompactSetting({ settings, disabled, update }: { settings: AppSetti
   const [draft, setDraft] = useState(saved === null ? '' : String(saved));
   useEffect(() => { setMode(saved === null ? 'default' : 'custom'); setDraft(saved === null ? '' : String(saved)); }, [saved]);
   const value = Number(draft);
-  const valid = draft.trim() !== '' && Number.isInteger(value) && value >= COMPACT_MIN && value <= COMPACT_MAX;
+  const valid = draft.trimrim() !== '' && Number.isInteger(value) && value >= COMPACT_MIN && value <= COMPACT_MAX;
   const dirty = mode === 'custom' && valid && value !== saved;
   const save = () => { if (dirty) void update({ autoCompactPercent: value }, 'compact'); };
   return <>
@@ -229,6 +229,6 @@ function ProjectSettings({ project }: { project: Project }) {
       <div className="settings-project__save"><Button type="submit" size="sm" busy={busy} disabled={busy || !name.trim() || name.trim() === project.name}>Save name</Button></div>
     </form>
     <div className="settings-project__location"><h3>Project folder</h3><div><code>{project.path}</code><Button size="sm" onClick={() => void copyPath()}>Copy path</Button></div></div>
-    <div className="settings-project__remove"><p>Remove this project from Relay. Files stay on disk.</p><RemoveProjectButton project={project} /></div>
+    <div className="settings-project__remove"><p>Remove this project from Mingle. Files stay on disk.</p><RemoveProjectButton project={project} /></div>
   </section>;
 }

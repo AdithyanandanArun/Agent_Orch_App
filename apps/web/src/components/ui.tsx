@@ -4,7 +4,7 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { AlertTriangle, Check, Loader2, X } from 'lucide-react';
-import type { Provider, SessionStatus } from '@relay/contracts';
+import type { Provider, SessionStatus } from '@mingle/contracts';
 import { cx } from '../lib/format';
 import { PROVIDER_NAMES } from '../lib/providers';
 import { AntigravityMark } from './AntigravityMark';

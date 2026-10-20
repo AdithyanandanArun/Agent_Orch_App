@@ -1,4 +1,4 @@
-import type { TaskStatus } from '@relay/contracts';
+import type { TaskStatus } from '@mingle/contracts';
 
 export interface DagTask { id: string; projectId: string; status: TaskStatus; dependsOn: string[] }
 

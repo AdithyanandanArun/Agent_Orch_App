@@ -3,7 +3,7 @@ import { constants } from 'node:fs';
 import { lstat, open, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { BrowserSource } from '@relay/contracts';
+import type { BrowserSource } from '@mingle/contracts';
 import { activePortEndpoint, type ResolvedEndpoint } from './endpoint.ts';
 import { BrowserError } from './errors.ts';
 

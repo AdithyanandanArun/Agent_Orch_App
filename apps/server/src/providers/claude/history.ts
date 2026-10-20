@@ -12,8 +12,8 @@ import type {
   ExternalConversationDetails,
   ExternalConversationList,
   ExternalConversationMessage,
-} from '@relay/contracts';
-import { ConversationIdSchema } from '@relay/contracts';
+} from '@mingle/contracts';
+import { ConversationIdSchema } from '@mingle/contracts';
 import { isRecord, redactSecrets, truncate } from '../common.js';
 
 const PAGE_SIZE = 50;

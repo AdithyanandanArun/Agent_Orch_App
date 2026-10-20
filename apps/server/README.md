@@ -1,28 +1,28 @@
-# @relay/server
+# @mingle/server
 
-Local Node runtime for Relay: HTTP + WebSocket API on `127.0.0.1:4310`, SQLite persistence (`node:sqlite`), provider
+Local Node runtime for Mingle: HTTP + WebSocket API on `127.0.0.1:4310`, SQLite persistence (`node:sqlite`), provider
 adapter sessions, task DAG, handoffs, Git worktree isolation and PTY terminals. It is the middle layer between the web UI
 (or the Electron shell) and the provider module in `src/providers/`.
 
 ```
-pnpm --filter @relay/server dev       # tsx watch src/index.ts
-pnpm --filter @relay/server start     # tsx src/index.ts
-pnpm --filter @relay/server test      # vitest, no model calls
-pnpm --filter @relay/server typecheck
+pnpm --filter @mingle/server dev       # tsx watch src/index.ts
+pnpm --filter @mingle/server start     # tsx src/index.ts
+pnpm --filter @mingle/server test      # vitest, no model calls
+pnpm --filter @mingle/server typecheck
 ```
 
 ## Configuration
 
 | Setting | Env | Option | Default |
 | --- | --- | --- | --- |
-| Data directory (database, example workspace, worktrees) | `RELAY_DATA_DIR` | `dataDir` | `<repo root>/.relay` (repo root is derived from `import.meta.url`, never from cwd) |
-| Host (loopback only, anything else is refused) | `RELAY_HOST` | `host` | `127.0.0.1` |
-| Port (`0` = free port) | `RELAY_PORT` | `port` | `4310` |
-| Built web app | `RELAY_WEB_DIST` | `webDistDir` | `<repo root>/apps/web/dist` if it contains `index.html` |
-| Vite dev port that is trusted as an origin | `RELAY_WEB_PORT` | `webDevPort` | `5173` |
-| Extra trusted origins (comma separated) | `RELAY_ALLOWED_ORIGINS` | `allowedOrigins` | none |
+| Data directory (database, example workspace, worktrees) | `MINGLE_DATA_DIR` (`RELAY_DATA_DIR` legacy fallback) | `dataDir` | `<repo root>/.mingle`, reusing `.relay` when present unless a `.mingle` database already exists |
+| Host (loopback only, anything else is refused) | `MINGLE_HOST` (`RELAY_HOST` fallback) | `host` | `127.0.0.1` |
+| Port (`0` = free port) | `MINGLE_PORT` (`RELAY_PORT` fallback) | `port` | `4310` |
+| Built web app | `MINGLE_WEB_DIST` (`RELAY_WEB_DIST` fallback) | `webDistDir` | `<repo root>/apps/web/dist` if it contains `index.html` |
+| Vite dev port that is trusted as an origin | `MINGLE_WEB_PORT` (`RELAY_WEB_PORT` fallback) | `webDevPort` | `5173` |
+| Extra trusted origins (comma separated) | `MINGLE_ALLOWED_ORIGINS` (`RELAY_ALLOWED_ORIGINS` fallback) | `allowedOrigins` | none |
 
-Data layout: `relay.sqlite` (+ WAL), `example-workspace/` (a real Git repo), `worktrees/<projectId>/<sessionId>/`.
+Data layout: `relay.sqlite` (+ WAL, retained for database continuity), `example-workspace/` (a real Git repo, stable path), `worktrees/<projectId>/<sessionId>/`.
 Worktrees are never deleted by the server; archiving a session only hides its metadata.
 
 ## Embedding and tests
@@ -34,7 +34,7 @@ const { url, port } = await app.listen();               // initialises the examp
 await app.close();                                     // aborts runs, kills PTYs, closes sockets, server and database
 ```
 
-`src/index.ts` exports `startRelayServer(options)` (real providers from `./providers/index.ts`) and runs it as a CLI with
+`src/index.ts` exports `startMingleServer(options)` (real providers from `./providers/index.ts`) and runs it as a CLI with
 SIGINT/SIGTERM/SIGHUP handling when executed directly. Tests inject `FakeProviders` from `src/test-utils.ts`; nothing in the
 automatic suite calls a model or a provider executable.
 
@@ -46,7 +46,7 @@ Options of interest: `providers` (required), `log`, `exampleWorkspace` (default 
 - **Example workspace**: created once per data dir (`meta.example_workspace_v1`). Project `prj_example` (`isExample: true`)
   is a Git repo with README, contract doc and a committed versioned artifact `api/users.v1.openapi.json`; two **idle**
   sessions (`ses_example_contract` Codex, `ses_example_client` Claude) each in their own worktree; a four-task DAG.
-  Its only commit uses a local sample identity (`Relay Example`). No provider is invoked.
+  Its only commit uses a local sample identity (`Mingle Example`). No provider is invoked.
 - **Runs**: `POST /api/sessions/:id/messages` validates and registers the run synchronously (409 if the session is
   active), then runs the adapter in an isolated promise. Assistant text is persisted while streaming (message kind
   `streaming`, finalised to no kind; cancelled or recovered runs end as `partial`). Other message kinds: `tool`, `info`,
@@ -70,7 +70,7 @@ Options of interest: `providers` (required), `log`, `exampleWorkspace` (default 
   letters when staged and unstaged differ); `diff` is `git diff HEAD` (staged + unstaged) plus up to 20 small untracked files,
   with secret files excluded, capped at 1 MB. Always scoped to the project or `sessionId` worktree directory.
 - **Files**: paths are relative, normalised, symlink-resolved and must stay inside the root (project or session
-  worktree). `.git`, `.relay`, `.ssh`, `.env*` (except `*.example`/`*.sample`), keys and certificates are refused; binary
+  worktree). `.git`, `.mingle`, `.relay`, `.ssh`, `.env*` (except `*.example`/`*.sample`), keys and certificates are refused; binary
   and >2 MiB files are not opened. Writes use `O_NOFOLLOW`.
 - **Terminals** (`/ws`): `terminal.start` spawns a `node-pty` shell in the project or session directory. A terminal belongs to
   the socket that started it; other sockets cannot write, resize or stop it; closing the socket (or shutdown) kills it.
