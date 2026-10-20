@@ -1,10 +1,25 @@
-# Phase 2 — Group sessions and an orchestrator
+# Phase 2 — Cowork and Orchestrated group sessions
 
 Status: proposed implementation specification, based on the owner's updated vision. Group conversations, participant messaging and automatic delegation are not implemented yet. Phase 1's independent provider sessions remain the execution foundation.
 
 ## Experience
 
-A session can become a group conversation through **Add agent**. It has one shared timeline, independent coding agents and a designated orchestrator. Users can address an agent with a handle such as `@claude1` or `@codex1`. Messages with no agent recipient go to the orchestrator. The orchestrator breaks a request into work, delegates to available members, receives results and gives the user a consolidated response.
+A session can become a group conversation through **Add agent**. The first conversion offers two explicit modes: **Cowork** and **Orchestrated**. Both use one shared timeline and independent agents addressed through handles such as `@claude1` or `@codex1`.
+
+| Mode | Leadership | An unaddressed user message | Existing agent |
+| --- | --- | --- | --- |
+| Cowork | The human directs equal agents | Delivered to all active peers; one peer proposes the request's work split | Remains an equal peer with its history and configuration |
+| Orchestrated | A separate agent from Settings coordinates workers | Goes to the orchestrator, which delegates and consolidates results | Becomes a worker; user chooses whether to adjust its configuration |
+
+Cowork has no separate orchestrator participant or permanent lead agent. It avoids adding a coordinator model, but broadcasting work to multiple agents still consumes their tokens. Do not claim a fixed saving or that more agents always cost less.
+
+### Cowork request coordination
+
+Both peers receive the user's request. The host grants one peer a temporary, per-request planning lease; propose the existing agent initially because it has the conversation context. That peer proposes a split and performs its own share. The other peer waits for a concrete scope before editing, then receives the original request together with its assignment. Request receipt and model execution are separate events. No additional coordinator conversation or coordinator inference turn is created.
+
+The temporary planner can allocate this request among the selected peers, ask questions and publish revised proposals. It cannot change their configuration or permissions, add agents, or permanently claim leadership. Stable assignment IDs and host-checked scopes prevent two competing splits or duplicate dispatch. The human can adjust the plan and address either peer directly. Subsequent requests can select a different temporary planner; being first to respond does not grant authority.
+
+Peers exchange targeted questions, artifact references and progress directly. Informational updates remain structured events. A summary from one peer is labeled with that peer's identity; it is not presented as an independent orchestrator review.
 
 Each agent retains its own provider conversation, model, effort, permissions and working directory. Its conversation history and tool activity remain attributable to that agent. Adding an agent does not broadcast the whole history to every model or start a provider run.
 
@@ -12,11 +27,11 @@ Each agent retains its own provider conversation, model, effort, permissions and
 
 Add **Settings → Agents & orchestration** with:
 
-- Default orchestrator provider, model, reasoning effort, service tier and permission policy.
+- Default orchestrator provider, model, reasoning effort, service tier and permission policy, used only in Orchestrated mode.
 - Worker defaults, using the provider's currently advertised model/effort/permission capabilities.
 - Maximum simultaneous worker runs and bounded automatic delegation/message rounds.
 
-These are defaults for new groups and new participants. Existing participants keep their saved settings. A group can select another orchestrator explicitly while coordination is idle; changing providers creates/selects another independent participant rather than rewriting an existing native conversation.
+These are defaults for new groups and new participants. Existing participants keep their saved settings. An Orchestrated group can select another orchestrator explicitly while coordination is idle; changing providers creates/selects another independent participant rather than rewriting an existing native conversation.
 
 ### Adding an agent
 
@@ -31,15 +46,18 @@ Use one compact dialog that previews all effective choices before adding the par
 | Permissions | Explicit native permission policy |
 | Workspace | New isolated worktree by default; actual folder/branch shown |
 
-The first conversion of a single-agent session also previews the orchestrator from Settings. Proposed default: create a separate orchestrator and retain the existing agent as a worker, preserving its provider conversation and directory. The owner can instead choose to keep the existing agent as orchestrator. This role choice is recorded explicitly.
+First choose Cowork or Orchestrated, then configure the new agent. The choice screen explains the routing with original, small animated diagrams and plain language. Adding an agent creates no extra coordinator in Cowork. In Orchestrated mode, preview the separate orchestrator from Settings, preserve the existing agent as a worker, and show the complete roster before confirming. No mode silently creates a paid model run.
 
-Because the existing agent may now have a narrower role, the same dialog offers **Keep current settings** or **Change model and effort** for it. Show the current and proposed values together. Do not silently downgrade a model, lower effort, change permission policy or substitute a provider. Apply configuration changes only when that member is idle and provider cleanup has finished. Unsupported choices produce an actionable error.
+Only the Orchestrated conversion asks **Keep the current agent's configuration?** with **Keep current configuration** and **Change configuration** options. Show model, effort and permissions in the preview; expanding Change makes the settings editable. Keep history and native conversation identity when changing supported model/effort within its provider. Cowork keeps the current configuration; the user can still edit it through the member settings.
+
+The Orchestrated configuration step shows the current and proposed settings together. Do not silently downgrade a model, lower effort, change permission policy or substitute a provider. Apply configuration changes only when that member is idle and provider cleanup has finished. Unsupported choices produce an actionable error.
 
 ### Routing
 
 | User action | Destination |
 | --- | --- |
-| Send without an agent mention | Designated orchestrator |
+| Send without an agent mention in Cowork | All active peers; one temporary planner splits the request |
+| Send without an agent mention in Orchestrated | Designated orchestrator |
 | Send to `@claude1` | That member only |
 | Send to `@codex1` | That member only |
 | Explicitly select several agent recipients | The selected recipients; composer previews recipients before sending |
@@ -47,7 +65,7 @@ Because the existing agent may now have a narrower role, the same dialog offers 
 
 Mentions autocomplete from this group's active membership. Unknown or removed recipients reject dispatch rather than falling back to the orchestrator. Preserve stable member identities and do not reuse retired handles within the conversation. Routing uses resolved participant IDs, rather than reparsing arbitrary message prose. Code blocks, quoted text, URLs and an agent merely printing a handle do not dispatch runs. Multiple recipients receive the explicitly addressed request; the router does not invent per-agent task scopes from punctuation. Task scopes are explicit in orchestrator assignments.
 
-The orchestrator remains aware of task/result events, but a directly addressed worker message does not automatically launch an additional orchestrator turn. Informational updates can remain machine events until reasoning is needed.
+In Orchestrated mode, the orchestrator remains aware of task/result events, but a directly addressed worker message does not automatically launch an additional orchestrator turn. Informational updates can remain machine events until reasoning is needed.
 
 ### Timeline
 
@@ -55,11 +73,25 @@ Keep the existing minimal conversation layout. Agent responses have a small hand
 
 A compact member control opens participants and their settings; do not add a permanent collection of agent dashboards around the conversation. Keep Tasks, Activity and Agent Map synchronized with assignments, dependencies and actual run state.
 
+## Mode-choice visualization and motion
+
+The first Add agent step asks **How should these agents work together?** with two equally prominent selectable cards:
+
+- **Cowork — You lead.** The diagram fans a message from the human to two equal agent nodes. A temporary split marker appears on one peer, then complementary task markers move to both peers. A small horizontal exchange illustrates their direct communication. There is no third coordinator node.
+- **Orchestrated — An agent coordinates.** The message travels from the human to a separate orchestrator, then branches into worker assignments. Results return to the orchestrator before one combined response returns to the human. The existing agent's node visibly becomes a worker.
+
+Use neutral charcoal/white styling, thin connectors and occasional blue message motion. Keep diagrams subordinate to their readable labels. Animate only the explanation: this is an illustrative flow, not claimed live execution or progress. The [standalone interaction preview](previews/group-modes.html) is explicitly an example workspace and starts no model calls.
+
+Provide a pause control and honor `prefers-reduced-motion`. Reduced-motion mode keeps labeled static connections. Keyboard focus and a selected border communicate the choice without depending on color or animation. Selection updates a concise routing/roster summary and the configuration step. Orchestrated adds the separate coordinator and the current-agent configuration question; Cowork shows both peers with the existing configuration retained.
+
+Changing mode on an existing group is an explicit idle-time transition with a roster/configuration preview. Retain completed history. Pending work must be paused and reviewed against the new mode; do not silently retarget queued messages or add/remove a coordinator while runs are active.
+
 ## Runtime and persistence
 
 Separate the shared conversation from the provider runtime:
 
-- **Group:** project, title, orchestrator member and orchestration settings.
+- **Group:** project, title, explicit mode, nullable orchestrator member (absent in Cowork) and coordination settings.
+- **Request planning lease:** request, chosen peer, plan version, scope and expiry for Cowork; not a permanent participant role.
 - **Member:** stable identity, group, unique handle, role and existing provider `Session` ID.
 - **Group message:** ordered shared entry, sender, resolved recipients, optional reply/correlation IDs and source session-message/run reference.
 - **Delivery:** recipient, logical message ID, claim/delivery state, attempt and associated run.
@@ -67,7 +99,7 @@ Separate the shared conversation from the provider runtime:
 
 Keep current provider sessions as independent execution units: one active run per member, with their existing native conversation IDs, approvals, worktrees and persistence. Task ownership can continue referencing the underlying session, with group membership resolved by the server. Existing single-agent sessions remain usable without being forced through a multi-model orchestration step.
 
-Existing history remains linked to its original session; conversion does not replay it as a new user prompt or duplicate its durable records. Give the new orchestrator a bounded bootstrap containing the current request, project context, member capabilities, active tasks and relevant prior decisions, with explicit references to additional history it can retrieve.
+Existing history remains linked to its original session; conversion does not replay it as a new user prompt or duplicate its durable records. In Orchestrated mode, give the new orchestrator a bounded bootstrap containing the current request, project context, member capabilities, active tasks and relevant prior decisions, with explicit references to additional history it can retrieve.
 
 SQLite stores membership, group messages, deliveries and assignments. WebSocket deltas include enough group/member identity to update the shared timeline without mixing simultaneous assistant streams. Use server sequence numbers for ordering; preserve each provider run's actual timing independently.
 
@@ -82,7 +114,7 @@ Both providers receive a narrow, run-scoped team tool interface, following the e
 - Report progress, completion or a blocker.
 - Retrieve relevant project/task context and unread messages.
 
-The server validates group membership, recipient, task ownership, dependencies and current permissions for every operation. It derives the sender from the invoking run. A worker cannot impersonate the orchestrator or create a more privileged agent. Assignment scheduling belongs to the orchestrator; workers can communicate directly without gaining arbitrary delegation authority.
+The server validates group membership, recipient, task ownership, dependencies and current permissions for every operation. It derives the sender from the invoking run. A worker cannot impersonate the orchestrator or create a more privileged agent. In Orchestrated mode, assignment scheduling belongs to the orchestrator. In Cowork, the selected peer can schedule only assignments covered by its request planning lease. All members can communicate directly without gaining arbitrary delegation authority.
 
 A dispatch tool result confirms acceptance/queueing, not successful completion. UI mention labels correspond to real recorded tool actions. Relay does not execute commands by looking for `@...` text in model output.
 
@@ -100,9 +132,9 @@ For example, an artifact announcement identifies the source member, task, reposi
 
 ## Automatic delegation and recovery
 
-An unaddressed user work request can authorize the orchestrator to assign work to the configured members within that group's visible limits. Routine assignments do not require another confirmation for each worker. The orchestrator selects among actual available members and their configured capabilities; it does not silently replace their models or permissions.
+In Orchestrated mode, an unaddressed user work request can authorize the orchestrator to assign work to the configured members within that group's visible limits. Routine assignments do not require another confirmation for each worker. The orchestrator selects among actual available members and their configured capabilities; it does not silently replace their models or permissions.
 
-The server queues work for a busy member. Incoming peer messages join its inbox and become available at a safe turn boundary; they never start an overlapping native turn. A request requiring an answer may wake an idle member within the active orchestration budget. A status notification does not need a new model run. Batch result notifications for the orchestrator to avoid a separate reasoning turn for every tool event.
+The server queues work for a busy member. Incoming peer messages join its inbox and become available at a safe turn boundary; they never start an overlapping native turn. A request requiring an answer may wake an idle member within the active orchestration budget. A status notification does not need a new model run. Batch result notifications for the current coordinator (the orchestrator or the peer holding the request lease) to avoid a separate reasoning turn for every tool event.
 
 Every logical message and assignment has a stable ID for deduplication, with reply/correlation IDs for traceability. Delivery and consumption are recorded separately. Retries after a failed start retain unread context and do not claim successful delivery. Provider failures, exhausted quota, unavailable credentials and blocked permissions remain visible. Switching models or providers remains an explicit user choice.
 
@@ -112,22 +144,29 @@ On application restart, retain conversations, tasks, messages and queued assignm
 
 ## Workspaces and integration
 
-New workers and the orchestrator use separate worktrees by default. An existing or imported member keeps its current directory until explicitly changed through a supported flow. Show when it works directly in the project folder. Task assignments identify edit ownership; concurrent writers cannot be assigned overlapping integration work without coordination.
+New peers, workers and the optional orchestrator use separate worktrees by default. An existing or imported member keeps its current directory until explicitly changed through a supported flow. Show when it works directly in the project folder. Task assignments identify edit ownership; concurrent writers cannot be assigned overlapping integration work without coordination.
 
 Artifact readiness and final acceptance remain separate. A verified committed contract can unblock a consumer through an explicit artifact dependency, while the producing task remains in Review. Legacy task dependencies continue requiring Done. Do not mark an upstream task accepted solely to get around the current dependency gate.
 
-The orchestrator can prepare and review integration in its own worktree under its permission policy. Publishing and changes to the user's selected checkout retain explicit controls. A consolidated answer identifies worker contributions, integrated revisions, conflicts and what still needs review. Separate commits in different worktrees do not by themselves constitute an integrated result.
+In Orchestrated mode, the orchestrator can prepare and review integration in its own worktree under its permission policy. In Cowork, an explicitly assigned peer prepares the combined result; the human directs and reviews integration. Publishing and changes to the user's selected checkout retain explicit controls. A consolidated answer identifies worker contributions, integrated revisions, conflicts and what still needs review. Separate commits in different worktrees do not by themselves constitute an integrated result.
 
 Browser access continues to honor the actual connection/tab owner and human control. Adding a participant does not grant it ownership of another participant's browser tabs.
 
 ## Delivery sequence and acceptance
 
 1. **Group foundation:** additive persistence and shared timeline; convert an existing session without losing history; retain standalone operation.
-2. **Explicit addressing:** add/configure members, mention completion, deterministic routing, independent streams and member/group stop controls.
-3. **Orchestrator:** saved defaults, optional adjustment of the current member, bounded automatic task dispatch and visible queue state.
+2. **Mode choice and addressing:** animated Cowork/Orchestrated explanation, add/configure members, mention completion, mode-dependent routing, independent streams and member/group stop controls.
+3. **Coordination:** Cowork request planning leases; optional separate orchestrator from saved defaults; current-worker configuration question in Orchestrated mode; bounded dispatch and visible queue state.
 4. **Peer communication:** durable targeted requests/replies, compact context retrieval and verified artifact handoff; no duplicate or overlapping runs.
-5. **Integrated proof:** one unaddressed request reaches the orchestrator, Codex produces a committed API contract, Claude consumes that exact revision and implements the UI, and the orchestrator prepares the combined result for review without manual copying.
+5. **Integrated proof:** exercise both modes. In Cowork, a broadcast reaches both peers and exactly one split produces non-overlapping assignments. In Orchestrated mode, an unaddressed request reaches only the orchestrator before delegation. In both modes, Codex produces a committed API contract, Claude consumes that exact revision and implements the UI, and the combined result reaches human review without manual copying.
 
-Acceptance must include preserved original history and provider conversation IDs; actual model/effort/policy in the add-agent preview; only intended recipients running for direct mentions; live simultaneous streams remaining distinct; changes to busy members refusing safely; restored pending messages without duplicate dispatch; bounded communication; and visible interruption/failure behavior. A real provider-backed integration demonstration requires explicit owner authorization for its model runs. Completion evidence must distinguish implementation, local checks and the live demonstration.
+Acceptance must include no extra coordinator participant in Cowork; the selected mode and roster persisting through reload; the configuration question appearing for Orchestrated conversion; reduced-motion and keyboard alternatives for mode animations; preserved original history and provider conversation IDs; actual model/effort/policy in the add-agent preview; only intended recipients running for direct mentions; live simultaneous streams remaining distinct; changes to busy members refusing safely; restored pending messages without duplicate dispatch; bounded communication; and visible interruption/failure behavior. A real provider-backed integration demonstration requires explicit owner authorization for its model runs. Completion evidence must distinguish implementation, local checks and the live demonstration.
 
 The current record defines the next phase. It does not declare any group-session feature complete. Distributed computers, voice control and general autonomous integration remain later milestones.
+
+
+## Interaction preview review — 2026-10-20
+
+`docs/previews/group-modes.html` is a standalone, explicitly labeled example of the mode-choice flow. It uses original SVG/CSS diagrams and local JavaScript, with no dependencies, provider calls or saved settings. It is separate from the current Relay application runtime.
+
+In the native collaborative preview, both choices rendered at 1280px. Selecting Cowork hid the separate coordinator and current-agent configuration question. Arrow-key selection moved to Orchestrated and showed both. Choosing Change allowed a lighter example model and Medium effort, reflected in the review summary. Pause stopped both SVG animation clocks. The 390px layout stacked the choices and had no horizontal overflow. Reduced-motion support is implemented but was not exercised by changing the host's system preference. No automated tests or model runs were started.

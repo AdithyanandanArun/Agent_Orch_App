@@ -46,10 +46,10 @@ These items record implemented work and previously requested capabilities still 
 
 ## Phase 2 — Updated group-session direction
 
-The owner's updated direction is recorded in [Group sessions and an orchestrator](phase-2-group-sessions.md). The next proof combines a shared conversation with independent provider sessions, explicit agent mentions, an orchestrator selected from Settings and effective structured communication.
+The owner's updated direction is recorded in [Group sessions and an orchestrator](phase-2-group-sessions.md). The next proof combines a shared conversation with independent provider sessions, explicit agent mentions, Cowork with equal peers directed by the human, or Orchestrated with a separate coordinator selected from Settings, plus effective structured communication.
 
 - [ ] Add group membership and a shared timeline while preserving existing provider conversations.
-- [ ] Add agent configuration previews and deterministic routing for @agent mentions.
-- [ ] Add orchestrator defaults and an optional model/effort adjustment for the current agent when forming a group.
+- [ ] Add animated Cowork/Orchestrated selection, agent configuration previews and deterministic routing for @agent mentions.
+- [ ] Add Cowork request splitting, orchestrator defaults and the current-worker configuration question for Orchestrated conversion.
 - [ ] Add bounded automatic assignments, durable peer requests/replies and compact artifact/context exchange.
 - [ ] Demonstrate an integrated Codex/Claude feature through Relay without manually copying the contract.
