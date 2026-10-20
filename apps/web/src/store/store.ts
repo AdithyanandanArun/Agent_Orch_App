@@ -85,6 +85,8 @@ interface MingleState {
   scope: Scope;
   dialog: Dialog | null;
   selectedTaskId: string | null;
+  groupMembersOpenId: string | null;
+  groupActionBusyId: string | null;
   centerTab: string;
   mapSelection: string | null;
 
@@ -101,6 +103,8 @@ interface MingleState {
   setSettingsSection(section: SettingsSection): void;
   closeSettings(): void;
   setContextTab(tab: ContextTab): void;
+  setGroupMembersOpen(groupId: string | null): void;
+  setGroupActionBusy(groupId: string | null): void;
   toggleContext(open?: boolean): void;
   toggleTerminal(open?: boolean): void;
   setTerminalHeight(h: number): void;
@@ -442,6 +446,8 @@ export const useMingle = create<MingleState>((set, get) => {
     scope: persisted.scope ?? 'session',
     dialog: null,
     selectedTaskId: null,
+    groupMembersOpenId: null,
+    groupActionBusyId: null,
     centerTab: 'session',
     mapSelection: null,
 
@@ -521,6 +527,8 @@ export const useMingle = create<MingleState>((set, get) => {
     setScope: (scope) => patch({ scope }),
     openDialog: (dialog) => { if (dialog.kind === 'settings') get().openSettings(); else set({ dialog }); },
     closeDialog: () => set({ dialog: null }),
+    setGroupMembersOpen: (groupMembersOpenId) => set({ groupMembersOpenId }),
+    setGroupActionBusy: (groupActionBusyId) => set({ groupActionBusyId }),
 
     selectProject(id) {
       const { boot, sessionByProject } = get();

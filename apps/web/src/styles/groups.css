@@ -1,23 +1,4 @@
 /* Shared conversation groups: quiet surfaces, clear state and a single restrained blue accent. */
-.group-bar {
-  position: relative;
-  z-index: 3;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 54px;
-  padding: 8px 18px;
-  border-bottom: 1px solid var(--line);
-  background: var(--bg-panel);
-}
-.group-bar__info { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 10px; min-width: 0; color: var(--fg-2); font-size: var(--text-xs); }
-.group-bar__info > strong { color: var(--fg-0); font-size: var(--text-sm); font-weight: 650; }
-.group-bar__facts { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.group-bar__paused { color: var(--warn); }
-.group-bar__actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex: none; }
-.group-bar__actions .btn { white-space: nowrap; }
-.group-bar__actions .btn--danger { color: var(--err); }
 
 .chat--group { min-width: 0; min-height: 0; }
 .group-body { position: relative; display: flex; flex: 1; min-width: 0; min-height: 0; }
@@ -117,9 +98,6 @@
 
 .composer--group { position: relative; }
 .composer--group .composer__input { padding-right: 42px; }
-.composer__add-agent { display: inline-flex; align-items: center; gap: 5px; padding: 4px 6px; border: 0; border-radius: var(--radius-xs); background: transparent; color: var(--fg-2); font: inherit; font-size: var(--text-xs); cursor: pointer; }
-.composer__add-agent:hover:not(:disabled) { background: var(--bg-hover); color: var(--fg-0); }
-.composer__add-agent:disabled { opacity: .45; cursor: not-allowed; }
 .composer__note { margin: 6px auto 0; max-width: 820px; color: var(--fg-2); font-size: var(--text-xs); line-height: 1.45; }
 .composer__note.is-error { color: var(--err); }
 .composer-picker { position: absolute; z-index: 21; bottom: calc(100% + 8px); left: 0; width: min(420px, calc(100vw - 32px)); overflow: hidden; border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: var(--bg-raised); box-shadow: var(--shadow-pop); }
@@ -217,13 +195,11 @@
 .cfg fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
 .cfg legend { margin-bottom: 5px; color: var(--fg-1); font-size: var(--text-xs); }
 
-.group-dialog :focus-visible, .members :focus-visible, .group-bar :focus-visible, .composer--group :focus-visible { outline-color: var(--blue-strong); }
+.group-dialog :focus-visible, .members :focus-visible, .team-control :focus-visible, .composer--group :focus-visible { outline-color: var(--blue-strong); }
 .jump { position: absolute; right: 22px; bottom: 98px; z-index: 4; display: inline-flex; align-items: center; gap: 5px; padding: 7px 10px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--bg-raised); color: var(--fg-0); box-shadow: var(--shadow-pop); font-size: var(--text-xs); cursor: pointer; transition: background var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard); }
 .jump:hover { background: var(--bg-surface); border-color: var(--line-strong); }
 
 @media (max-width: 900px) {
-  .group-bar { align-items: flex-start; flex-direction: column; padding: 9px 12px; }
-  .group-bar__actions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
   .gm-grid { grid-template-columns: 1fr; }
   .gm-card { display: grid; grid-template-columns: minmax(0, 1fr) 24px; column-gap: 8px; }
   .gm-radio { grid-column: 2; grid-row: 1; }
@@ -233,8 +209,6 @@
   .gm-diagram { max-width: 360px; }
 }
 @media (max-width: 560px) {
-  .group-bar__actions .btn { flex: 1 1 auto; }
-  .group-bar__facts { white-space: normal; }
   .roster__row { grid-template-columns: 1fr 1fr; }
   .roster__who { grid-row: span 2; }
   .group-limit-grid, .cfg__grid { grid-template-columns: 1fr; }

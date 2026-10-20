@@ -83,7 +83,6 @@
 .banner { display: flex; align-items: center; gap: 10px; padding: 5px 16px; font-size: var(--text-xs); border-bottom: 1px solid var(--line-soft); flex: none; }
 .banner > div { flex: 1; min-width: 0; color: var(--fg-1); line-height: 1.45; }
 .banner strong { color: var(--fg-0); }
-.banner--example { background: var(--bg-panel); color: var(--fg-2); }
 .banner--warn { background: var(--warn-soft); color: var(--warn); border-color: transparent; animation: fade-up var(--motion-ui) var(--ease-out) both; }
 .banner--warn.is-closing { animation: fade-out var(--motion-overlay) var(--ease-standard) both; pointer-events: none; }
 .inline-warn { display: flex; gap: 9px; align-items: flex-start; padding: 9px 12px; border-radius: var(--radius-sm); background: var(--warn-soft); color: var(--fg-1); font-size: var(--text-sm); }
@@ -497,8 +496,6 @@ a.ibtn.is-disabled { opacity: 0.4; pointer-events: none; }
 .settings__advanced > summary { cursor: pointer; color: var(--fg-1); }
 .settings__advanced[open] > :not(summary) { margin-top: 14px; }
 .settings .sec__head h3 { text-transform: none; letter-spacing: 0; font-size: var(--text-sm); color: var(--fg-1); }
-.banner--example strong { font-weight: 550; color: var(--fg-1); }
-
 @starting-style {
   .diff__body-frame { grid-template-rows: 0fr; }
   .workspace__term { height: 0 !important; min-height: 0; }

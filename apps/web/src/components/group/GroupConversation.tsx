@@ -13,7 +13,6 @@ import { ApprovalCard, LegacyToolGroup, MessageRow, SpeakerLabel } from '../Conv
 import { RunActivity } from '../RunActivity';
 import { RunChanges } from '../RunChanges';
 import { GitBar } from '../git/GitBar';
-import { GroupBar } from './GroupBar';
 import { GroupComposer } from './GroupComposer';
 import { AgentIdentity } from './AgentIdentity';
 import { AgentPresenceRail } from './AgentPresenceRail';
@@ -148,7 +147,6 @@ export function GroupConversation({ snapshot }: { snapshot: GroupSnapshot }) {
   const connection = useMingle((s) => s.connection);
   const contextOpen = useMingle((s) => s.contextOpen);
   const creating = useMingle((s) => s.creatingSession);
-  const [membersOpen, setMembersOpen] = useState(false);
   const anchor = sessions.find((session) => session.id === snapshot.group.anchorSessionId);
   const members = useMemo(() => activeMembers(snapshot), [snapshot]);
   const { byMember, bySession } = useMemo(() => speakers(snapshot), [snapshot]);
@@ -238,7 +236,6 @@ export function GroupConversation({ snapshot }: { snapshot: GroupSnapshot }) {
 
   return (
     <div className="chat chat--group">
-      <GroupBar snapshot={snapshot} membersOpen={membersOpen} setMembersOpen={setMembersOpen} />
       <div className="group-body">
       <section className="group-body__conversation" aria-label="Group conversation">
       <div className="group-transcript">
@@ -290,7 +287,7 @@ export function GroupConversation({ snapshot }: { snapshot: GroupSnapshot }) {
         </button>
       ) : null}
       </div>
-      <GroupComposer key={snapshot.group.id} snapshot={snapshot} anchor={anchor} onOpenMembers={() => setMembersOpen(true)} footer={<GitBar project={project} session={anchor} />} />
+      <GroupComposer key={snapshot.group.id} snapshot={snapshot} anchor={anchor} onOpenMembers={() => useMingle.getState().setGroupMembersOpen(snapshot.group.id)} footer={<GitBar project={project} session={anchor} />} />
       </section>
       <AgentPresenceRail snapshot={snapshot} members={members} sessions={sessions} runs={allRuns} approvals={approvals ?? []} connection={connection} providers={providers} hidden={contextOpen} />
       </div>

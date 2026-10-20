@@ -15,14 +15,27 @@ async function settle(action: () => Promise<GroupSnapshot>): Promise<boolean> {
   }
 }
 
-export const pauseGroup = (id: string): Promise<boolean> => settle(() => api.pauseGroup(id));
-export const resumeGroup = (id: string): Promise<boolean> => settle(() => api.resumeGroup(id));
+async function groupAction(id: string, action: () => Promise<GroupSnapshot>): Promise<boolean> {
+  const store = useMingle.getState();
+  if (store.groupActionBusyId) {
+    store.toast('info', 'A group action is already in progress.');
+    return false;
+  }
+  store.setGroupActionBusy(id);
+  try { return await settle(action); }
+  finally {
+    if (useMingle.getState().groupActionBusyId === id) useMingle.getState().setGroupActionBusy(null);
+  }
+}
+
+export const pauseGroup = (id: string): Promise<boolean> => groupAction(id, () => api.pauseGroup(id));
+export const resumeGroup = (id: string): Promise<boolean> => groupAction(id, () => api.resumeGroup(id));
 export const interruptMember = (groupId: string, memberId: string): Promise<boolean> => settle(() => api.interruptGroupMember(groupId, memberId));
 export const removeMember = (groupId: string, memberId: string): Promise<boolean> => settle(() => api.removeGroupMember(groupId, memberId));
 
 /** The server pauses dispatch and interrupts all members atomically. Queued work needs explicit Resume. */
 export async function stopGroup(snapshot: GroupSnapshot): Promise<void> {
-  if (await settle(() => api.stopGroup(snapshot.group.id))) {
+  if (await groupAction(snapshot.group.id, () => api.stopGroup(snapshot.group.id))) {
     useMingle.getState().toast('info', 'Group stopped and paused. Resume explicitly to continue queued work.');
   }
 }

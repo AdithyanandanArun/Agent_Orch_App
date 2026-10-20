@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ArrowUp, AtSign, Square, UserPlus, X } from 'lucide-react';
+import { ArrowUp, AtSign, X } from 'lucide-react';
 import type { AttachmentRef, GroupSnapshot, NativeActionCatalog, Provider, Session } from '@mingle/contracts';
 import { useMingle } from '../../store/store';
 import { api, errorMessage } from '../../lib/api';
@@ -52,7 +52,6 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
   useEffect(() => { setAttachments([]); }, [snapshot.group.id]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [sending, setSending] = useState(false);
-  const [stopping, setStopping] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [focused, setFocused] = useState(false);
   const [caret, setCaret] = useState(0);
@@ -302,11 +301,6 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
     }
   };
 
-  const stop = async () => {
-    setStopping(true);
-    try { await stopGroup(snapshot); } finally { setStopping(false); }
-  };
-
   const togglePick = (memberId: string) => setPicked((current) => (current.includes(memberId) ? current.filter((id) => id !== memberId) : [...current, memberId]));
   const defaultLabel = snapshot.group.mode === 'cowork' ? 'default: all peers' : 'default: orchestrator';
   const note = error ?? problem ?? blocker;
@@ -388,16 +382,8 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
           {actionTargetId && (nativeCatalog || nativeCatalogError) ? <> <button type="button" className="link-btn" onMouseDown={(event) => event.preventDefault()} onClick={() => { setCatalogRevision((value) => value + 1); ref.current?.focus(); }}>Refresh</button></> : null}
         </div> : null}
         <div className="composer__bar">
-          <div className="composer__controls">
-            <button type="button" className="composer__add-agent" onClick={() => useMingle.getState().openDialog({ kind: 'add-agent', sessionId: anchor.id })} disabled={connection !== 'online'}>
-              <UserPlus size={13} aria-hidden="true" /><span>Add agent</span>
-            </button>
-          </div>
           <div className="composer__send">
             <AttachmentDrafts scope={{ kind: 'group', id: snapshot.group.id }} busy={attachmentDraft.busy} onFiles={attachmentDraft.addFiles} disabled={sending || Boolean(blocker)} />
-            {anyBusy && !local ? (
-              <button type="button" className="sendbtn sendbtn--stop" onClick={() => void stop()} disabled={stopping || connection !== 'online'} aria-label="Pause group and interrupt running members" title="Pause group and interrupt running members"><Square size={12} fill="currentColor" /></button>
-            ) : null}
             <button type="button" className="sendbtn" onClick={() => void submit()} disabled={sendDisabled}
               aria-label={local?.[1]?.toLowerCase() === 'import' ? 'Import conversation' : local?.[1]?.toLowerCase() === 'usage' ? 'Open usage' : 'Send message'}
               title={sendDisabled ? (problem ?? blocker ?? (empty ? 'Write a message first' : 'Sending…')) : anyBusy ? `Send and queue for busy agents (${MOD}+Enter or Enter)` : `Send (${MOD}+Enter or Enter)`}>

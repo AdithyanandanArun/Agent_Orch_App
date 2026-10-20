@@ -1,6 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useRef } from 'react';
 import { FileCode2, X } from 'lucide-react';
-import { useMingle, useProject } from '../store/store';
+import { useMingle } from '../store/store';
 import { isDirty, useEditor } from '../store/editor';
 import { cx } from '../lib/format';
 import { usePresence } from '../lib/motion';
@@ -30,16 +30,6 @@ function CenterTabs() {
           </div>
         );
       })}
-    </div>
-  );
-}
-
-function ExampleBanner() {
-  const project = useProject();
-  if (!project?.isExample) return null;
-  return (
-    <div className="banner banner--example" role="note">
-      <span><strong>Example workspace</strong><span aria-hidden="true"> · </span>Messages start real runs with your configured provider.</span>
     </div>
   );
 }
@@ -92,7 +82,6 @@ export function Workspace() {
   return (
     <div className={cx('workspace', contextOpen && 'has-context')}>
       <div className="workspace__center">
-        <ExampleBanner />
         <CenterTabs />
         <div className="workspace__main">
           <div className="workspace__pane" hidden={editorActive}><SessionPane /></div>

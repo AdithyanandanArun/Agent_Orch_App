@@ -5,6 +5,8 @@ import { Button, IconButton, Menu, MenuItem, MenuSeparator } from './ui';
 import { useState } from 'react';
 import { activeMembers, isBusy } from '../lib/groups';
 import { stopGroup } from '../lib/groupActions';
+import { GroupControl } from './group/GroupControl';
+import { cx } from '../lib/format';
 
 const TITLES = { workspace: 'Workspace', tasks: 'Tasks', activity: 'Activity', map: 'Agent map', settings: 'Settings' } as const;
 
@@ -17,9 +19,13 @@ export function Header() {
   const connection = useMingle((s) => s.connection);
   const contextOpen = useMingle((s) => s.contextOpen);
   const terminalOpen = useMingle((s) => s.terminalOpen);
+  const groupActionBusy = useMingle((s) => s.groupActionBusyId !== null);
+  const groupHasWork = group ? group.deliveries.some((delivery) => delivery.status === 'queued' || delivery.status === 'running')
+    || activeMembers(group).some((member) => isBusy(sessions.find((item) => item.id === member.sessionId))) : false;
+  const online = connection === 'online';
   const { openDialog, toggleContext, toggleTerminal, setSidebarOpen } = useMingle.getState();
   const [stopping, setStopping] = useState(false);
-  const hasActiveRun = group ? activeMembers(group).some((member) => isBusy(sessions.find((item) => item.id === member.sessionId))) : isBusy(session);
+  const hasActiveRun = isBusy(session);
 
   const interrupt = async () => {
     if (!session) return;
@@ -45,35 +51,49 @@ export function Header() {
   </header>;
 
   return (
-    <header className="header">
-      <IconButton label="Open sidebar" className="header__burger" onClick={() => setSidebarOpen(true)}><MenuIcon size={16} /></IconButton>
-      <div className="crumbs" aria-label="Current view">
-        <span className="crumbs__project">{project?.name ?? 'No project'}</span>
-        <span className="crumbs__sep" aria-hidden="true">/</span>
-        <span className="crumbs__current" title={session?.branch ?? undefined}>{view === 'workspace' ? session?.name ?? 'Workspace' : TITLES[view]}</span>
+    <header className={cx('header', view === 'workspace' && group && 'header--team')}>
+      <div className="header__primary">
+        <IconButton label="Open sidebar" className="header__burger" onClick={() => setSidebarOpen(true)}><MenuIcon size={16} /></IconButton>
+        <div className="header__title">
+          <div className="crumbs" aria-label="Current view">
+            <span className="crumbs__project" title={project?.name}>{project?.name ?? 'No project'}</span>
+            <span className="crumbs__sep" aria-hidden="true">/</span>
+            <span className="crumbs__current" title={session ? [session.name, session.branch].filter(Boolean).join(' · ') : undefined}>{view === 'workspace' ? session?.name ?? 'Workspace' : TITLES[view]}</span>
+          </div>
+          {view === 'workspace' && project?.isExample ? <span className="header__example badge" role="note" aria-label="Example workspace. Messages start real runs with your configured provider." title="Example workspace. Messages start real runs with your configured provider.">Example</span> : null}
+        </div>
       </div>
-      <div className="header__actions">
-        {view === 'workspace' && session && hasActiveRun ? (
-          <Button size="sm" variant="danger" busy={stopping} onClick={interrupt}><Square size={11} fill="currentColor" /> {group ? 'Stop group' : 'Interrupt'}</Button>
-        ) : null}
-        {view === 'tasks' ? (
-          <Button size="sm" onClick={() => openDialog({ kind: 'task' })} disabled={!project} why="Open a project first"><ListPlus size={14} /> New task</Button>
-        ) : null}
-        {view === 'workspace' ? (
-          <>
-            <Button size="sm" variant="secondary" disabled={!session || connection !== 'online'} why={!session ? 'Select a session first' : connection !== 'online' ? 'Reconnect to the server first' : undefined} onClick={() => session && openDialog({ kind: 'add-agent', sessionId: session.id })}><UserPlus size={14} /> Add agent</Button>
-            <IconButton label={terminalOpen ? 'Hide terminal' : 'Show terminal'} active={terminalOpen} onClick={() => toggleTerminal()}><SquareTerminal size={16} /></IconButton>
-            <IconButton label={contextOpen ? 'Hide context pane' : 'Show context pane'} active={contextOpen} onClick={() => toggleContext()}><PanelRight size={16} /></IconButton>
-            <Menu
-              align="end" width={200}
-              trigger={(p) => <IconButton label="Session actions" disabled={!session} why="No session selected" {...p}><MoreHorizontal size={16} /></IconButton>}
-            >
-              <MenuItem icon={<Pencil size={14} />} onSelect={() => session && openDialog({ kind: 'rename', sessionId: session.id })}>Rename session</MenuItem>
-              <MenuItem icon={<Square size={14} />} disabled={!session || !hasActiveRun} why="No active run to stop" onSelect={interrupt}>{group ? 'Stop group' : 'Interrupt run'}</MenuItem>
-              {!group ? <><MenuSeparator /><MenuItem danger icon={<Archive size={14} />} onSelect={() => session && openDialog({ kind: 'archive', sessionId: session.id })}>Archive session…</MenuItem></> : null}
-            </Menu>
-          </>
-        ) : null}
+      <div className="header__team-row">
+        {view === 'workspace' && group ? <GroupControl key={group.group.id} snapshot={group} /> : null}
+        <div className="header__actions">
+          {view === 'workspace' && session && !group && hasActiveRun ? (
+            <Button size="sm" variant="danger" busy={stopping} onClick={interrupt}><Square size={11} fill="currentColor" /> Interrupt</Button>
+          ) : null}
+          {view === 'tasks' ? (
+            <Button size="sm" onClick={() => openDialog({ kind: 'task' })} disabled={!project} why="Open a project first"><ListPlus size={14} /> New task</Button>
+          ) : null}
+          {view === 'workspace' ? (
+            <>
+              {!group ? <Button size="sm" variant="secondary" disabled={!session || connection !== 'online'} why={!session ? 'Select a session first' : connection !== 'online' ? 'Reconnect to the server first' : undefined} onClick={() => session && openDialog({ kind: 'add-agent', sessionId: session.id })}><UserPlus size={14} /> Add agent</Button> : null}
+              <IconButton label={terminalOpen ? 'Hide terminal' : 'Show terminal'} active={terminalOpen} onClick={() => toggleTerminal()}><SquareTerminal size={16} /></IconButton>
+              <IconButton label={contextOpen ? 'Hide context pane' : 'Show context pane'} active={contextOpen} onClick={() => toggleContext()}><PanelRight size={16} /></IconButton>
+              <Menu
+                align="end" width={200}
+                trigger={(p) => <IconButton label="Session actions" disabled={!session} why="No session selected" {...p}><MoreHorizontal size={16} /></IconButton>}
+              >
+                <MenuItem icon={<Pencil size={14} />} onSelect={() => session && openDialog({ kind: 'rename', sessionId: session.id })}>Rename session</MenuItem>
+                {group ? <MenuSeparator /> : null}
+                <MenuItem
+                  icon={<Square size={14} />}
+                  disabled={group ? !online || !groupHasWork || groupActionBusy : !session || !hasActiveRun || stopping}
+                  why={group ? !online ? 'Reconnect to the server first' : groupActionBusy ? 'A group action is already in progress' : 'No active or queued work' : 'No active run to stop'}
+                  onSelect={interrupt}
+                >{group ? 'Stop all agents' : 'Interrupt run'}</MenuItem>
+                {!group ? <><MenuSeparator /><MenuItem danger icon={<Archive size={14} />} onSelect={() => session && openDialog({ kind: 'archive', sessionId: session.id })}>Archive session…</MenuItem></> : null}
+              </Menu>
+            </>
+          ) : null}
+        </div>
       </div>
     </header>
   );
