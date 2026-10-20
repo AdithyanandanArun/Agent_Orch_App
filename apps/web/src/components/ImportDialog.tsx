@@ -7,8 +7,14 @@ import { Button, InlineError, Modal, Spinner } from './ui';
 import { cx } from '../lib/format';
 
 const PROVIDERS: { id: Provider; label: string }[] = [
-  { id: 'claude', label: 'Claude' }, { id: 'codex', label: 'Codex' }, { id: 'antigravity', label: 'Antigravity' },
+  { id: 'claude', label: 'Claude' }, { id: 'codex', label: 'Codex' }, { id: 'antigravity', label: 'Antigravity' }, { id: 'opencode', label: 'OpenCode' },
 ];
+
+/** Providers without a verified bounded native history reader; no request is made for them. */
+const IMPORT_UNSUPPORTED: Partial<Record<Provider, { notice: string; title: string; detail: string }>> = {
+  antigravity: { notice: 'Antigravity native history import is not supported yet. No local history request was made.', title: 'Antigravity import is unavailable', detail: 'Relay does not have an Antigravity native history reader yet.' },
+  opencode: { notice: 'OpenCode native history import is not supported yet. No local history request was made. Continue a Relay OpenCode session to resume its native conversation.', title: 'OpenCode import is unavailable', detail: 'ACP can list OpenCode sessions, but Relay has no verified bounded history reader for them yet.' },
+};
 
 function shortDate(value: string | null): string {
   if (!value) return 'Date unavailable';
@@ -63,8 +69,9 @@ export function ImportDialog() {
     setConversations([]); setNextCursor(null); setListNotices([]); setListError(null);
     setLoadingMore(false);
     setSelected(null); setDetails(null); setDetailError(null); setImportError(null);
-    if (provider === 'antigravity') {
-      setListNotices(['Antigravity native history import is not supported yet. No local history request was made.']);
+    const unsupported = IMPORT_UNSUPPORTED[provider];
+    if (unsupported) {
+      setListNotices([unsupported.notice]);
       setLoading(false);
       return () => controller.abort();
     }
@@ -189,8 +196,8 @@ export function ImportDialog() {
           {listNotices.map((notice, index) => <p className="import-dialog__notice" key={`${index}:${notice}`}>{notice}</p>)}
           {listError ? <InlineError onRetry={importing ? undefined : () => setListRevision((value) => value + 1)}>{listError}</InlineError> : null}
           {loading ? <div className="import-dialog__state"><Spinner label="Loading conversations" /><span>Reading local conversation history…</span></div> : null}
-          {!loading && provider === 'antigravity' ? <div className="import-dialog__state"><AlertTriangle size={20} /><strong>Antigravity import is unavailable</strong><span>Relay does not have an Antigravity native history reader yet.</span></div> : null}
-          {!loading && provider !== 'antigravity' && !listError && conversations.length === 0 ? <div className="import-dialog__state"><Folder size={20} /><strong>No conversations found</strong><span>Relay only reads history available from this machine.</span></div> : null}
+          {!loading && IMPORT_UNSUPPORTED[provider] ? <div className="import-dialog__state"><AlertTriangle size={20} /><strong>{IMPORT_UNSUPPORTED[provider]!.title}</strong><span>{IMPORT_UNSUPPORTED[provider]!.detail}</span></div> : null}
+          {!loading && !IMPORT_UNSUPPORTED[provider] && !listError && conversations.length === 0 ? <div className="import-dialog__state"><Folder size={20} /><strong>No conversations found</strong><span>Relay only reads history available from this machine.</span></div> : null}
           {!loading && conversations.length > 0 && visible.length === 0 ? <div className="import-dialog__state"><Search size={18} /><strong>No matches in loaded history</strong><span>Load more history to search older conversations.</span></div> : null}
           <div className="import-dialog__rows" role="listbox" aria-label={`${provider} conversations`} aria-busy={loading} onKeyDown={(event) => {
             if (importing || !visible.length || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;

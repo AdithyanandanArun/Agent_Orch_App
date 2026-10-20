@@ -8,6 +8,7 @@ import type { Provider, SessionStatus } from '@relay/contracts';
 import { cx } from '../lib/format';
 import { PROVIDER_NAMES } from '../lib/providers';
 import { AntigravityMark } from './AntigravityMark';
+import { OpenCodeMark } from './OpenCodeMark';
 
 /* ——— Brand ——— */
 export function RelayGlyph({ size = 18 }: { size?: number }) {
@@ -34,6 +35,8 @@ export function ProviderMark({ provider, size = 16 }: { provider: Provider; size
         <svg viewBox="0 0 16 16" width={size * 0.7} height={size * 0.7} fill="none" aria-hidden="true">
           <path d="M8 2v12M2.8 5l10.4 6M13.2 5 2.8 11" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
         </svg>
+      ) : provider === 'opencode' ? (
+        <OpenCodeMark size={size * 0.76} />
       ) : (
         <AntigravityMark size={size * 0.76} />
       )}

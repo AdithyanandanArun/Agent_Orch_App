@@ -172,7 +172,7 @@ export const api = {
   antigravityInstallState: (signal?: AbortSignal) => json<AntigravityInstallState>('/api/providers/antigravity/install', 'GET', undefined, signal),
   installAntigravityRuntime: () => json<AntigravityInstallState>('/api/providers/antigravity/install', 'POST', {}),
   antigravityAuthState: (signal?: AbortSignal) => json<AntigravityAuthState>('/api/providers/antigravity/auth', 'GET', undefined, signal),
-  startAntigravityAuth: () => json<AntigravityAuthState>('/api/providers/antigravity/auth', 'POST', {}),
+  startAntigravityAuth: (refresh = false) => json<AntigravityAuthState>('/api/providers/antigravity/auth', 'POST', { refresh }),
   cancelAntigravityAuth: () => json<AntigravityAuthState>('/api/providers/antigravity/auth', 'DELETE', {}),
   browserDiscovery: (signal?: AbortSignal) => json<BrowserDiscovery>('/api/browser/discovery', 'GET', undefined, signal),
   /** Downloads the managed Chromium; can take up to about two minutes. */

@@ -10,6 +10,7 @@ import { CLAUDE_POLICIES, probeClaudeModels } from './claude/capabilities.js';
 import { TextTail, cleanEnv, errorMessage, isRecord, redactSecrets, truncate } from './common.js';
 import { bundledClaudeCandidates, resolveExecutable, type ResolvedExecutable } from './discovery.js';
 import { runProbe, shutdownChild, settlesWithin, type ChildLike, type ProbeFn } from './process.js';
+import { detectOpencode } from './opencode/detect.js';
 import { antigravityInfo, ANTIGRAVITY_DEFAULT, cachedAntigravityMetadata, isAntigravityAuthenticated, closeAntigravity, resolveAntigravity, startAntigravity } from './antigravity/runtime.js';
 
 export const CODEX_DEFAULT_MODEL = 'gpt-6.1-sol';
@@ -213,10 +214,10 @@ const inFlight = new Map<string, Promise<ProviderInfo[]>>();
 
 /** Reports real availability. Concurrent calls with identical settings share one probe. */
 export function detectProviders(settings: AppSettings, deps: DetectDeps = {}): Promise<ProviderInfo[]> {
-  const key = JSON.stringify([settings.claudeExecutable, settings.codexExecutable, settings.antigravityExecutable, deps.env === undefined ? 'process' : 'custom']);
+  const key = JSON.stringify([settings.claudeExecutable, settings.codexExecutable, settings.antigravityExecutable, settings.opencodeExecutable, deps.env === undefined ? 'process' : 'custom']);
   const pending = inFlight.get(key);
   if (pending && !deps.probe && !deps.spawn) return pending;
-  const run = Promise.all([detectCodex(settings, deps), detectClaude(settings, deps), detectAntigravity(settings, deps)]).then(([codex, claude, antigravity]) => [codex, claude, antigravity]);
+  const run = Promise.all([detectCodex(settings, deps), detectClaude(settings, deps), detectAntigravity(settings, deps), detectOpencode(settings, deps)]).then(([codex, claude, antigravity, opencode]) => [codex, claude, antigravity, opencode]);
   if (!deps.probe && !deps.spawn) {
     inFlight.set(key, run);
     void run.finally(() => inFlight.delete(key)).catch(() => undefined);

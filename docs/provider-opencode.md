@@ -1,0 +1,89 @@
+# OpenCode provider
+
+Updated 2026-10-20. Relay runs the user's installed OpenCode through its native Agent Client Protocol server (`opencode acp`, newline-delimited JSON-RPC over stdio). Authentication, quota, model access and credential storage remain OpenCode's own: Relay never reads OpenCode's auth store, never asks for a key, and never starts a browser login.
+
+Native version inspected: OpenCode **1.19.3** at `/usr/bin/opencode`, ACP protocol version 1.
+
+## Sources
+
+- <https://opencode.ai/docs/acp/> — supported ACP features (custom commands, MCP, agents, permissions) and the documented limitation that built-in `/undo` and `/redo` are unsupported.
+- <https://opencode.ai/docs/models/> — model variants (reasoning effort) and `provider_id/model_id` identifiers.
+- <https://opencode.ai/docs/cli/> and <https://opencode.ai/docs/server/> — `opencode acp`, `opencode models`, `opencode session delete`, and the HTTP server alternative.
+- The upstream OpenCode repository's ACP layer (`packages/cli/src/acp`), read as protocol research to understand option identifiers, permission option kinds and prompt/command routing. No code was copied; the adapter is original.
+- Direct no-prompt probes of the installed binary (listed under Verification).
+
+## Why ACP rather than the HTTP server
+
+`opencode serve` is a long-lived shared server. Relay needs one isolated, killable process per run so permission rules, MCP capabilities and abort cleanup cannot leak between sessions. ACP gives a process Relay owns (and can signal as a process group), session-scoped MCP registration, `session/request_permission`, `session/cancel`, `session/resume` and native config selectors for model/effort. Even the ACP child starts an HTTP listener (OpenCode's default is port 4096, falling back to a random port), so every child is launched as `opencode acp --hostname 127.0.0.1 --port <unused ephemeral port> --no-mdns` and gets a random per-child `OPENCODE_SERVER_PASSWORD` in its environment (verified: unauthenticated requests receive 401 and ACP still works; the explicit flags bind exactly the requested loopback port). A user's own server settings or running OpenCode server therefore cannot expose or collide with a Relay child. The generated password is added to Relay's redaction list for events and tool output.
+
+## Settings
+
+`opencodeExecutable` (optional path or command, empty for discovery) and `defaultOpencodeModel` (`default` means OpenCode's own selection). Discovery looks at the configured path, then `PATH`, `~/.opencode/bin`, `~/.local/bin` and `~/.npm-global/bin`, running `--version` on each candidate; a configured path is never silently replaced. Both fields live in the existing key/value settings table; `sessions.provider` and `runs.provider` are plain TEXT, so no SQL migration was needed.
+
+## Detection and discovery (no inference)
+
+Provider detection (startup and Settings → Re-check) starts `opencode acp` in a **private empty temporary directory**, runs `initialize`, creates one native session (`session/new`, no prompt), reads the model selector, selects each model on that throwaway session to read the variants OpenCode reports for it (a local operation, ~2 ms per model), reads `available_commands_update`, then closes the child (process group escalation) and deletes the throwaway native session with `opencode session delete <id>` using an argv array. Only session IDs created by the probe are deleted, and the delete runs in the probe's private directory, so no project configuration or plugin is discovered for it. `initialize` must also identify the agent as OpenCode, and native session IDs must match `ses_…` on the metadata and run paths. At most two such probes run at once; the whole probe is bounded to 40 s, model inspection to 12 s (models not inspected in time show Native default only, with a notice).
+
+Diagnostics are specific: missing/not-executable configured path, failed `--version`, ACP start/initialize failure with a redacted bounded stderr tail, zero models reported, or missing HTTP MCP capability. Availability means "OpenCode starts and reports models". It does **not** claim an account: this machine's OpenCode currently exposes OpenCode's own hosted free models without any stored credentials, and a configured provider's key or quota is only validated by OpenCode at run time.
+
+Detection skips the real probe when a caller injects only discovery dependencies (the same convention as the other providers), so embedded callers never launch a real provider unexpectedly.
+
+## Models and reasoning effort
+
+Model IDs are OpenCode's own `provider/model` values from the ACP `model` config option (for example `opencode/beam-free`); display names are OpenCode's. Relay adds one sentinel, `default`, which leaves OpenCode's configured/default model unselected. Its entry inherits the name and measured variants of the model OpenCode reports as current (for example "OpenCode/Big Pickle (default)"); this is measured from the private probe directory, so a project `opencode.json` can select a different model, and each run reports the effective model in an info event and validates the requested effort against that model's live options. Nothing is substituted: an unknown model fails before any prompt.
+
+Reasoning effort comes only from native variants. Selecting a model on ACP exposes an `effort` option (category `thought_level`) when the model has variants; its values are the native variant IDs plus a native `default`. Relay maps these to effort choices per model:
+
+- Relay `none` = **Native default**, always present, and applied explicitly by selecting the native `default` option (OpenCode reports its first variant as "current" even when none is selected, so Relay never trusts the displayed current value).
+- Native variants keep their IDs when they are valid Relay effort slugs (`low`, `medium`, `high`, `xhigh`, `max`, `minimal`, …). A native variant literally named `none` (an OpenAI reasoning level, present on one model here) is exposed as `variant-none` because `none` is reserved; other non-slug names are slugged. The mapping is recomputed from the live native options at run time and never from stored data.
+- Models without variants offer only Native default.
+
+Model and effort are re-read and verified after each `session/set_config_option`; a mismatch stops the run before the prompt. A model or effort change reported during the run stops the turn (`model_substitution` / `effort_substitution`).
+
+## Permissions
+
+OpenCode's default agent allows every tool without asking, so ACP's own modes cannot express Relay's policies. Relay supplies per-run OpenCode permission rules in the child's `OPENCODE_PERMISSION` environment variable (no file is written, nothing global changes). Later rules win.
+
+| Relay policy | OpenCode rules |
+| --- | --- |
+| Supervised | `*: ask`; `read` allowed except `.env`-shaped files (ask); `glob`, `grep`, `list`, `lsp`, `todowrite`, `skill` allowed; `edit: ask` |
+| Auto-accept edits | Supervised, with `edit: allow` |
+| Full access | `*: allow` |
+| Auto | Unsupported (OpenCode has no automatic reviewer); not advertised, rejected explicitly |
+
+All policies deny `question`, `plan_enter` and `plan_exit` because ACP has no channel for answering them. Prompts arrive as `session/request_permission` and are forwarded to Relay approvals. Relay answers with `allow_once` or `reject_once` only, never an "always" rule. Relay's own browser/team MCP tool names (`relay_browser_*`, `relay_team_*`) are allowed by rule and not double-prompted, because those gateways enforce their own approvals and tab ownership. A project `opencode.json` that denies a tool earlier is overridden by the later `*` rule (Supervised becomes ask; Full access is unrestricted by definition).
+
+## Slash commands
+
+The command catalog is fresh and independent of any paid run: `GET /api/sessions/:id/catalog` starts a metadata-only ACP child **in the session's real folder** (the only case where a project's `.opencode` configuration and plugins load for a probe, and only because the user opened that session) (so project commands, `.opencode` configuration and plugins load as they would for OpenCode), reads `available_commands_update`, and deletes the throwaway session. ProviderService caches it for 30 s; Settings → Re-check and the composer's Refresh drop the cache. OpenCode's own skills are exposed by ACP as commands, so they appear under `/`; Relay's separate `$` skill picker is unavailable and says so.
+
+Only commands the native list advertises are shown. Terminal-only built-ins (`/undo`, `/redo`, and anything absent from the list) are not advertised. Selecting one inserts `/name args`, which is sent as the ACP prompt text; OpenCode's ACP resolves a leading `/name` against its command list and runs the command natively. The run adds an info line (`Running OpenCode command /name`), or states that an unlisted `/name` is being sent as ordinary text. Relay's local actions (`/model`, `/status`, `/usage`, …) keep precedence over native commands with the same name.
+
+## Conversations, resume and runs
+
+- A run starts `opencode acp` in the session folder and creates `session/new` (or resumes). The native session ID is recorded immediately as `providerSessionId`.
+- A stored ID resumes with `session/resume` (or `session/load` with history replay suppressed). A missing/invalid conversation fails with `resume_failed`; Relay never creates a replacement. Resume was verified across processes.
+- Browser and team capabilities register per session over ACP HTTP MCP (`relay_browser`, `relay_team`, `Authorization: Bearer …` header in the JSON-RPC request, never argv or files). Verified that the header reaches the MCP endpoint and that the token appears in none of OpenCode's config, data, state or cache directories. If MCP HTTP is not advertised, a run that needs it fails before any prompt. Literal capability tokens and credential-shaped environment values are scrubbed from events and errors.
+- Streamed assistant text, tool lifecycle (stable provider IDs, status, command, working directory, exit code when reported, output) and native plan entries become Relay events. Durations come from Relay's host clock; ACP reports no process ID, so none is invented. Reasoning chunks are provider-private and not shown.
+- Cancellation sends `session/cancel`, waits up to 4 s for OpenCode to unwind, then closes stdin, SIGTERMs and SIGKILLs the child's process group. The adapter promise resolves only after the process has closed, so Relay's session lock stays held until cleanup finishes; a child that ignores SIGKILL keeps waiting rather than releasing the lock early. Metadata probes bind the caller's abort signal for their whole life, so aborting a probe kills its child and ends `session/new` / model inspection.
+- Token usage comes from the `session/prompt` response summary when reported. Cost is not reported over ACP and stays unrecorded.
+- Server shutdown stops leftover metadata probes through the provider runtime's optional `close()`.
+
+## Explicit unsupported boundaries
+
+- **History import.** ACP can list sessions (`session/list`), but Relay has no verified bounded reader for native history. Import lists return a notice and the Import dialog explains it. Continuing a Relay-created OpenCode session works.
+- **Usage/quota.** ACP exposes no account quota, plan or credits; `/usage` says so and shows no invented windows. Cost is unreported.
+- **Selected skills.** Relay's `$` picker/`skills` field is unavailable; native skills are slash commands.
+- **Compaction threshold.** Relay's percentage setting is not exposed by ACP; OpenCode's native compaction remains and each run notes this. `/compact` is not advertised by this version, so it is not offered.
+- **Service tiers.** Only Standard.
+- **Auto policy.** Unsupported.
+- **Terminal/undo/redo commands**, ACP-side file-system and terminal client methods (Relay advertises neither), image/attachment prompts and OpenCode "question" interactions.
+
+## Verification performed (no inference)
+
+- Workspace TypeScript checks (`contracts`, `server`, `web`) and a production Vite web build.
+- Native help/version inspection of `opencode`, `opencode acp`, `opencode models` and `opencode session`.
+- `initialize` and `session/new` against the installed binary in a private directory: 10 models, native `effort` option and variants, `mode` option, 16 native commands (including `init`, `review` and skills). `session/set_config_option` for model, effort (`default`, invalid values), mode, and unknown model; `session/resume` across processes, with an unknown ID; HTTP MCP header delivery to a local dummy endpoint; permission-rule parsing through `opencode debug agent build` (ruleset only, no credentials printed); loopback server password enforcement.
+- Relay's own `detectOpencode`, `getOpencodeCatalog` and adapter setup path (session creation, model/effort selection, resume, rejection cases, abort and process cleanup) were exercised against the real binary with `session/prompt` intercepted locally, so no model request was sent. Probe-created native sessions were deleted afterward.
+
+Not exercised: any live inference, streamed assistant text, real tool calls, real permission prompts, a real native slash-command execution, cost/usage reporting from a real turn, other providers' credentials, and non-Linux platforms. Those paths follow the documented ACP shapes and the upstream protocol source but have not been observed against a live OpenCode turn.

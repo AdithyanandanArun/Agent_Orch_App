@@ -25,6 +25,10 @@ Independent sessions and group agents share the existing runtime, worktree, tool
 
 Native history import, explicit skill attachments and a custom compaction threshold are unsupported. Quota reads use only the verified runtime's native maintenance command; unknown credit/reset fields remain unreported. An installed runtime is not proof of a valid Google login or account entitlement. See [Antigravity protocol research and limits](provider-antigravity.md).
 
+## OpenCode
+
+OpenCode's native ACP server (`opencode acp`) is the fourth independent provider. Models are its `provider/model` IDs, reasoning effort is its native model variants with an explicit Native default, and the `/` picker lists the commands (including skills) it advertises for the session folder, discovered without a prompt. Supervised, Auto-accept edits and Full access are enforced with per-run OpenCode permission rules; Auto is unsupported. Browser and team MCP are registered per session. Native history import, usage/quota, the `$` skill picker, a custom compaction threshold and service tiers are unsupported and reported explicitly. See provider-opencode.md for protocol details and verification limits.
+
 ## Relay commands
 
 `/new`, `/stop`, `/settings`, `/model`, `/effort`, `/permissions`, `/tier`, `/skills`, `/usage`, `/status`, `/diff` and `/help` are local Relay actions. They do not start inference. Relay commands take precedence over provider commands with the same names. Other Claude commands dispatch through the SDK's documented slash syntax. Codex terminal UI slash commands require individual client integrations; they are not sent as pretend prompt aliases.

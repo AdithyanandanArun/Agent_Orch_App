@@ -12,6 +12,12 @@ import type { ProviderRuntime } from './types.ts';
 import { badRequest, conflict, errorMessage, HttpError, notFound, redactSecrets, truncate } from './util.ts';
 
 /** Metadata discovery never resumes a thread. Only an explicit composer send starts inference. */
+function unsupportedImport(provider: 'antigravity' | 'opencode'): string {
+  return provider === 'opencode'
+    ? 'OpenCode conversation import is not supported. ACP can list native sessions, but Relay has no verified bounded history reader for them; continue a Relay OpenCode session to resume its conversation.'
+    : 'Antigravity conversation import is not supported because its native history protocol has not been verified.';
+}
+
 export class ImportService {
   private pending = new Map<string, Promise<unknown>>();
   constructor(private store: Store, private native: ProviderRuntime, private providers: ProviderService, private runtime: RuntimeLike) {}
@@ -29,7 +35,7 @@ export class ImportService {
   }
 
   async list(provider: Provider, projectId?: string, cursor?: string): Promise<ExternalConversationList> {
-    if (provider === 'antigravity') throw badRequest('Antigravity conversation import is not supported because its native history protocol has not been verified.');
+    if (provider === 'antigravity' || provider === 'opencode') throw badRequest(unsupportedImport(provider));
     if (!this.native.listConversations) throw badRequest('This runtime does not support importing conversations.');
     const project = projectId ? this.store.getProject(projectId) : undefined;
     if (projectId && !project) throw notFound('Project not found');
@@ -54,14 +60,14 @@ export class ImportService {
   }
 
   async read(provider: Provider, id: string): Promise<ExternalConversationDetails> {
-    if (provider === 'antigravity') throw badRequest('Antigravity conversation import is not supported because its native history protocol has not been verified.');
+    if (provider === 'antigravity' || provider === 'opencode') throw badRequest(unsupportedImport(provider));
     if (!ConversationIdSchema.safeParse(id).success) throw badRequest('Invalid conversation ID');
     if (!this.native.readConversation) throw badRequest('This runtime does not support importing conversations.');
     const settings = this.store.getSettings();
     const result = await this.discover(JSON.stringify(['read', provider, id, providerExecutable(provider, settings)]),
       () => this.native.readConversation!(provider, settings, id));
     const latestSettings = this.store.getSettings();
-    if (latestSettings.codexExecutable !== settings.codexExecutable || latestSettings.claudeExecutable !== settings.claudeExecutable || latestSettings.antigravityExecutable !== settings.antigravityExecutable) throw conflict('Provider settings changed while loading history. Open the conversation again.');
+    if (latestSettings.codexExecutable !== settings.codexExecutable || latestSettings.claudeExecutable !== settings.claudeExecutable || latestSettings.antigravityExecutable !== settings.antigravityExecutable || latestSettings.opencodeExecutable !== settings.opencodeExecutable) throw conflict('Provider settings changed while loading history. Open the conversation again.');
     if (result.conversation.id !== id || result.conversation.provider !== provider) throw conflict('The provider returned a different conversation. Refresh the history list.');
     // Never mutate a shared in-flight result while decorating it for this request.
     const conversation = { ...result.conversation };
@@ -73,7 +79,7 @@ export class ImportService {
   }
 
   async import(provider: Provider, id: string): Promise<ImportConversationResult> {
-    if (provider === 'antigravity') throw badRequest('Antigravity conversation import is not supported because its native history protocol has not been verified.');
+    if (provider === 'antigravity' || provider === 'opencode') throw badRequest(unsupportedImport(provider));
     const details = await this.read(provider, id);
     if (details.conversation.unavailableReason) throw badRequest(details.conversation.unavailableReason);
     const directory = await this.directory(details.conversation.directory);

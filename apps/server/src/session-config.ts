@@ -4,12 +4,14 @@ import { badRequest } from './util.ts';
 export interface RunConfig {
   provider: Provider; model: string; effort: string; policy: Policy; serviceTier?: string;
 }
+/** Providers whose reasoning control comes from native metadata; without it only the native default exists. */
+const NATIVE_EFFORT_PROVIDERS = new Set<Provider>(['antigravity', 'opencode']);
 type Explicit = Partial<Record<'effort' | 'policy' | 'serviceTier', boolean>>;
 
 /** Resolve inherited defaults against model capabilities; explicit unsupported choices always fail. */
 export function resolveRunConfig(info: ProviderInfo | undefined, config: RunConfig, explicit: Explicit = {}): RunConfig & { serviceTier: string } {
   const model = info?.models.find((row) => row.id === config.model || row.aliases?.includes(config.model));
-  const efforts = model?.reasoningEfforts?.map((row) => row.id) ?? (config.provider === 'antigravity' ? ['none'] : ['low', 'medium', 'high']);
+  const efforts = model?.reasoningEfforts?.map((row) => row.id) ?? (NATIVE_EFFORT_PROVIDERS.has(config.provider) ? ['none'] : ['low', 'medium', 'high']);
   // A model can explicitly advertise no reasoning control.
   if (!efforts.length) efforts.push('none');
   const defaultEffort = model?.defaultReasoningEffort && efforts.includes(model.defaultReasoningEffort)
@@ -19,7 +21,7 @@ export function resolveRunConfig(info: ProviderInfo | undefined, config: RunConf
     if (explicit.effort) throw badRequest(`Effort "${effort}" is not supported by ${config.model}. Choose a supported effort or refresh providers.`);
     effort = defaultEffort;
   }
-  const policies = model?.policies ?? info?.policies ?? (config.provider === 'antigravity' ? ['supervised'] : ['supervised', 'balanced']);
+  const policies = model?.policies ?? info?.policies ?? (config.provider === 'antigravity' ? ['supervised'] : config.provider === 'opencode' ? ['supervised', 'balanced', 'full-access'] : ['supervised', 'balanced']);
   let policy = config.policy;
   if (!policies.includes(policy)) {
     if (explicit.policy) throw badRequest(`Permission mode "${policy}" is not supported by ${config.model}. Choose a supported mode or refresh providers.`);

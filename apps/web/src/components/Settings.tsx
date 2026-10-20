@@ -9,7 +9,7 @@ import { SelectMenu } from './SelectMenu';
 import { SettingRow } from './SettingRow';
 import { BrowserSettings } from './browser/BrowserSettings';
 import { AgentsSettings } from './AgentsSettings';
-import { defaultProviderModel, providerModelChoices, providerModelSetting, PROVIDER_NAMES } from '../lib/providers';
+import { defaultProviderModel, usesNativeModelDefault, providerModelChoices, providerModelSetting, PROVIDER_NAMES } from '../lib/providers';
 import { AntigravityRuntimeSetup } from './AntigravityRuntimeSetup';
 
 const CATEGORIES: { id: SettingsSection; name: string }[] = [
@@ -39,6 +39,7 @@ export function SettingsPage() {
   const [claude, setClaude] = useState(settings?.claudeExecutable ?? '');
   const [codex, setCodex] = useState(settings?.codexExecutable ?? '');
   const [antigravity, setAntigravity] = useState(settings?.antigravityExecutable ?? '');
+  const [opencode, setOpencode] = useState(settings?.opencodeExecutable ?? '');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -93,7 +94,7 @@ export function SettingsPage() {
       ?? info?.models[0];
     const patch: Partial<AppSettings> = { defaultProvider: provider };
     if (model) patch[providerModelSetting(provider)] = model.id;
-    else if (provider === 'antigravity' && preferredModel === 'default') patch.defaultAntigravityModel = 'default';
+    else if (usesNativeModelDefault(provider) && preferredModel === 'default') patch[providerModelSetting(provider)] = 'default';
 
     const efforts = model?.reasoningEfforts ?? [];
     if (efforts.length && !efforts.some((item) => item.id === settings.defaultEffort)) {
@@ -111,7 +112,7 @@ export function SettingsPage() {
     }
     void update(patch, 'provider');
   };
-  const pathsDirty = claude.trim() !== settings.claudeExecutable || codex.trim() !== settings.codexExecutable || antigravity.trim() !== (settings.antigravityExecutable ?? '');
+  const pathsDirty = claude.trim() !== settings.claudeExecutable || codex.trim() !== settings.codexExecutable || antigravity.trim() !== (settings.antigravityExecutable ?? '') || opencode.trim() !== (settings.opencodeExecutable ?? '');
   const status = busy === 'providers' ? 'Checking providers…' : busy ? 'Saving…' : error ? 'Could not complete change' : saved ? 'All changes saved' : category === 'project' ? 'Project details' : 'Changes save automatically';
 
   return <div className="settings-page" aria-labelledby="settings-title">
@@ -130,7 +131,7 @@ export function SettingsPage() {
           <SelectMenu id="st-model" label="Default model" value={selectedModelId} disabled={disabled || models.length === 0} options={models.map((m) => ({ value: m.id, label: m.name }))} onChange={updateDefaultModel} />
         </SettingRow>
         <SettingRow title="Reasoning effort" description="How much reasoning to use for a response." htmlFor="st-effort">
-          <SelectMenu id="st-effort" label="Default effort" value={settings.defaultEffort} displayValue={efforts.length ? efforts.some((item) => item.id === settings.defaultEffort) ? undefined : 'Not available' : settings.defaultProvider === 'antigravity' ? 'Native/default' : effortName(settings.defaultEffort, settings.defaultEffort)} disabled={disabled || efforts.length === 0} options={efforts.map((item) => ({ value: item.id, label: `${effortName(item.id, item.label)}${item.id === selectedModel?.defaultReasoningEffort ? ' · Default' : ''}`, description: item.description }))} onChange={(value) => void update({ defaultEffort: value }, 'effort')} />
+          <SelectMenu id="st-effort" label="Default effort" value={settings.defaultEffort} displayValue={efforts.length ? efforts.some((item) => item.id === settings.defaultEffort) ? undefined : 'Not available' : usesNativeModelDefault(settings.defaultProvider) ? 'Native/default' : effortName(settings.defaultEffort, settings.defaultEffort)} disabled={disabled || efforts.length === 0} options={efforts.map((item) => ({ value: item.id, label: `${effortName(item.id, item.label)}${item.id === selectedModel?.defaultReasoningEffort ? ' · Default' : ''}`, description: item.description }))} onChange={(value) => void update({ defaultEffort: value }, 'effort')} />
         </SettingRow>
         <SettingRow title="Service tier" description="Request speed for the default model." htmlFor="st-tier">
           <SelectMenu id="st-tier" label="Default service tier" value={settings.defaultServiceTier ?? 'standard'} displayValue={tiers.length ? tiers.some((item) => item.id === (settings.defaultServiceTier ?? 'standard')) ? undefined : 'Not available' : 'Native/default'} disabled={disabled || tiers.length === 0} options={tiers.map((item) => ({ value: item.id, label: `${item.id === 'priority' ? 'Fast' : item.name}${item.id === selectedModel?.defaultServiceTier ? ' · Default' : ''}`, description: item.description }))} onChange={(value) => void update({ defaultServiceTier: value }, 'tier')} />
@@ -153,12 +154,13 @@ export function SettingsPage() {
         {boot.providers.map((provider) => <ProviderStatus key={provider.id} provider={provider} />)}
         {!boot.providers.length ? <p className="settings-page__hint">Provider information is loading. Re-check to request a fresh status.</p> : null}
         <AntigravityRuntimeSetup providerInfo={boot.providers.find((provider) => provider.id === 'antigravity')} onProviderChanged={refreshAntigravityAfterInstall} />
-        <div className="settings-page__login"><p>Sign in on this machine with <code>claude auth login</code> or <code>codex login</code>, then re-check. Antigravity sign-in opens its native Google browser flow.</p><p>Claude uses its existing login. An <code>ANTHROPIC_API_KEY</code> in the server environment takes precedence and uses API billing. Relay stores no credentials.</p></div>
+        <div className="settings-page__login"><p>Sign in on this machine with <code>claude auth login</code> or <code>codex login</code>, then re-check. Antigravity sign-in opens its native Google browser flow. OpenCode uses its own provider logins (<code>opencode providers login</code>) and lists the models it exposes; Relay never reads its credential files.</p><p>Claude uses its existing login. An <code>ANTHROPIC_API_KEY</code> in the server environment takes precedence and uses API billing. Relay stores no credentials.</p></div>
         <details className="settings-page__advanced"><summary>Executable paths</summary><p className="settings-page__hint">Leave empty to use automatic discovery.</p>
-          <form className="settings-page__paths" onSubmit={(event) => { event.preventDefault(); void update({ claudeExecutable: claude.trim(), codexExecutable: codex.trim(), antigravityExecutable: antigravity.trim() }, 'paths').then((ok) => { if (ok) void refreshProviders(); }); }}>
+          <form className="settings-page__paths" onSubmit={(event) => { event.preventDefault(); void update({ claudeExecutable: claude.trim(), codexExecutable: codex.trim(), antigravityExecutable: antigravity.trim(), opencodeExecutable: opencode.trim() }, 'paths').then((ok) => { if (ok) void refreshProviders(); }); }}>
             <label htmlFor="st-claude">Claude executable</label><input id="st-claude" className="input input--mono" value={claude} disabled={disabled} onChange={(event) => setClaude(event.target.value)} placeholder="claude" spellCheck={false} />
             <label htmlFor="st-codex">Codex executable</label><input id="st-codex" className="input input--mono" value={codex} disabled={disabled} onChange={(event) => setCodex(event.target.value)} placeholder="codex" spellCheck={false} />
             <label htmlFor="st-antigravity">Antigravity ACP executable</label><input id="st-antigravity" className="input input--mono" value={antigravity} disabled={disabled} onChange={(event) => setAntigravity(event.target.value)} placeholder="agy_acp_server.par" spellCheck={false} />
+            <label htmlFor="st-opencode">OpenCode executable</label><input id="st-opencode" className="input input--mono" value={opencode} disabled={disabled} onChange={(event) => setOpencode(event.target.value)} placeholder="opencode" spellCheck={false} />
             <div><Button type="submit" size="sm" disabled={!pathsDirty || disabled} busy={busy === 'paths'}>Save paths and re-check</Button></div>
           </form>
         </details>
@@ -190,7 +192,7 @@ function AutoCompactSetting({ settings, disabled, update }: { settings: AppSetti
   return <>
     <SettingRow
       title="Auto-compact" htmlFor="st-compact"
-      description="Summarise older conversation automatically as it nears the model’s context limit. The provider’s own reserve may compact earlier, and Codex needs the model to report its context size. Antigravity uses its native compaction threshold. Running sessions use a change on their next turn."
+      description="Summarise older conversation automatically as it nears the model’s context limit. The provider’s own reserve may compact earlier, and Codex needs the model to report its context size. Antigravity and OpenCode use their native compaction thresholds. Running sessions use a change on their next turn."
     >
       <SelectMenu id="st-compact" label="Auto-compact" value={mode} disabled={disabled} options={[{ value: 'default', label: 'Provider default' }, { value: 'custom', label: 'Custom percent' }]} onChange={(next) => {
         if (next === 'default') { setMode('default'); if (saved !== null) void update({ autoCompactPercent: null }, 'compact'); }

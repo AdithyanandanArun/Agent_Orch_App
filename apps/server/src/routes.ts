@@ -78,7 +78,7 @@ export function parse<T>(schema: z.ZodType<T>, value: unknown): T {
 }
 
 const executable = z.string().max(4096).refine((v) => !/[\0\r\n]/.test(v), 'Executable path contains control characters');
-const SettingsPatch = UpdateSettingsSchema.extend({ claudeExecutable: executable.optional(), codexExecutable: executable.optional(), antigravityExecutable: executable.optional(), browserExecutable: executable.optional(), browserCdpEndpoint: z.string().max(2048).refine((value) => {
+const SettingsPatch = UpdateSettingsSchema.extend({ claudeExecutable: executable.optional(), codexExecutable: executable.optional(), antigravityExecutable: executable.optional(), opencodeExecutable: executable.optional(), browserExecutable: executable.optional(), browserCdpEndpoint: z.string().max(2048).refine((value) => {
   if (!value) return true;
   try { const url = new URL(value); return ['http:', 'ws:'].includes(url.protocol) && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) && Boolean(url.port) && !url.username && !url.password && !url.search && !url.hash; } catch { return false; }
 }, 'Use a loopback HTTP or WebSocket endpoint with an explicit port').optional() });
@@ -361,7 +361,7 @@ export function buildRouter(s: Services) {
       return updated;
     });
     if (before.antigravityExecutable !== next.antigravityExecutable) cancelAntigravityAuth(s.config.dataDir);
-    if (before.claudeExecutable !== next.claudeExecutable || before.codexExecutable !== next.codexExecutable || before.antigravityExecutable !== next.antigravityExecutable) s.providers.invalidate();
+    if (before.claudeExecutable !== next.claudeExecutable || before.codexExecutable !== next.codexExecutable || before.antigravityExecutable !== next.antigravityExecutable || before.opencodeExecutable !== next.opencodeExecutable) s.providers.invalidate();
     return next;
   });
   add('GET', '/api/providers', () => s.providers.list());

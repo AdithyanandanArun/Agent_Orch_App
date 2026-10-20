@@ -109,13 +109,17 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
     if (mentionMatch) {
       const query = mentionMatch[1]!.toLowerCase();
       const matching = members.filter((member) => member.handle.toLowerCase().startsWith(query));
-      const antigravity = members.filter((member) => sessionOf(member.sessionId)?.provider === 'antigravity');
-      const isAntigravityAlias = Boolean(query && 'antigravity'.startsWith(query));
-      const exactHandle = matching.find((member) => member.handle.toLowerCase() === 'antigravity');
-      const alias = isAntigravityAlias && antigravity.length === 1 && !exactHandle ? [{
-        key: `provider:antigravity:${antigravity[0]!.id}`, memberId: antigravity[0]!.id, token: '@antigravity', description: `Antigravity agent · @${antigravity[0]!.handle}`, group: 'Providers', identityKey: antigravity[0]!.sessionId, provider: 'antigravity' as Provider,
-      }] : [];
-      const aliasChoices = isAntigravityAlias && antigravity.length > 1 ? antigravity : [];
+      // Provider aliases (@antigravity, @opencode) address the only agent of that provider; several agents list their handles instead.
+      const aliasProviders = ['antigravity', 'opencode'] as const satisfies readonly Provider[];
+      const matched = aliasProviders.flatMap((aliasProvider) => {
+        const same = members.filter((member) => sessionOf(member.sessionId)?.provider === aliasProvider);
+        const matchesAlias = Boolean(query && aliasProvider.startsWith(query)) && !matching.some((member) => member.handle.toLowerCase() === aliasProvider);
+        return matchesAlias ? [{ aliasProvider, same }] : [];
+      });
+      const alias = matched.filter((entry) => entry.same.length === 1).map(({ aliasProvider, same }) => ({
+        key: `provider:${aliasProvider}:${same[0]!.id}`, memberId: same[0]!.id, token: `@${aliasProvider}`, description: `${providerName(aliasProvider)} agent · @${same[0]!.handle}`, group: 'Providers', identityKey: same[0]!.sessionId, provider: aliasProvider as Provider,
+      }));
+      const aliasChoices = matched.filter((entry) => entry.same.length > 1).flatMap((entry) => entry.same);
       const seen = new Set<string>();
       const choices = [...alias, ...aliasChoices, ...matching].filter((member) => {
         const id = 'memberId' in member ? member.memberId : member.id;

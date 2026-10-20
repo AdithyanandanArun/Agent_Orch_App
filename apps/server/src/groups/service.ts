@@ -358,7 +358,7 @@ export class GroupService {
       if (direct) return direct;
       if (retired.has(reference) || retired.has(reference.toLowerCase())) throw unprocessable(`${label} was removed from this group`);
       const providerMatches = members.filter((m) => this.store.getSession(m.sessionId)?.provider === reference.toLowerCase());
-      if (['codex', 'claude', 'antigravity'].includes(reference.toLowerCase())) {
+      if (['codex', 'claude', 'antigravity', 'opencode'].includes(reference.toLowerCase())) {
         if (providerMatches.length === 1) return providerMatches[0]!;
         throw unprocessable(providerMatches.length ? `${label} matches several agents; use a specific handle such as @${providerMatches[0]!.handle}` : `No active agent matches ${label}`);
       }

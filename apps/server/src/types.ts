@@ -8,6 +8,8 @@ export interface ProviderRuntime {
   getUsage?(session: Session, settings: AppSettings): Promise<ProviderUsage>;
   listConversations?(provider: Provider, settings: AppSettings, options: ConversationListOptions): Promise<ExternalConversationList>;
   readConversation?(provider: Provider, settings: AppSettings, id: string): Promise<ExternalConversationDetails>;
+  /** Stops any provider helper processes still alive after runs are finished, such as metadata probes. */
+  close?(): Promise<void>;
 }
 
 export type Logger = (level: 'info' | 'warn' | 'error', message: string, detail?: unknown) => void;

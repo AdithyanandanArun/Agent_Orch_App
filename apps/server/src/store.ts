@@ -7,8 +7,8 @@ type Row = Record<string, unknown>;
 const RUN_FIELDS = 'id, session_id, user_message_id, provider, model, status, started_at, finished_at, duration_ms, changes_summary';
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  defaultProvider: 'codex', defaultCodexModel: 'gpt-6.1-sol', defaultClaudeModel: 'claude-sonnet-5-5', defaultAntigravityModel: 'default', defaultEffort: 'high', defaultIsolated: true,
-  defaultPolicy: 'supervised', defaultServiceTier: 'standard', theme: 'dark', claudeExecutable: '', codexExecutable: '', antigravityExecutable: '',
+  defaultProvider: 'codex', defaultCodexModel: 'gpt-6.1-sol', defaultClaudeModel: 'claude-sonnet-5-5', defaultAntigravityModel: 'default', defaultOpencodeModel: 'default', defaultEffort: 'high', defaultIsolated: true,
+  defaultPolicy: 'supervised', defaultServiceTier: 'standard', theme: 'dark', claudeExecutable: '', codexExecutable: '', antigravityExecutable: '', opencodeExecutable: '',
   groupDefaults: { maxParallel: 2, maxTurns: 16, maxHops: 6 },
   autoCompactPercent: null, browserAgentEnabled: true, browserExecutable: '', browserDefaultMode: 'managed', browserExistingSourceId: '', browserCdpEndpoint: '',
 };

@@ -6,7 +6,7 @@ import type { ProbeFn } from './process.js';
 import { describeProbeFailure, runProbe } from './process.js';
 
 export type ExecutableSource = 'setting' | 'path' | 'home-local' | 'npm-global' | 'sdk-bundled';
-export type ProviderBinary = 'claude' | 'codex';
+export type ProviderBinary = 'claude' | 'codex' | 'opencode';
 
 export interface SkippedExecutable { path: string; source: ExecutableSource; reason: string }
 export interface ResolvedExecutable { path: string; version: string; source: ExecutableSource; skipped: SkippedExecutable[] }

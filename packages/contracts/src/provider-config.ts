@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const ProviderSchema = z.enum(['codex', 'claude', 'antigravity']);
+export const ProviderSchema = z.enum(['codex', 'claude', 'antigravity', 'opencode']);
 export type Provider = z.infer<typeof ProviderSchema>;
 export const PolicySchema = z.enum(['supervised', 'balanced', 'auto', 'full-access']);
 export type Policy = z.infer<typeof PolicySchema>;

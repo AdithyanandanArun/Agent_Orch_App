@@ -4,18 +4,21 @@ const PROVIDER_NAMES: Record<Provider, string> = {
   codex: 'Codex',
   claude: 'Claude',
   antigravity: 'Antigravity',
+  opencode: 'OpenCode',
 };
 
-const DEFAULT_MODEL_KEYS: Record<Provider, keyof Pick<AppSettings, 'defaultCodexModel' | 'defaultClaudeModel' | 'defaultAntigravityModel'>> = {
+const DEFAULT_MODEL_KEYS: Record<Provider, keyof Pick<AppSettings, 'defaultCodexModel' | 'defaultClaudeModel' | 'defaultAntigravityModel' | 'defaultOpencodeModel'>> = {
   codex: 'defaultCodexModel',
   claude: 'defaultClaudeModel',
   antigravity: 'defaultAntigravityModel',
+  opencode: 'defaultOpencodeModel',
 };
 
-const EXECUTABLE_KEYS: Record<Provider, keyof Pick<AppSettings, 'codexExecutable' | 'claudeExecutable' | 'antigravityExecutable'>> = {
+const EXECUTABLE_KEYS: Record<Provider, keyof Pick<AppSettings, 'codexExecutable' | 'claudeExecutable' | 'antigravityExecutable' | 'opencodeExecutable'>> = {
   codex: 'codexExecutable',
   claude: 'claudeExecutable',
   antigravity: 'antigravityExecutable',
+  opencode: 'opencodeExecutable',
 };
 
 export function providerName(provider: Provider): string {

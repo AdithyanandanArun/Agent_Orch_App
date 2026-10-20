@@ -1,7 +1,7 @@
 import type {
   AgentConfiguration, AppSettings, GroupDelivery, GroupMember, GroupMode, GroupSnapshot, Policy, Provider, ProviderInfo, ProviderModel, Session, SessionStatus,
 } from '@relay/contracts';
-import { defaultProviderModel, PROVIDER_NAMES } from './providers';
+import { defaultProviderModel, PROVIDER_NAMES, usesNativeModelDefault } from './providers';
 
 export const MODE_LABEL: Record<GroupMode, string> = { cowork: 'Cowork', orchestrated: 'Orchestrated', 'current-leads': 'Current agent leads' };
 export const MODE_TAGLINE: Record<GroupMode, string> = {
@@ -122,15 +122,16 @@ export function normalizeConfig(config: AgentConfiguration, providers: readonly 
   const info = providers.find((provider) => provider.id === config.provider);
   const configuredDefault = defaultModelFor(config.provider, settings);
   const reportedCurrent = modelOf(info, config.model);
-  const preserveNativeDefault = config.provider === 'antigravity' && config.model === 'default' && !reportedCurrent;
+  const nativeDefault = usesNativeModelDefault(config.provider);
+  const preserveNativeDefault = nativeDefault && config.model === 'default' && !reportedCurrent;
   const model = reportedCurrent ?? (preserveNativeDefault ? undefined : modelOf(info, configuredDefault))
-    ?? (config.provider === 'antigravity' && (config.model === 'default' || configuredDefault === 'default') ? undefined : info?.models[0]);
+    ?? (nativeDefault && (config.model === 'default' || configuredDefault === 'default') ? undefined : info?.models[0]);
   const efforts = effortChoices(model);
   const tiers = tierChoices(model);
   const policies = policyChoices(info, model);
   return {
     provider: config.provider,
-    model: model?.id ?? (config.provider === 'antigravity' && (preserveNativeDefault || configuredDefault === 'default' && !reportedCurrent) ? 'default' : config.model),
+    model: model?.id ?? (nativeDefault && (preserveNativeDefault || configuredDefault === 'default' && !reportedCurrent) ? 'default' : config.model),
     effort: efforts.some((item) => item.id === config.effort) ? config.effort : model?.defaultReasoningEffort ?? efforts[0]?.id ?? config.effort,
     policy: policies.includes(config.policy) ? config.policy : policies.includes(settings.defaultPolicy) ? settings.defaultPolicy : policies[0] ?? config.policy,
     serviceTier: tiers.some((item) => item.id === config.serviceTier) ? config.serviceTier : model?.defaultServiceTier ?? 'standard',
@@ -268,7 +269,7 @@ export function resolveMentions(text: string, members: readonly MentionCandidate
     const label = `@${token.handle}`;
     if (exact) { if (!ids.includes(exact.id)) ids.push(exact.id); continue; }
     if (retiredSet.has(token.handle)) { problems.push({ token: label, message: `${label} was removed from this group.` }); continue; }
-    if (token.handle === 'claude' || token.handle === 'codex' || token.handle === 'antigravity') {
+    if (token.handle === 'claude' || token.handle === 'codex' || token.handle === 'antigravity' || token.handle === 'opencode') {
       const matches = members.filter((member) => member.provider === token.handle);
       if (matches.length === 1) { if (!ids.includes(matches[0]!.id)) ids.push(matches[0]!.id); }
       else if (matches.length === 0) problems.push({ token: label, message: `No active ${providerName(token.handle)} agent in this group for ${label}.` });

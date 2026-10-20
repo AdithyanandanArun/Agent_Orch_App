@@ -231,6 +231,7 @@ export function createApplication(options: ApplicationOptions): RelayApplication
         await Promise.all([closeAntigravityInstall(config.dataDir), closeAntigravityAuth(config.dataDir)]);
         groups.close();
         await runtime.shutdown();
+        await options.providers.close?.().catch((error) => log('warn', 'Provider helper cleanup failed', error));
         teamMcp.close();
         await intelligence.close();
         await repository.close();

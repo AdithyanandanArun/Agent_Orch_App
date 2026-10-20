@@ -43,6 +43,7 @@
 .pmark--codex { color: var(--codex); }
 .pmark--claude { color: var(--claude); }
 .pmark--antigravity { color: var(--fg-1); }
+.pmark--opencode { color: var(--fg-1); }
 
 .sdot { display: inline-flex; align-items: center; gap: 6px; font-size: var(--text-xs); color: var(--fg-2); }
 .sdot i { width: 7px; height: 7px; border-radius: 50%; background: var(--fg-3); flex: none; }

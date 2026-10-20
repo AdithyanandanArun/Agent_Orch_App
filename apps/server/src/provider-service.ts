@@ -6,7 +6,7 @@ import { providerExecutable, providerName } from './provider-config.ts';
 const BOOTSTRAP_WAIT_MS = 4000;
 const USAGE_CACHE_MS = 60_000;
 const USAGE_REFRESH_MIN_MS = 15_000;
-const PROVIDERS: Provider[] = ['codex', 'claude', 'antigravity'];
+const PROVIDERS: Provider[] = ['codex', 'claude', 'antigravity', 'opencode'];
 
 function placeholder(reason: string): ProviderInfo[] {
   return PROVIDERS.map((id) => ({ id, name: providerName(id), available: false, version: null, executable: null, reason, models: [] }));
@@ -62,6 +62,8 @@ export class ProviderService {
   /** Forces a fresh probe (after settings change or explicit refresh). */
   refresh(): Promise<ProviderInfo[]> {
     this.usageCache.clear();
+    this.catalogs.clear();
+    this.catalogInflight.clear();
     return this.probe();
   }
 
