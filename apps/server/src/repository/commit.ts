@@ -34,7 +34,7 @@ function parseRawDiff(output: string): RawChange[] {
  * The commit is built in a private index seeded from HEAD, the branch is advanced with a compare-and-swap, and only then are the
  * committed paths refreshed in the real index. Nothing is reset, discarded or force-updated.
  */
-export async function createCommit(top: string, head: string | null, paths: string[], message: string, options: CommitOptions): Promise<CreatedCommit> {
+export async function createCommit(top: string, branch: string, head: string | null, paths: string[], message: string, options: CommitOptions): Promise<CreatedCommit> {
   const { signal } = options;
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'relay-index-'));
   try {
@@ -61,8 +61,11 @@ export async function createCommit(top: string, head: string | null, paths: stri
 
     const subject = (message.split('\n', 1)[0] ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 120);
     const commit = await writeCommit(top, tree, head, message, options);
+    const ref = `refs/heads/${branch}`;
+    await requireBranchCheckedOut(top, ref, signal);
     try {
-      await git(top, ['update-ref', '-m', `commit: ${subject}`, 'HEAD', commit, head ?? '0'.repeat(commit.length)], { signal });
+      // Advance the captured branch explicitly (never "whatever HEAD is now"), and only from the HEAD that was reviewed.
+      await git(top, ['update-ref', '-m', `commit: ${subject}`, ref, commit, head ?? '0'.repeat(commit.length)], { signal });
     } catch (error) {
       if (error instanceof GitFailure && !error.timedOut) throw conflict(`The branch moved while committing, so nothing was committed. Refresh and try again. (${error.message})`);
       throw error;
@@ -72,6 +75,7 @@ export async function createCommit(top: string, head: string | null, paths: stri
     const entries = changes.map((c) => (c.status === 'D' ? `0 ${'0'.repeat(c.newSha.length)}\t${c.path}` : `${c.newMode} ${c.newSha}\t${c.path}`));
     let indexSynced = true;
     try {
+      await requireBranchCheckedOut(top, ref, signal); // HEAD must still be the branch we just advanced
       await git(top, ['update-index', '-z', '--index-info'], { stdin: `${entries.join('\0')}\0`, signal });
     } catch {
       indexSynced = false;
@@ -94,4 +98,9 @@ async function writeCommit(top: string, tree: string, head: string | null, messa
       ? 'Commit signing timed out waiting for your signing key. Nothing was committed. Unlock the key (for example with your gpg-agent) and try again.'
       : `Commit signing failed and nothing was committed. Relay cannot show a passphrase prompt, so unlock your signing key (for example with your gpg-agent) or change commit.gpgsign in your Git configuration. ${error.message}`);
   }
+}
+
+async function requireBranchCheckedOut(top: string, ref: string, signal?: AbortSignal): Promise<void> {
+  const current = await git(top, ['symbolic-ref', '-q', 'HEAD'], { allowFailure: true, signal });
+  if (current.code !== 0 || current.stdout.trim() !== ref) throw conflict('HEAD no longer points at the branch being committed to. Nothing was committed; refresh and try again.');
 }

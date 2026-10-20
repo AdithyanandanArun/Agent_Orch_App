@@ -1,9 +1,11 @@
+import { realpathSync } from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type {
   GitHubState, RepositoryBranch, RepositoryCommit, RepositoryMutationResult, RepositoryPullRequest, RepositoryPush, RepositoryState,
 } from '@relay/contracts';
+import type { Session } from '@relay/contracts';
 import type { SessionRuntime } from '../runtime.ts';
 import type { Store } from '../store.ts';
 import type { Logger } from '../types.ts';
@@ -27,6 +29,9 @@ export interface RepositoryServiceOptions {
 }
 
 interface MutationContext { scope: Scope; snap: Snapshot; top: string }
+
+/** Held for the whole of a mutation so no provider run can start in the folder while Git is being changed. */
+interface Lease { top: string; sessionId?: string }
 
 const PUSH_TIMEOUT_MS = 120_000;
 const PR_TIMEOUT_MS = 60_000;
@@ -54,6 +59,9 @@ export class RepositoryService {
   private readonly reader = new GitHubReader(this.abort.signal);
   private readonly inflight = new Set<Promise<unknown>>();
   private readonly reads = new Map<string, Promise<Snapshot>>();
+  private readonly leases = new Set<Lease>();
+  /** Work-tree root of session folders that overlap a mutation, so unrelated nested worktrees are not blocked. */
+  private readonly topOf = new Map<string, string>();
   private readonly ciSeen = new Map<string, string>();
   private readonly prSeen = new Map<string, string>();
   private closed = false;
@@ -124,7 +132,7 @@ export class RepositoryService {
 
       const paths = [...new Set([...selected.values()].flatMap((e) => (e.companion ? [e.path, e.companion] : [e.path])))];
       const signal = this.abort.signal;
-      const created = await createCommit(top, state.head, paths, input.message, {
+      const created = await createCommit(top, state.branch!, state.head, paths, input.message, {
         sign: await signingConfigured(top, signal),
         signal,
         // Last look before the commit object is written: any edit, stage or HEAD move since the locked read aborts it.
@@ -156,12 +164,12 @@ export class RepositoryService {
       const notices: string[] = [];
       if (input.create) {
         if (exists) throw conflict(`Branch "${input.name}" already exists.`);
-        if (snap.dirty) notices.push('Uncommitted changes stay in the working tree on the new branch.');
+        if (snap.dirty) throw conflict('The working tree has uncommitted changes. Commit them before creating or switching branches; Relay never discards or stashes work.');
         await this.switchBranch(top, ['switch', '--no-recurse-submodules', '-q', '-c', input.name]);
       } else {
         if (!exists) throw notFound(`Branch "${input.name}" does not exist.`);
         if (state.branch === input.name) return { state, notices: [`Already on ${input.name}.`] };
-        if (snap.dirty) throw conflict('The working tree has uncommitted changes. Commit them before switching branches; Relay never discards or stashes work.');
+        if (snap.dirty) throw conflict('The working tree has uncommitted changes. Commit them before creating or switching branches; Relay never discards or stashes work.');
         await this.switchBranch(top, ['switch', '--no-guess', '--no-recurse-submodules', '-q', '--', input.name]);
       }
       const updated = await this.syncSessionBranches(top, input.name);
@@ -321,15 +329,51 @@ export class RepositoryService {
       const located = await locate(first.root, signal);
       if (located.kind === 'missing') throw conflict('This folder no longer exists on disk.');
       if (located.kind === 'not-repo') throw unprocessable(located.detail ?? 'This folder is not a Git repository.');
-      return this.locks.run(located.top, async () => {
-        this.open();
-        const scope = this.workspace.resolveScope(projectId, sessionId);
-        const snap = await readSnapshot(scope, signal);
-        if (!snap.top || snap.top !== located.top) throw conflict('The repository location changed. Refresh and try again.');
-        await this.assertIdle(scope, snap.top);
-        return task({ scope, snap, top: snap.top });
-      });
+      // The lease is taken synchronously after the path is canonical and before any idle check, so a run that starts later is
+      // refused by assertSessionAvailable and a run that started earlier is seen by assertIdle.
+      const lease: Lease = { top: located.top, ...(first.session ? { sessionId: first.session.id } : {}) };
+      this.leases.add(lease);
+      try {
+        return await this.locks.run(located.top, async () => {
+          this.open();
+          const scope = this.workspace.resolveScope(projectId, sessionId);
+          const snap = await readSnapshot(scope, signal);
+          if (!snap.top || snap.top !== located.top) throw conflict('The repository location changed. Refresh and try again.');
+          await this.indexSessionTops(snap.top);
+          await this.assertIdle(scope, snap.top);
+          return task({ scope, snap, top: snap.top });
+        });
+      } finally {
+        this.leases.delete(lease);
+      }
     });
+  }
+
+  /**
+   * Synchronous guard for the runtime: throws while a repository mutation holds this session's folder. Sessions whose folder
+   * overlaps the mutated work tree are refused unless they are known to belong to a different repository (conservative otherwise).
+   */
+  assertSessionAvailable(session: Session): void {
+    if (!this.leases.size) return;
+    let real: string;
+    try { real = realpathSync(session.worktreePath); } catch { real = path.resolve(session.worktreePath); }
+    for (const lease of this.leases) {
+      if (lease.sessionId !== session.id) {
+        if (!isInside(lease.top, real) && !isInside(real, lease.top)) continue;
+        const known = this.topOf.get(real);
+        if (known !== undefined && known !== lease.top) continue;
+      }
+      throw conflict('A repository change (commit, branch switch, push or pull request) is in progress for this folder. Try again in a moment.');
+    }
+  }
+
+  private async indexSessionTops(top: string): Promise<void> {
+    for (const session of this.store.listSessions()) {
+      const real = await fsp.realpath(session.worktreePath).catch(() => null);
+      if (!real || (!isInside(top, real) && !isInside(real, top))) continue;
+      const located = await locate(real, this.abort.signal);
+      if (located.kind === 'ok') remember(this.topOf, real, located.top);
+    }
   }
 
   /** Rejects when the scoped session, or any session sharing this work tree (including sessions of nested projects), is running. */
