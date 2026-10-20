@@ -107,6 +107,7 @@ export function createApplication(options: ApplicationOptions): RelayApplication
   const log = options.log ?? defaultLogger;
   const config = resolveConfig(options, options.env);
   const store = new Store(openDatabase(path.join(config.dataDir, 'relay.sqlite')));
+  const setupLifecycle = new AbortController();
   recoverInterruptedState(store, log);
 
   let boundPort = config.port;
@@ -130,7 +131,7 @@ export function createApplication(options: ApplicationOptions): RelayApplication
   runtime.setGroupServices(groups, teamMcp);
   groups.recover();
   const services: Services = {
-    config, store, hub, runtime, tasks, terminals, providers, browser, intelligence, repository, groups, handoffs, workspace,
+    config, store, hub, runtime, tasks, terminals, providers, browser, intelligence, repository, groups, handoffs, workspace, setupSignal: setupLifecycle.signal,
     imports: new ImportService(store, options.providers, providers, runtime), directories: new DirectoryService(), projectSources: new ProjectSources(workspace), startedAt: Date.now(), getPort: () => boundPort,
   };
   hub.bind({ onMessage: (socket, raw) => terminals.handleMessage(socket, raw), onClose: (socket) => terminals.releaseSocket(socket) });
@@ -225,6 +226,7 @@ export function createApplication(options: ApplicationOptions): RelayApplication
     address,
     close() {
       closing ??= (async () => {
+        setupLifecycle.abort();
         if (pendingNotify) clearTimeout(pendingNotify);
         await Promise.all([closeAntigravityInstall(config.dataDir), closeAntigravityAuth(config.dataDir)]);
         groups.close();

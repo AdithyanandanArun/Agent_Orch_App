@@ -29,6 +29,7 @@ import { antigravityInstallState, startAntigravityInstall } from './antigravity-
 import { antigravityAuthState, cancelAntigravityAuth, startAntigravityAuth } from './antigravity-auth.ts';
 
 export interface Services {
+  setupSignal: AbortSignal;
   config: ServerConfig; store: Store; hub: Hub; workspace: WorkspaceService; runtime: SessionRuntime; tasks: TaskService; handoffs: HandoffService;
   groups: GroupService; intelligence: ProjectIntelligenceService; repository: RepositoryService; browser: BrowserService; providers: ProviderService; imports: ImportService; directories: DirectoryService; projectSources: ProjectSources; terminals: TerminalManager; startedAt: number; getPort: () => number;
 }
@@ -367,6 +368,7 @@ export function buildRouter(s: Services) {
   add('GET', '/api/providers/antigravity/auth', () => antigravityAuthState(s.config.dataDir, s.store.getSettings()));
   add('POST', '/api/providers/antigravity/auth', async (ctx) => {
     await ctx.body(z.object({}).strict());
+    if (s.setupSignal.aborted) throw new HttpError(503, 'Relay is shutting down.');
     return startAntigravityAuth(s.config.dataDir, s.store.getSettings(), () => {
       s.providers.invalidate();
       touch();
@@ -376,6 +378,7 @@ export function buildRouter(s: Services) {
   add('GET', '/api/providers/antigravity/install', () => antigravityInstallState(s.config.dataDir));
   add('POST', '/api/providers/antigravity/install', async (ctx) => {
     await ctx.body(z.object({}).strict());
+    if (s.setupSignal.aborted) throw new HttpError(503, 'Relay is shutting down.');
     const previousExecutable = s.store.getSettings().antigravityExecutable;
     return startAntigravityInstall(s.config.dataDir, (executable) => {
       s.store.tx(() => {
