@@ -1,3 +1,5 @@
+import { ProviderTaskPlanSchema } from '@relay/contracts';
+import type { ProjectIntelligenceService } from './project-intelligence/service.ts';
 import { existsSync, statSync } from 'node:fs';
 import type { AdapterEvent, Approval, Message, ProviderSkill, RunChanges, Session, ToolActivity, ToolCall } from '@relay/contracts';
 import type { Hub } from './hub.ts';
@@ -52,7 +54,7 @@ export class SessionRuntime {
 
   constructor(
     private readonly store: Store, private readonly hub: Hub, private readonly providers: ProviderRuntime, private readonly tasks: TaskService,
-    private readonly log: Logger, options: RuntimeOptions = {}, private readonly validateSession?: (session: Session) => void, private readonly browserMcp?: BrowserMcpBridge,
+    private readonly log: Logger, options: RuntimeOptions = {}, private readonly validateSession?: (session: Session) => void, private readonly browserMcp?: BrowserMcpBridge, private readonly intelligence?: ProjectIntelligenceService,
   ) {
     // Covers the supported adapters' interrupt grace and escalating process shutdown.
     this.abortGraceMs = options.abortGraceMs ?? 30_000;
@@ -92,6 +94,7 @@ export class SessionRuntime {
         const task = this.store.getTask(options.taskId);
         if (task) this.tasks.markRunning(task);
       }
+      this.intelligence?.trackRequest(session, run.id, options.userMessage?.content ?? content, options.taskId);
       this.store.recordEvent({ projectId: session.projectId, sessionId, type: 'session.run.started', summary: `Run started: ${session.name}`, payload: { runId: run.id, provider: session.provider, model: session.model, taskId: options.taskId ?? null, handoffsIncluded: handoffs.length } });
     });
     this.active.set(sessionId, run);
@@ -176,6 +179,13 @@ export class SessionRuntime {
     if (run.closed) return;
     try {
       switch (event.type) {
+        case 'task.plan': {
+          const { type: _type, ...raw } = event;
+          const plan = ProviderTaskPlanSchema.safeParse(JSON.parse(redactSecrets(JSON.stringify(raw))));
+          const session = this.store.getSession(run.sessionId);
+          if (session && plan.success) this.intelligence?.applyPlan(session, run.id, plan.data);
+          break;
+        }
         case 'session':
           if (event.providerSessionId) this.store.updateSession(run.sessionId, { providerSessionId: event.providerSessionId });
           break;
@@ -410,6 +420,7 @@ export class SessionRuntime {
         }
         if (outcome === 'completed' && !run.firstEvent) this.store.markConsumed(run.consumedHandoffs);
         if (run.taskId) this.tasks.finishRun(run.taskId, outcome);
+        this.intelligence?.finishRun(session, run.id, outcome);
         this.store.recordEvent({
           projectId: session.projectId, sessionId: run.sessionId, type: `session.run.${outcome}`,
           summary: outcome === 'completed' ? `Run completed: ${session.name}` : outcome === 'failed' ? `Run failed: ${session.name}` : `Run interrupted: ${session.name}`,

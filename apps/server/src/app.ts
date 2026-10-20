@@ -24,6 +24,8 @@ import { DirectoryService } from './directories.ts';
 import { ProjectSources } from './project-sources.ts';
 import { BrowserService } from './browser/service.ts';
 import { BrowserError } from './browser/errors.ts';
+import { ProjectIntelligenceService } from './project-intelligence/service.ts';
+import { RepositoryService } from './repository/service.ts';
 import { BrowserMcpBridge } from './browser-mcp.ts';
 
 export interface ApplicationOptions extends ConfigOptions {
@@ -48,6 +50,8 @@ export interface RelayApplication {
   readonly hub: Hub;
   readonly providers: ProviderService;
   readonly browser: BrowserService;
+  readonly intelligence: ProjectIntelligenceService;
+  readonly repository: RepositoryService;
   /** Runs recovery-independent async setup (example workspace). Called by listen(); safe to call repeatedly. */
   initialize(): Promise<void>;
   listen(): Promise<{ host: string; port: number; url: string }>;
@@ -107,13 +111,15 @@ export function createApplication(options: ApplicationOptions): RelayApplication
   const providers = new ProviderService(options.providers, () => store.getSettings(), log, () => store.touch());
   const browser = new BrowserService({ dataDir: config.dataDir, getSettings: () => store.getSettings(), onChange: () => store.touch(), log, sessionExists: (id) => Boolean(store.getSession(id)) });
   const browserMcp = new BrowserMcpBridge(browser, store, () => boundPort, (sessionId, tabId) => hub.broadcast({ type: 'browser.opened', sessionId, tabId }), () => config.host);
+  const intelligence = new ProjectIntelligenceService({ store, tasks, log });
   const runtime = new SessionRuntime(store, hub, options.providers, tasks, log, options.runtime, (session) => {
     resolveRunConfig(providers.cached()?.find((row) => row.id === session.provider), session, { effort: true, policy: true, serviceTier: true });
-  }, browserMcp);
+  }, browserMcp, intelligence);
   const terminals = new TerminalManager(store, hub, log, options.terminal);
   const workspace = new WorkspaceService(store, config.dataDir, runtime, () => providers.cached());
+  const repository = new RepositoryService({ store, workspace, runtime, log });
   const services: Services = {
-    config, store, hub, runtime, tasks, terminals, providers, browser, handoffs: new HandoffService(store), workspace,
+    config, store, hub, runtime, tasks, terminals, providers, browser, intelligence, repository, handoffs: new HandoffService(store), workspace,
     imports: new ImportService(store, options.providers, providers, runtime), directories: new DirectoryService(), projectSources: new ProjectSources(workspace), startedAt: Date.now(), getPort: () => boundPort,
   };
   hub.bind({ onMessage: (socket, raw) => terminals.handleMessage(socket, raw), onClose: (socket) => terminals.releaseSocket(socket) });
@@ -181,10 +187,11 @@ export function createApplication(options: ApplicationOptions): RelayApplication
   const address = () => ({ host: config.host, port: boundPort, url: `http://${config.host.includes(':') ? `[${config.host}]` : config.host}:${boundPort}` });
 
   const app: RelayApplication = {
-    config, store, server, runtime, terminals, hub, providers, browser,
+    config, store, server, runtime, terminals, hub, providers, browser, intelligence, repository,
     initialize() {
       initialized ??= (async () => {
         if (options.exampleWorkspace !== false) await seedExampleWorkspace(store, config.dataDir, log);
+        intelligence.start();
       })();
       return initialized;
     },
@@ -207,6 +214,8 @@ export function createApplication(options: ApplicationOptions): RelayApplication
       closing ??= (async () => {
         if (pendingNotify) clearTimeout(pendingNotify);
         await runtime.shutdown();
+        await intelligence.close();
+        await repository.close();
         browserMcp.close();
         await browser.close();
         terminals.killAll();

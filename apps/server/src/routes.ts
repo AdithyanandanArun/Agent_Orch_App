@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { z } from 'zod';
 import {
-  BrowserConnectSchema, BrowserActionSchema, ApprovalDecisionSchema, ConversationIdSchema, ImportConversationSchema, ProviderSchema, CloneProjectSchema, NewProjectSchema, CreateProjectSchema, CreateSessionSchema, CreateTaskSchema, HandoffSchema, SendMessageSchema, UpdateProjectSchema, UpdateSessionSchema, UpdateSettingsSchema, UpdateTaskSchema,
+  RepositoryCommitSchema, RepositoryPushSchema, RepositoryBranchSchema, RepositoryPullRequestSchema, BrowserConnectSchema, BrowserActionSchema, ApprovalDecisionSchema, ConversationIdSchema, ImportConversationSchema, ProviderSchema, CloneProjectSchema, NewProjectSchema, CreateProjectSchema, CreateSessionSchema, CreateTaskSchema, HandoffSchema, SendMessageSchema, UpdateProjectSchema, UpdateSessionSchema, UpdateSettingsSchema, UpdateTaskSchema,
 } from '@relay/contracts';
 import type { Bootstrap, SessionUsage } from '@relay/contracts';
 import { gitStatus } from './git.ts';
@@ -20,11 +20,13 @@ import { resolveRunConfig } from './session-config.ts';
 import type { ImportService } from './imports.ts';
 import type { DirectoryService } from './directories.ts';
 import type { ProjectSources } from './project-sources.ts';
+import type { ProjectIntelligenceService } from './project-intelligence/service.ts';
+import type { RepositoryService } from './repository/service.ts';
 import type { BrowserService } from './browser/service.ts';
 
 export interface Services {
   config: ServerConfig; store: Store; hub: Hub; workspace: WorkspaceService; runtime: SessionRuntime; tasks: TaskService; handoffs: HandoffService;
-  browser: BrowserService; providers: ProviderService; imports: ImportService; directories: DirectoryService; projectSources: ProjectSources; terminals: TerminalManager; startedAt: number; getPort: () => number;
+  intelligence: ProjectIntelligenceService; repository: RepositoryService; browser: BrowserService; providers: ProviderService; imports: ImportService; directories: DirectoryService; projectSources: ProjectSources; terminals: TerminalManager; startedAt: number; getPort: () => number;
 }
 
 export class Reply {
@@ -202,6 +204,24 @@ export function buildRouter(s: Services) {
     const saved = await writeTextFile(scope.root, rel, content);
     s.store.recordEvent({ projectId: scope.project.id, sessionId: scope.session?.id ?? null, type: 'file.saved', summary: `File saved: ${saved.path}`, payload: { path: saved.path, bytes: Buffer.byteLength(content) } });
     return saved;
+  });
+  const repositoryQuery = z.object({ sessionId: z.string().min(1).max(100).optional(), refresh: z.enum(['true', 'false']).optional() }).strict();
+  add('GET', '/api/projects/:id/repository', (ctx) => {
+    const query = parse(repositoryQuery, Object.fromEntries(ctx.url.searchParams));
+    return s.repository.state(param(ctx, 'id'), query.sessionId);
+  });
+  add('GET', '/api/projects/:id/github', (ctx) => {
+    const query = parse(repositoryQuery, Object.fromEntries(ctx.url.searchParams));
+    return s.repository.github(param(ctx, 'id'), query.sessionId, query.refresh === 'true');
+  });
+  add('POST', '/api/projects/:id/repository/commit', async (ctx) => s.repository.commit(param(ctx, 'id'), await ctx.body(RepositoryCommitSchema)));
+  add('POST', '/api/projects/:id/repository/push', async (ctx) => s.repository.push(param(ctx, 'id'), await ctx.body(RepositoryPushSchema)));
+  add('POST', '/api/projects/:id/repository/branch', async (ctx) => s.repository.branch(param(ctx, 'id'), await ctx.body(RepositoryBranchSchema)));
+  add('POST', '/api/projects/:id/repository/pull-request', async (ctx) => s.repository.pullRequest(param(ctx, 'id'), await ctx.body(RepositoryPullRequestSchema)));
+  add('GET', '/api/projects/:id/context', (ctx) => s.intelligence.context(param(ctx, 'id')));
+  add('POST', '/api/projects/:id/context/refresh', async (ctx) => {
+    await ctx.body(z.object({}).strict());
+    return s.intelligence.refresh(param(ctx, 'id'));
   });
   add('GET', '/api/projects/:id/git', async (ctx) => {
     const scope = s.workspace.resolveScope(param(ctx, 'id'), ctx.url.searchParams.get('sessionId') ?? undefined);
