@@ -10,6 +10,7 @@ export interface RepositoryState {
 export interface GitHubState {
   status: 'available' | 'unavailable' | 'unsupported'; repository: string | null; url: string | null; branch: string | null; head: string | null;
   pullRequest: { number: number; title: string; url: string; state: string; isDraft: boolean; baseBranch: string; headBranch: string } | null;
+  checksComplete?: boolean; workflowsComplete?: boolean;
   checks: { id: string; name: string; status: string; conclusion: string | null; url: string | null }[];
   workflows: { id: string; name: string; title: string; status: string; conclusion: string | null; url: string; headSha: string; branch: string; createdAt: string; updatedAt: string }[];
   fetchedAt: string; notices: string[];
