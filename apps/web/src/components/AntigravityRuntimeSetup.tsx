@@ -171,7 +171,7 @@ export function AntigravityRuntimeSetup({ providerInfo, onProviderChanged }: { p
     }
   };
 
-  const startSignIn = async () => {
+  const startSignIn = async (refresh = false) => {
     if (authBusy || installBusy || install?.state === 'installing') return;
     authActionPending.current = true;
     authRequestId.current++;
@@ -180,9 +180,9 @@ export function AntigravityRuntimeSetup({ providerInfo, onProviderChanged }: { p
     setError(null);
     authCompletionHandled.current = false;
     authStateRef.current = 'authenticating';
-    setAuth({ state: 'authenticating', error: null, phase: 'starting' });
+    setAuth({ state: 'authenticating', error: null, phase: refresh ? 'loading-models' : 'starting' });
     try {
-      const next = await api.startAntigravityAuth();
+      const next = await api.startAntigravityAuth(refresh);
       applyAuthState(next, true, true);
     } catch (cause) {
       const message = errorMessage(cause);
@@ -238,18 +238,20 @@ export function AntigravityRuntimeSetup({ providerInfo, onProviderChanged }: { p
       {install.state === 'installing' ? <p className="agy-runtime__meta" role="status">Installing locally. This may take a few minutes.</p> : null}
     </> : null}
     {canSignIn ? <div className="agy-runtime__auth">
-      {auth.state === 'authenticated' ? <><p className="agy-runtime__meta" role="status">Google sign-in completed. Relay uses the models and capabilities reported by Antigravity.</p><Button size="sm" disabled={blocked} busy={authBusy} onClick={() => void startSignIn()}>Reconnect Google</Button></>
+      {auth.state === 'authenticated' ? <><p className="agy-runtime__meta" role="status">Antigravity catalog loaded. Models, reasoning levels and commands come from your Google account.</p><Button size="sm" disabled={blocked} busy={authBusy} onClick={() => void startSignIn()}>Reconnect Google</Button></>
         : auth.state === 'authenticating' ? <>
-          {cancelling ? <p className="agy-runtime__meta" role="status">Cancelling sign-in…</p>
-            : auth.phase === 'loading-models' ? <p className="agy-runtime__meta" role="status"><strong>Loading Antigravity models…</strong><br />Reading models and capabilities…</p>
+          {cancelling ? <p className="agy-runtime__meta" role="status">Cancelling setup…</p>
+            : auth.phase === 'loading-models' ? <p className="agy-runtime__meta" role="status"><strong>Refreshing Antigravity catalog…</strong><br />Reading models, reasoning levels and slash commands. No model prompt is submitted.</p>
               : authUrl ? <p className="agy-runtime__meta" role="status">Continue in your browser to sign in with Google.</p>
                 : <p className="agy-runtime__meta" role="status">Starting Google sign-in…</p>}
           {authUrl ? <a className="agy-runtime__link" href={authUrl} target="_blank" rel="noreferrer noopener">Open Google sign-in</a> : null}
           {auth.browserError && !cancelling ? <p className="agy-runtime__meta">Browser report: {auth.browserError}</p> : null}
-          <Button size="sm" disabled={installBusy || authBusy} busy={authBusy} onClick={() => void cancelSignIn()}>Cancel sign-in</Button></>
+          <Button size="sm" disabled={installBusy || authBusy} busy={authBusy} onClick={() => void cancelSignIn()}>Cancel setup</Button></>
           : <Button size="sm" disabled={blocked} busy={authBusy} onClick={() => void startSignIn()}>Sign in with Google</Button>}
       {auth.state === 'error' && auth.error ? <p className="agy-runtime__error" role="alert">{auth.error}</p> : null}
       {auth.state === 'idle' ? <p className="agy-runtime__meta">No active sign-in flow is reported. Antigravity may still have a cached account.</p> : null}
+      {auth.state !== 'authenticating' ? <Button size="sm" disabled={blocked} onClick={() => void startSignIn(true)}>Refresh models and commands</Button> : null}
+      {providerInfo?.models.some((model) => model.id !== 'default') ? <p className="agy-runtime__meta">Available models: {providerInfo.models.filter((model) => model.id !== 'default').map((model) => model.name).join(', ')}. Reasoning choices are specific to each model.</p> : null}
     </div> : null}
     {error && error !== shownAuthError && error !== shownInstallError ? <InlineError onRetry={install?.state === 'installing' || auth.state === 'authenticating' ? undefined : () => { setLoading(true); void loadInstall(); void loadAuth(); }}>{error}</InlineError> : null}
     {install?.state === 'installed' ? <p className="agy-runtime__meta">Runtime installation is separate from authentication.</p> : null}
