@@ -4,14 +4,44 @@ import { api, errorMessage } from '../lib/api';
 import { Button, InlineError, Spinner } from './ui';
 
 const POLL_MS = 1_500;
-const IDLE_AUTH: AntigravityAuthState = { state: 'idle', error: null };
+type AuthPhase = 'starting' | 'waiting-for-browser' | 'loading-models';
+/** Auth state with the optional native-login progress fields reported by the server. */
+type AuthView = AntigravityAuthState & { phase?: AuthPhase; authorizationUrl?: string; browserError?: string };
+const IDLE_AUTH: AuthView = { state: 'idle', error: null };
+const AUTH_PHASES: readonly string[] = ['starting', 'waiting-for-browser', 'loading-models'];
+
+/** The authorization URL is sensitive: it is held in component memory only and never logged or stored. */
+function googleAuthUrl(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length > 8_192) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && url.hostname === 'accounts.google.com' && !url.port && !url.username && !url.password ? url.href : null;
+  } catch { return null; }
+}
+
+/** Keeps only fields that are meaningful for the reported state; the link survives only in the active waiting phase. */
+function sanitizeAuth(next: AuthView): AuthView {
+  const result: AuthView = { state: next.state, error: next.error };
+  if (next.state !== 'authenticating') return result;
+  const phase = AUTH_PHASES.includes(next.phase as string) ? next.phase : undefined;
+  if (phase) result.phase = phase;
+  if (phase === 'waiting-for-browser') {
+    const url = googleAuthUrl(next.authorizationUrl);
+    if (url) result.authorizationUrl = url;
+  }
+  if (phase !== 'loading-models' && typeof next.browserError === 'string' && next.browserError.trim()) {
+    result.browserError = next.browserError.replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, '[link omitted]').slice(0, 500);
+  }
+  return result;
+}
 
 export function AntigravityRuntimeSetup({ providerInfo, onProviderChanged }: { providerInfo?: ProviderInfo; onProviderChanged: () => Promise<void> }) {
   const [install, setInstall] = useState<AntigravityInstallState | null>(null);
-  const [auth, setAuth] = useState<AntigravityAuthState>(IDLE_AUTH);
+  const [auth, setAuth] = useState<AuthView>(IDLE_AUTH);
   const [loading, setLoading] = useState(true);
   const [installBusy, setInstallBusy] = useState(false);
   const [authBusy, setAuthBusy] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const installRequestId = useRef(0);
   const installRequestPending = useRef(false);
@@ -58,7 +88,8 @@ export function AntigravityRuntimeSetup({ providerInfo, onProviderChanged }: { p
     }
   }, [onProviderChanged]);
 
-  const applyAuthState = useCallback((next: AntigravityAuthState, allowCompletion: boolean, immediatePost = false) => {
+  const applyAuthState = useCallback((reported: AuthView, allowCompletion: boolean, immediatePost = false) => {
+    const next = sanitizeAuth(reported);
     const previous = authStateRef.current;
     authStateRef.current = next.state;
     setAuth(next);
@@ -150,6 +181,8 @@ export function AntigravityRuntimeSetup({ providerInfo, onProviderChanged }: { p
     setAuthBusy(true);
     setError(null);
     authCompletionHandled.current = false;
+    authStateRef.current = 'authenticating';
+    setAuth({ state: 'authenticating', error: null, phase: 'starting' });
     try {
       const next = await api.startAntigravityAuth();
       applyAuthState(next, true, true);
@@ -169,7 +202,9 @@ export function AntigravityRuntimeSetup({ providerInfo, onProviderChanged }: { p
     authRequestId.current++;
     authRequestPending.current = false;
     setAuthBusy(true);
+    setCancelling(true);
     setError(null);
+    setAuth((current) => ({ state: current.state, error: current.error, ...(current.phase ? { phase: current.phase } : {}) }));
     try {
       applyAuthState(await api.cancelAntigravityAuth(), false);
     } catch (cause) {
@@ -177,6 +212,7 @@ export function AntigravityRuntimeSetup({ providerInfo, onProviderChanged }: { p
     } finally {
       authActionPending.current = false;
       setAuthBusy(false);
+      setCancelling(false);
     }
   };
 
@@ -187,6 +223,7 @@ export function AntigravityRuntimeSetup({ providerInfo, onProviderChanged }: { p
   const canSignIn = Boolean(providerInfo?.executable || install?.state === 'installed');
   const blocked = installBusy || authBusy || install?.state === 'installing' || auth.state === 'authenticating';
   const shownAuthError = canSignIn && auth.state === 'error' ? auth.error : null;
+  const authUrl = auth.state === 'authenticating' && auth.phase === 'waiting-for-browser' && !cancelling ? googleAuthUrl(auth.authorizationUrl) : null;
   const shownInstallError = install?.error ?? null;
 
   return <section className="agy-runtime" aria-labelledby="agy-runtime-title">
@@ -204,7 +241,14 @@ export function AntigravityRuntimeSetup({ providerInfo, onProviderChanged }: { p
     </> : null}
     {canSignIn ? <div className="agy-runtime__auth">
       {auth.state === 'authenticated' ? <><p className="agy-runtime__meta" role="status">Google sign-in completed. Relay uses the models and capabilities reported by Antigravity.</p><Button size="sm" disabled={blocked} busy={authBusy} onClick={() => void startSignIn()}>Reconnect Google</Button></>
-        : auth.state === 'authenticating' ? <><p className="agy-runtime__meta" role="status">Continue in your browser to sign in with Google.</p><Button size="sm" disabled={installBusy || authBusy} busy={authBusy} onClick={() => void cancelSignIn()}>Cancel sign-in</Button></>
+        : auth.state === 'authenticating' ? <>
+          {cancelling ? <p className="agy-runtime__meta" role="status">Cancelling sign-in…</p>
+            : auth.phase === 'loading-models' ? <p className="agy-runtime__meta" role="status"><strong>Loading Antigravity models…</strong><br />Reading models and capabilities…</p>
+              : authUrl ? <p className="agy-runtime__meta" role="status">Continue in your browser to sign in with Google.</p>
+                : <p className="agy-runtime__meta" role="status">Starting Google sign-in…</p>}
+          {authUrl ? <a className="agy-runtime__link" href={authUrl} target="_blank" rel="noreferrer noopener">Open Google sign-in</a> : null}
+          {auth.browserError && !cancelling ? <p className="agy-runtime__meta">Browser report: {auth.browserError}</p> : null}
+          <Button size="sm" disabled={installBusy || authBusy} busy={authBusy} onClick={() => void cancelSignIn()}>Cancel sign-in</Button></>
           : <Button size="sm" disabled={blocked} busy={authBusy} onClick={() => void startSignIn()}>Sign in with Google</Button>}
       {auth.state === 'error' && auth.error ? <p className="agy-runtime__error" role="alert">{auth.error}</p> : null}
       {auth.state === 'idle' ? <p className="agy-runtime__meta">No active sign-in flow is reported. Antigravity may still have a cached account.</p> : null}
