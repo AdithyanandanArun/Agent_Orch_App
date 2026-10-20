@@ -1,5 +1,5 @@
 import type { AntigravityAuthState, AppSettings } from '@relay/contracts';
-import { authenticateAntigravity } from './providers/index.ts';
+import { authenticateAntigravity, probeAuthenticatedAntigravity } from './providers/antigravity/auth.js';
 import { errorMessage, redactSecrets, truncate } from './util.ts';
 import { openGoogleAuthorization } from './providers/antigravity/auth-browser.js';
 
@@ -23,19 +23,20 @@ export function antigravityAuthState(dataDir: string, settings: AppSettings): An
 }
 
 /** Only explicit user sign-in calls this. Google owns the browser flow and credentials. */
-export function startAntigravityAuth(dataDir: string, settings: AppSettings, onAuthenticated: () => void): AntigravityAuthState {
+export function startAntigravityAuth(dataDir: string, settings: AppSettings, onAuthenticated: () => void, options: { refresh?: boolean } = {}): AntigravityAuthState {
   const previous = jobs.get(dataDir);
   const executable = settings.antigravityExecutable ?? '';
   if (previous?.status.state === 'authenticating' && previous.executable === executable) return { ...previous.status };
   previous?.controller.abort();
-  const job: AuthJob = { executable, controller: new AbortController(), status: { state: 'authenticating', phase: 'starting', error: null } };
+  const job: AuthJob = { executable, controller: new AbortController(), status: { state: 'authenticating', phase: options.refresh ? 'loading-models' : 'starting', error: null } };
   jobs.set(dataDir, job);
-  job.settled = authenticateAntigravity(settings, { signal: job.controller.signal, onProgress: (progress) => {
+  const discover = options.refresh ? probeAuthenticatedAntigravity : authenticateAntigravity;
+  job.settled = discover(settings, { signal: job.controller.signal, onProgress: (progress) => {
     if (jobs.get(dataDir) !== job || job.controller.signal.aborted || job.status.state !== 'authenticating') return;
     const previousUrl = job.status.authorizationUrl;
     job.status = { state: 'authenticating', error: null, ...progress };
     const url = progress.authorizationUrl;
-    if (url && url !== previousUrl) void openGoogleAuthorization(url, job.controller.signal).catch(() => {
+    if (!options.refresh && url && url !== previousUrl) void openGoogleAuthorization(url, job.controller.signal).catch(() => {
       if (jobs.get(dataDir) === job && !job.controller.signal.aborted && job.status.authorizationUrl === url) {
         job.status.browserError = 'The default browser could not be opened. Use Open Google sign-in below.';
       }
