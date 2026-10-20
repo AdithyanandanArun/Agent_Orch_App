@@ -21,7 +21,7 @@ Then explicitly install it:
 sudo pacman -U ./release/relay-workspace-bin-0.1.0-1-x86_64.pkg.tar.zst
 ```
 
-Open **Relay** from the application menu, or run `relay-workspace`. The package includes Electron, Node, the compiled local server and the UI. It starts and stops its own local server; users do not need a source checkout, pnpm or a manually started development server. Install/sign in to your preferred provider CLI separately. Data lives in the desktop application's user-data directory, outside `/opt/relay-workspace`.
+Open **Relay** from the application menu, or run `relay-workspace`. The package includes Electron, Node, the compiled local server and the UI. It starts and stops its own local server; users do not need a source checkout, pnpm or a manually started development server. Install and sign in to Codex or Claude separately; Antigravity has a runtime installer under **Settings → Providers**. Data lives in the desktop application's user-data directory, outside `/opt/relay-workspace`.
 
 `yay -S relay-workspace-bin` will work only after an AUR entry is published. See [desktop distribution](docs/desktop-distribution.md) for builds, downloads, updates and release prerequisites.
 
@@ -53,6 +53,10 @@ pnpm start
 **Claude:** the adapter uses the official Claude Agent SDK with your existing local Claude Code login. Run `claude auth login` in a terminal on the same machine and as the same OS user that starts Relay, then use **Settings → Re-check**. Relay asks `claude auth status --json` for login status; it never reads, copies or stores credential files. If Settings selects a different executable than your shell, use that full executable path for login.
 
 Alternatively, set `ANTHROPIC_API_KEY` in the environment that starts Relay. An explicit API key takes precedence over the saved login and uses API billing. Credentials are not entered into the browser. A copied `.env` file is not automatically loaded; export the variable in your shell or use your process manager's environment configuration.
+
+**Antigravity:** open **Settings → Providers → Install Antigravity runtime**, then **Sign in with Google**. Relay uses Google's official ACP runtime, including its required companion harness, rather than the Python SDK or a third-party CLI adapter. Google owns the browser login and credentials. Installation does not start a model turn. You can also select an existing ACP executable with its companion alongside it; the interactive `agy` executable is a different program.
+
+Antigravity models and reasoning choices are discovered during explicit sign-in. **Antigravity default / Native default** keeps Google's native selection. Supervised, Auto-accept edits and Full access map to its reported modes; native Auto review is not advertised. Background checks initialize the protocol without opening a login browser. Native history import, explicit skill attachments and a custom compaction threshold are not currently available for this provider. See [Antigravity integration](docs/provider-antigravity.md) for protocol details and limitations.
 
 An installed executable does not establish authentication or access to every model. Settings show executable and login diagnostics and allow path overrides. Model access, expired credentials and quota errors remain visible when a session runs.
 
@@ -86,7 +90,7 @@ State lives in the ignored `.relay/` directory by default. Override it with `REL
 
 Use **Add agent** in a session to choose **Cowork**, **Orchestrated** with a separate coordinator, or **Current agent leads** with the existing session as orchestrator. Preview each new agent's provider, model, effort, permissions and isolated workspace before adding it. The separate-orchestrator choice also offers Keep/Change for the existing worker's configuration. Creating a group starts no inference.
 
-A shared timeline keeps each member's responses, tools, timing, approvals and file changes distinct. Use `@claude1`, `@codex1` or the recipient picker to address a member. Without a recipient, Cowork lets one peer split the request before the others edit; either coordinated mode sends it to its orchestrator. Both providers receive scoped team tools for actual assignments, peer questions, progress and verified artifact references. Tasks follow those assignments automatically.
+A shared timeline keeps each member's responses, tools, timing, approvals and file changes distinct. Use `@claude1`, `@codex1`, `@antigravity1` or the recipient picker to address a member. Without a recipient, Cowork lets one peer split the request before the others edit; either coordinated mode sends it to its orchestrator. Providers receive scoped team tools for actual assignments, peer questions, progress and verified artifact references. Tasks follow those assignments automatically.
 
 **Settings → Agents & orchestration** saves coordinator/worker defaults and delegation bounds. **Members** opens per-agent settings, queue state, stop/resume and mode/limit controls. Pause holds new scheduling; Stop also interrupts active runs. Queued work stays paused after a server restart until explicitly resumed. Native project skills remain available to providers, but attaching a selected skill through the group composer is not yet supported; independent sessions retain their skill picker.
 
@@ -100,7 +104,7 @@ Opening a project scans its structure and explicit checklist/TODO items. Tasks a
 
 ## Shared browser and context
 
-Open **Browser** in a session’s context pane to use a Relay-managed Chromium or explicitly connect a running Chromium browser with its existing logins and tabs. Both providers receive tools for that same browser. Take control to browse yourself, then release it to the agent. Configure browser defaults in **Settings → Browser** and automatic context compaction in **Settings → General → Context**. See [setup, controls and current limits](docs/shared-browser.md).
+Open **Browser** in a session’s context pane to use a Relay-managed Chromium or explicitly connect a running Chromium browser with its existing logins and tabs. Providers receive tools for that same browser. Take control to browse yourself, then release it to the agent. Configure browser defaults in **Settings → Browser** and supported automatic context compaction in **Settings → General → Context**. See [setup, controls and current limits](docs/shared-browser.md).
 
 ## Desktop development shell
 

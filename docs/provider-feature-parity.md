@@ -17,6 +17,14 @@ Updated 2026-10-20 using native harness protocols and original Relay UI. This re
 | Auto-compaction | Native per-thread token threshold from provider capacity metadata | Native percentage environment override |
 | `/usage` | Native quota windows, credit balance, available reset count and grant expiry details when reported | Native five-hour, seven-day and applicable scoped windows; no spendable credit balance or reset-grant count exposed by the SDK |
 
+## Antigravity
+
+Google's ACP runtime is a third independent provider. Settings includes explicit installation, Google sign-in, cancellation and reconnection. Model choices come from authenticated native configuration metadata; unknown thinking controls remain **Native default**. Supervised, Auto-accept edits and Full access map to ACP modes, with approvals returned to the provider through its permission request protocol. Standard is the only Relay service tier exposed.
+
+Independent sessions and group agents share the existing runtime, worktree, tool activity and change-summary machinery. Browser and team MCP servers are supplied per session with ephemeral authorization. Native conversation IDs are retained for later turns. Native command metadata is cached without sending discovery prompts.
+
+Native history import, explicit skill attachments and a custom compaction threshold are unsupported. Quota reads use only the verified runtime's native maintenance command; unknown credit/reset fields remain unreported. An installed runtime is not proof of a valid Google login or account entitlement. See [Antigravity protocol research and limits](provider-antigravity.md).
+
 ## Relay commands
 
 `/new`, `/stop`, `/settings`, `/model`, `/effort`, `/permissions`, `/tier`, `/skills`, `/usage`, `/status`, `/diff` and `/help` are local Relay actions. They do not start inference. Relay commands take precedence over provider commands with the same names. Other Claude commands dispatch through the SDK's documented slash syntax. Codex terminal UI slash commands require individual client integrations; they are not sent as pretend prompt aliases.
