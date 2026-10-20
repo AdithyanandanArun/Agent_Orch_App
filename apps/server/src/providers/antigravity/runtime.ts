@@ -80,6 +80,9 @@ export function safeAntigravityError(error: unknown, secrets: readonly (string |
 }
 
 export interface AntigravityRuntime { child: ChildLike; conn: AcpConnection; stderr: TextTail; version: string; capabilities: Record<string, unknown>; close(): Promise<void> }
+const live = new Set<() => Promise<void>>();
+/** Includes metadata discovery children, which are not managed by the session run queue. */
+export async function closeAllAntigravity(): Promise<void> { await Promise.allSettled([...live].map((close) => close())); }
 export async function startAntigravity(path: string, companion: string, options: {
   env?: NodeJS.ProcessEnv; spawn?: AntigravitySpawn; timeoutMs?: number; cwd?: string; signal?: AbortSignal; secrets?: readonly (string | undefined)[]; keepLockOnUnresponsive?: boolean;
   notification?: (method: string, params: unknown) => void; request?: (method: string, params: unknown) => Promise<unknown>;
@@ -158,6 +161,8 @@ export async function startAntigravity(path: string, companion: string, options:
       else throw new Error('Antigravity ACP did not stop after process termination.');
     }
   })();
+  live.add(close);
+  void conn.closed.then(() => { live.delete(close); });
   const onAbort = () => { void close().catch(() => undefined); };
   options.signal?.addEventListener('abort', onAbort, { once: true });
   if (options.signal?.aborted) onAbort();

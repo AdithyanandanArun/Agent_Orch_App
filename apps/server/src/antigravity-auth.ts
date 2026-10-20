@@ -22,7 +22,7 @@ export function antigravityAuthState(dataDir: string, settings: AppSettings): An
   return { ...job.status };
 }
 
-/** Only explicit user sign-in calls this. Google owns the browser flow and credentials. */
+/** Explicit sign-in or metadata refresh only. Google owns the browser flow and credentials. */
 export function startAntigravityAuth(dataDir: string, settings: AppSettings, onAuthenticated: () => void, options: { refresh?: boolean } = {}): AntigravityAuthState {
   const previous = jobs.get(dataDir);
   const executable = settings.antigravityExecutable ?? '';
