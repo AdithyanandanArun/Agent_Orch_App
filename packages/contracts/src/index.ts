@@ -66,6 +66,9 @@ export interface AntigravityInstallState {
   state: 'not-installed' | 'installing' | 'installed' | 'error';
   executable: string | null; error: string | null;
 }
+export interface AntigravityAuthState {
+  state: 'idle' | 'authenticating' | 'authenticated' | 'error'; error: string | null;
+}
 export interface ProviderCommand {
   id: string; name: string; description: string; argumentHint?: string;
   source: 'provider' | 'project' | 'user' | 'relay'; kind: 'prompt' | 'action';
