@@ -1,13 +1,9 @@
 import { z } from 'zod';
+import { GroupDefaultsSchema } from './groups';
 
-export const ProviderSchema = z.enum(['codex', 'claude']);
-export type Provider = z.infer<typeof ProviderSchema>;
-export const PolicySchema = z.enum(['supervised', 'balanced', 'auto', 'full-access']);
-export type Policy = z.infer<typeof PolicySchema>;
-// Harness model discovery advertises valid effort/tier identifiers; validate membership on the server.
-export const EffortSchema = z.string().trim().min(1).max(40).regex(/^[a-z][a-z0-9_-]*$/);
-export type Effort = z.infer<typeof EffortSchema>;
-export const ServiceTierSchema = z.string().trim().min(1).max(80).regex(/^[a-z][a-z0-9_-]*$/);
+import { ProviderSchema, PolicySchema, EffortSchema, ServiceTierSchema } from './provider-config';
+import type { Provider, Policy, Effort } from './provider-config';
+export * from './provider-config';
 export type SessionStatus = 'idle' | 'running' | 'waiting' | 'interrupted' | 'error';
 export type TaskStatus = 'backlog' | 'ready' | 'running' | 'blocked' | 'review' | 'done';
 export interface Project { id: string; name: string; path: string; createdAt: string; isExample: boolean }
@@ -111,11 +107,12 @@ export const ImportConversationSchema = z.object({ provider: ProviderSchema, con
 export interface AppSettings {
   defaultProvider: Provider; defaultCodexModel: string; defaultClaudeModel: string; defaultEffort: Effort; defaultIsolated: boolean;
   defaultPolicy: Policy; defaultServiceTier?: string; theme: 'dark' | 'light'; claudeExecutable: string; codexExecutable: string;
+  groupDefaults?: import('./groups').GroupDefaults;
   autoCompactPercent?: number | null;
   browserAgentEnabled?: boolean; browserExecutable?: string;
   browserDefaultMode?: 'managed' | 'existing'; browserExistingSourceId?: string; browserCdpEndpoint?: string;
 }
-export interface Bootstrap { projects: Project[]; sessions: Session[]; messages: Message[]; tasks: Task[]; events: WorkspaceEvent[]; approvals: Approval[]; providers: ProviderInfo[]; settings: AppSettings; version: string; runs: SessionRun[]; toolCalls: ToolCall[] }
+export interface Bootstrap { projects: Project[]; sessions: Session[]; messages: Message[]; tasks: Task[]; events: WorkspaceEvent[]; approvals: Approval[]; providers: ProviderInfo[]; settings: AppSettings; version: string; runs: SessionRun[]; toolCalls: ToolCall[]; groups?: import('./groups').GroupSnapshot[] }
 export interface GitFile { path: string; status: string }
 export interface GitStatus { branch: string; files: GitFile[]; diff: string; isRepo: boolean }
 export interface FileEntry { path: string; name: string; type: 'file' | 'directory' }
@@ -167,6 +164,7 @@ export const UpdateSettingsSchema = z.object({
   defaultIsolated: z.boolean().optional(),
   defaultPolicy: PolicySchema.optional(), defaultServiceTier: ServiceTierSchema.optional(), theme: z.enum(['dark', 'light']).optional(),
   claudeExecutable: z.string().max(4096).optional(), codexExecutable: z.string().max(4096).optional(),
+  groupDefaults: z.lazy(() => GroupDefaultsSchema).optional(),
   autoCompactPercent: z.number().int().min(1).max(95).nullable().optional(),
   browserAgentEnabled: z.boolean().optional(), browserExecutable: z.string().max(4096).optional(),
   browserDefaultMode: z.enum(['managed', 'existing']).optional(), browserExistingSourceId: z.string().max(200).optional(),
@@ -175,7 +173,7 @@ export const UpdateSettingsSchema = z.object({
 export const ApprovalDecisionSchema = z.object({ decision: z.enum(['approved', 'denied']) });
 
 // Provider boundary: implemented independently from persistence and transport.
-export interface RunOptions { providerTaskState?: import('./project-context').ProviderTaskPlan['steps']; session: Session; prompt: string; skills?: ProviderSkill[]; browserMcp?: import('./browser').BrowserMcpConnection; signal: AbortSignal; onEvent: (event: AdapterEvent) => void; requestApproval: (request: { tool: string; description: string; input: Record<string, unknown> }) => Promise<boolean>; settings: AppSettings }
+export interface RunOptions { teamMcp?: import('./groups').TeamMcpConnection; providerTaskState?: import('./project-context').ProviderTaskPlan['steps']; session: Session; prompt: string; skills?: ProviderSkill[]; browserMcp?: import('./browser').BrowserMcpConnection; signal: AbortSignal; onEvent: (event: AdapterEvent) => void; requestApproval: (request: { tool: string; description: string; input: Record<string, unknown> }) => Promise<boolean>; settings: AppSettings }
 export type AdapterEvent =
   | ({ type: 'task.plan' } & import('./project-context').ProviderTaskPlan)
   | { type: 'session'; providerSessionId: string }
@@ -196,3 +194,5 @@ export * from './browser';
 
 export * from './repository';
 export * from './project-context';
+
+export * from './groups';
