@@ -118,8 +118,8 @@ export function useProjectContext(projectId: string | null | undefined): Project
     const before = seen.current;
     seen.current = latestEvent;
     if (!projectId || before === latestEvent) return undefined;
-    const timer = window.setTimeout(() => { void loadContext(projectId); }, 1500);
-    return () => window.clearTimeout(timer);
+    scheduleContextReload(projectId);
+    return undefined;
   }, [latestEvent, projectId]);
 
   const rescan = useCallback(() => (projectId ? rescanContext(projectId) : Promise.resolve()), [projectId]);

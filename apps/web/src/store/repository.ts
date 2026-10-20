@@ -71,7 +71,9 @@ export async function loadRepository(scope: RepoScope, options: { silent?: boole
     const repo = await api.repository(scope.projectId, scope.sessionId, ctl.signal);
     if (repoSeq.get(key) !== seq) return;
     patchEntry(key, { repo, repoError: null, repoLoading: false, repoAt: Date.now() });
-    if (options.github || githubOutdated(entryOf(key))) void loadGithub(scope);
+    const repoNow = entryOf(key).repo;
+    const remote = Boolean(repoNow?.isRepo && repoNow.remotes.length > 0);
+    if (remote && (options.github || githubOutdated(entryOf(key)))) void loadGithub(scope);
   } catch (e) {
     if (isAbort(e) || repoSeq.get(key) !== seq) return;
     patchEntry(key, { repoError: errorMessage(e), repoLoading: false });
