@@ -28,9 +28,12 @@ import type { BrowserService } from './browser/service.ts';
 import { antigravityInstallState, startAntigravityInstall } from './antigravity-install.ts';
 import { antigravityAuthState, cancelAntigravityAuth, startAntigravityAuth } from './antigravity-auth.ts';
 import type { AttachmentService } from './attachments/service.ts';
+import type { AccountService } from './account/service.ts';
+import { AccountConnectionSchema, SaveAccountPreferencesSchema } from '@mingle/contracts';
 import { ATTACHMENT_LIMITS, NativeActionCatalogQuerySchema, nativeActionCommands, nativeActionSkills, unsupportedActionNotes } from '@mingle/contracts';
 
 export interface Services {
+  account: AccountService;
   setupSignal: AbortSignal;
   config: ServerConfig; store: Store; hub: Hub; workspace: WorkspaceService; runtime: SessionRuntime; tasks: TaskService; handoffs: HandoffService;
   groups: GroupService; attachments: AttachmentService; intelligence: ProjectIntelligenceService; repository: RepositoryService; browser: BrowserService; providers: ProviderService; imports: ImportService; directories: DirectoryService; projectSources: ProjectSources; terminals: TerminalManager; startedAt: number; getPort: () => number;
@@ -107,6 +110,16 @@ export function buildRouter(s: Services) {
     return id;
   };
   const emptyBrowserBody = z.object({}).strict();
+  add('GET', '/api/account', () => s.account.snapshot());
+  add('PUT', '/api/account/connection', async (ctx) => s.account.configure(await ctx.body(AccountConnectionSchema)));
+  add('POST', '/api/account/sign-in', async (ctx) => { await ctx.body(emptyBrowserBody); return s.account.startSignIn(); });
+  add('DELETE', '/api/account/sign-in', async (ctx) => { await ctx.body(emptyBrowserBody); return s.account.cancelSignIn(); });
+  add('POST', '/api/account/sign-out', async (ctx) => { await ctx.body(emptyBrowserBody); return s.account.signOut(); });
+  add('GET', '/api/account/preferences', () => s.account.loadPreferences());
+  add('PUT', '/api/account/preferences', async (ctx) => {
+    const body = await ctx.body(SaveAccountPreferencesSchema);
+    return s.account.savePreferences(body.preferences, body.expectedRevision);
+  });
   add('GET', '/api/browser/discovery', () => s.browser.discovery());
   add('POST', '/api/browser/install', async (ctx) => { await ctx.body(emptyBrowserBody); return s.browser.install(); });
   add('GET', '/api/sessions/:id/browser', (ctx) => s.browser.status(browserSession(ctx)));

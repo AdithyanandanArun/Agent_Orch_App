@@ -33,6 +33,7 @@ import { closeAntigravityInstall } from './antigravity-install.ts';
 import { closeAntigravityAuth } from './antigravity-auth.ts';
 import { AttachmentService } from './attachments/service.ts';
 import { handleAttachmentRequest } from './attachments/router.ts';
+import { AccountService } from './account/service.ts';
 
 export interface ApplicationOptions extends ConfigOptions {
   /** Provider adapters and detection. Inject a fake in tests; the CLI entry passes ./providers/index.ts. */
@@ -110,6 +111,7 @@ export function createApplication(options: ApplicationOptions): MingleApplicatio
   const log = options.log ?? defaultLogger;
   const config = resolveConfig(options, options.env);
   const store = new Store(openDatabase(path.join(config.dataDir, 'relay.sqlite')));
+  const account = new AccountService(config.dataDir, options.env ?? process.env, () => store.touch());
   const setupLifecycle = new AbortController();
   recoverInterruptedState(store, log);
 
@@ -136,7 +138,7 @@ export function createApplication(options: ApplicationOptions): MingleApplicatio
   runtime.setGroupServices(groups, teamMcp);
   groups.recover();
   const services: Services = {
-    config, store, hub, runtime, tasks, terminals, providers, browser, intelligence, repository, groups, handoffs, workspace, attachments, setupSignal: setupLifecycle.signal,
+    config, store, hub, runtime, tasks, terminals, providers, browser, intelligence, repository, groups, handoffs, workspace, attachments, account, setupSignal: setupLifecycle.signal,
     imports: new ImportService(store, options.providers, providers, runtime), directories: new DirectoryService(), projectSources: new ProjectSources(workspace), startedAt: Date.now(), getPort: () => boundPort,
   };
   hub.bind({ onMessage: (socket, raw) => terminals.handleMessage(socket, raw), onClose: (socket) => terminals.releaseSocket(socket) });
@@ -234,6 +236,7 @@ export function createApplication(options: ApplicationOptions): MingleApplicatio
     close() {
       closing ??= (async () => {
         setupLifecycle.abort();
+        await account.close();
         if (pendingNotify) clearTimeout(pendingNotify);
         await Promise.all([closeAntigravityInstall(config.dataDir), closeAntigravityAuth(config.dataDir)]);
         groups.close();
