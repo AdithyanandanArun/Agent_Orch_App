@@ -8,6 +8,11 @@ import { getCodexUsage } from './codex/usage.js';
 import { getClaudeUsage } from './claude/usage.js';
 import { listCodexConversations, readCodexConversation } from './codex/history.js';
 import { listClaudeConversations, readClaudeConversation } from './claude/history.js';
+import { createAntigravityAdapter } from './antigravity/adapter.js';
+import { getAntigravityCatalog } from './antigravity/catalog.js';
+import { getAntigravityUsage } from './antigravity/usage.js';
+import { authenticateAntigravity, probeAuthenticatedAntigravity } from './antigravity/auth.js';
+import { ProviderError } from './common.js';
 
 export type { AdapterEvent, AgentAdapter, RunOptions } from '@relay/contracts';
 export { CLAUDE_DEFAULT_MODEL, CODEX_DEFAULT_MODEL } from './detect.js';
@@ -18,6 +23,7 @@ export function createAdapter(provider: Provider): AgentAdapter {
   switch (provider) {
     case 'codex': return createCodexAdapter();
     case 'claude': return createClaudeAdapter();
+    case 'antigravity': return createAntigravityAdapter();
     default: throw new Error(`Unknown provider: ${String(provider)}`);
   }
 }
@@ -26,21 +32,38 @@ export function createAdapter(provider: Provider): AgentAdapter {
 export function detectProviders(settings: AppSettings): Promise<ProviderInfo[]> {
   return detect(settings);
 }
+export { authenticateAntigravity, probeAuthenticatedAntigravity };
 
 /** Native catalog metadata only: no prompt or model turn is submitted. */
 export function getCatalog(session: Session, settings: AppSettings): Promise<ProviderCatalog> {
-  return session.provider === 'codex' ? getCodexCatalog(session, settings) : getClaudeCatalog(session, settings);
+  switch (session.provider) {
+    case 'codex': return getCodexCatalog(session, settings);
+    case 'claude': return getClaudeCatalog(session, settings);
+    case 'antigravity': return getAntigravityCatalog(session, settings);
+  }
 }
 
 /** Read account quota metadata without inference, credential extraction, or spending reset credits. */
 export function getUsage(session: Session, settings: AppSettings): Promise<ProviderUsage> {
-  return session.provider === 'codex' ? getCodexUsage(session, settings) : getClaudeUsage(session, settings);
+  switch (session.provider) {
+    case 'codex': return getCodexUsage(session, settings);
+    case 'claude': return getClaudeUsage(session, settings);
+    case 'antigravity': return getAntigravityUsage(session, settings);
+  }
 }
 
 export function listConversations(provider: Provider, settings: AppSettings, options: ConversationListOptions): Promise<ExternalConversationList> {
-  return provider === 'codex' ? listCodexConversations(settings, options) : listClaudeConversations(settings, options);
+  switch (provider) {
+    case 'codex': return listCodexConversations(settings, options);
+    case 'claude': return listClaudeConversations(settings, options);
+    case 'antigravity': return Promise.resolve({ conversations: [], nextCursor: null, notices: ['Antigravity native conversation import is not supported by Relay.'] });
+  }
 }
 
 export function readConversation(provider: Provider, settings: AppSettings, id: string): Promise<ExternalConversationDetails> {
-  return provider === 'codex' ? readCodexConversation(settings, id) : readClaudeConversation(settings, id);
+  switch (provider) {
+    case 'codex': return readCodexConversation(settings, id);
+    case 'claude': return readClaudeConversation(settings, id);
+    case 'antigravity': return Promise.reject(new ProviderError('Antigravity native conversation import is not supported by Relay.', { code: 'history_unsupported' }));
+  }
 }

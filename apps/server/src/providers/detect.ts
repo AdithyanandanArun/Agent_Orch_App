@@ -10,6 +10,7 @@ import { CLAUDE_POLICIES, probeClaudeModels } from './claude/capabilities.js';
 import { TextTail, cleanEnv, errorMessage, isRecord, redactSecrets, truncate } from './common.js';
 import { bundledClaudeCandidates, resolveExecutable, type ResolvedExecutable } from './discovery.js';
 import { runProbe, shutdownChild, settlesWithin, type ChildLike, type ProbeFn } from './process.js';
+import { antigravityInfo, ANTIGRAVITY_DEFAULT, cachedAntigravityMetadata, closeAntigravity, resolveAntigravity, startAntigravity } from './antigravity/runtime.js';
 
 export const CODEX_DEFAULT_MODEL = 'gpt-6.1-sol';
 const CODEX_DEFAULT_MODEL_ENTRY = { id: CODEX_DEFAULT_MODEL, name: 'GPT-6.1 Sol' };
@@ -21,6 +22,32 @@ export interface DetectDeps {
   spawn?: (file: string, args: string[], options: Parameters<typeof spawn>[2]) => ChildLike;
   /** Overall deadline for the Codex app-server probe. */
   codexProbeTimeoutMs?: number;
+}
+
+/** ACP initialization is a safe runtime check: it does not authenticate or create a session. */
+export async function detectAntigravity(settings: AppSettings, deps: DetectDeps = {}): Promise<ProviderInfo> {
+  const env = deps.env ?? process.env;
+  const found = await resolveAntigravity(settings, env, deps.home);
+  if (!found.ok) return antigravityInfo(null, null, [ANTIGRAVITY_DEFAULT], false, found.reason);
+  // Test and embedded callers that inject only discovery dependencies never launch a real provider.
+  if (!deps.spawn && (deps.probe || deps.env || deps.home)) return antigravityInfo(found.executable.path, null, [ANTIGRAVITY_DEFAULT], false, 'Antigravity ACP runtime was not probed because provider dependencies were injected.');
+  let runtime: Awaited<ReturnType<typeof startAntigravity>> | undefined;
+  try {
+    runtime = await startAntigravity(found.executable.path, found.executable.companion, {
+      env, cwd: process.cwd(),
+      ...(deps.spawn ? { spawn: deps.spawn as never } : {}), timeoutMs: 12_000,
+    });
+    const cached = cachedAntigravityMetadata(found.executable.path, env);
+    const mcp = runtime.capabilities.mcpCapabilities;
+    const note = isRecord(mcp) && mcp.http === true
+      ? 'Google sign-in is not verified; sign in from Settings. Authentication is checked when a run starts.'
+      : 'ACP connected, but it did not advertise HTTP MCP support; Relay team MCP runs will be unavailable. Google sign-in is not verified.';
+    return antigravityInfo(found.executable.path, runtime.version, cached?.models ?? [ANTIGRAVITY_DEFAULT], true, note);
+  } catch (error) {
+    return antigravityInfo(found.executable.path, null, [ANTIGRAVITY_DEFAULT], false, `Antigravity ACP could not initialize: ${truncate(redactSecrets(errorMessage(error)), 350)}`);
+  } finally {
+    if (runtime) await closeAntigravity(runtime);
+  }
 }
 
 function skippedNote(executable: ResolvedExecutable, label: string): string | null {
@@ -185,10 +212,10 @@ const inFlight = new Map<string, Promise<ProviderInfo[]>>();
 
 /** Reports real availability. Concurrent calls with identical settings share one probe. */
 export function detectProviders(settings: AppSettings, deps: DetectDeps = {}): Promise<ProviderInfo[]> {
-  const key = JSON.stringify([settings.claudeExecutable, settings.codexExecutable, deps.env === undefined ? 'process' : 'custom']);
+  const key = JSON.stringify([settings.claudeExecutable, settings.codexExecutable, settings.antigravityExecutable, deps.env === undefined ? 'process' : 'custom']);
   const pending = inFlight.get(key);
   if (pending && !deps.probe && !deps.spawn) return pending;
-  const run = Promise.all([detectCodex(settings, deps), detectClaude(settings, deps)]).then(([codex, claude]) => [codex, claude]);
+  const run = Promise.all([detectCodex(settings, deps), detectClaude(settings, deps), detectAntigravity(settings, deps)]).then(([codex, claude, antigravity]) => [codex, claude, antigravity]);
   if (!deps.probe && !deps.spawn) {
     inFlight.set(key, run);
     void run.finally(() => inFlight.delete(key)).catch(() => undefined);
