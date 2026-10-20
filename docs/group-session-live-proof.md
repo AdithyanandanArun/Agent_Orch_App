@@ -73,6 +73,7 @@ Request acceptance to final delivery completion spanned approximately **8 minute
 - `git diff e4f0d3f..HEAD --check`: passed.
 - `npm start`: server started on a dynamically reserved loopback port; `GET /api/contacts` returned HTTP 200 with an empty list. The process was stopped and temporary data removed.
 - A fresh headless Playwright Chromium context loaded the final integrated page, filled the form, submitted it, observed success feedback, confirmed one matching API and disk record, and reported zero page errors. This final browser check ran after commit `39f72e4`.
+- After stopping Relay, read-only SQLite `PRAGMA integrity_check` returned `ok` and `PRAGMA foreign_key_check` returned zero rows; the five provider runs were completed and the five project tasks remained Review. The first query used a mistaken table name and was corrected to `session_runs` before recording these results.
 
 The example defines no build script; the production-style start command and Node syntax checks were used instead.
 
