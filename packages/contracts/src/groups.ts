@@ -57,6 +57,8 @@ export interface GroupRequest {
 }
 export interface GroupDelivery {
   id: string; groupId: string; requestId: string; messageId: string; memberId: string;
+  /** Durable dispatch purpose; optional for older snapshots. Completion is a turn outcome, not task acceptance. */
+  kind?: 'request' | 'assignment' | 'message' | 'result';
   status: 'queued' | 'running' | 'completed' | 'failed' | 'interrupted' | 'cancelled';
   runId: string | null; hop: number; error: string | null; createdAt: string; updatedAt: string;
 }

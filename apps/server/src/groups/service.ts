@@ -101,6 +101,7 @@ export class GroupService {
     const rows = [...new Map([...this.repo.recentDeliveries(group.id, SNAPSHOT_DELIVERIES), ...this.repo.deliveries(group.id).filter((d) => OPEN_DELIVERY.includes(d.status) || d.retryable)].map((d) => [d.id, d])).values()];
     const deliveries: GroupDelivery[] = rows.map((d) => ({
       id: d.id, groupId: d.groupId, requestId: d.requestId, messageId: d.messageId, memberId: d.memberId, status: d.status, runId: d.runId, hop: d.hop,
+      kind: d.kind,
       error: d.error, createdAt: d.createdAt, updatedAt: d.updatedAt,
     }));
     const requests = [...new Map([...this.repo.requests(group.id, SNAPSHOT_REQUESTS), ...rows.map((d) => this.repo.getRequest(d.requestId)).filter((r): r is NonNullable<typeof r> => Boolean(r))].map((r) => [r.id, r])).values()];
@@ -1264,4 +1265,3 @@ export class GroupService {
     }
   }
 }
-
