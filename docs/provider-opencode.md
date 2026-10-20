@@ -87,3 +87,9 @@ Only commands the native list advertises are shown. Terminal-only built-ins (`/u
 - Relay's own `detectOpencode`, `getOpencodeCatalog` and adapter setup path (session creation, model/effort selection, resume, rejection cases, abort and process cleanup) were exercised against the real binary with `session/prompt` intercepted locally, so no model request was sent. Probe-created native sessions were deleted afterward.
 
 Not exercised: any live inference, streamed assistant text, real tool calls, real permission prompts, a real native slash-command execution, cost/usage reporting from a real turn, other providers' credentials, and non-Linux platforms. Those paths follow the documented ACP shapes and the upstream protocol source but have not been observed against a live OpenCode turn.
+
+## Installed desktop delivery, 2026-10-20
+
+Code at `8dcc425` passed `pnpm typecheck` and `pnpm package:arch`. The Arch package was checksum-checked, reinstalled on this device and restarted while Relay had no active runs or terminals. The installed backend matches the staged bundle SHA-256 `5b18bce9bda4d27057bf8d2db788f169da3f8b9ad76e654b7df9c13058b48079`; package SHA-256 is `db95c744922d0c253ddb79b64c967cc1ae03d1dc3e0fceea4818471c630cecc2`.
+
+The installed health and provider endpoints reported Codex 0.160.1, Claude 2.1.292, Antigravity ACP 1.4.1 and OpenCode 1.19.3 as available. OpenCode returned ten concrete models, per-model native variants and sixteen native commands through no-prompt catalog discovery. Antigravity recovered Gemini 3.8 Flash with low/medium/high reasoning and its native command catalog from the validated cache in a separate process. The collaborative browser's Settings view showed all four providers, the OpenCode executable field and Antigravity's Refresh models and commands action. Existing projects and sessions were retained. No live inference turn or automatic test suite was run.
