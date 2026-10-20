@@ -220,7 +220,7 @@ export function maskNonActionable(text: string): string {
     if (!closer || word(text[i - 1])) continue;
     let end = text.indexOf('\n', i + 1);
     if (end < 0) end = chars.length;
-    for (let j = i + 1; j < end; j++) {
+    for (let j = i + 1; j < chars.length; j++) {
       if (chars[j] !== closer || escaped(j)) continue;
       if ((closer === "'" || closer === '’') && word(text[j - 1]) && word(text[j + 1])) continue;
       end = j + 1; break;

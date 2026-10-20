@@ -3,7 +3,7 @@ import { useRelay, useActiveSession, useActiveGroup, useProject } from '../store
 import { api, errorMessage } from '../lib/api';
 import { Button, IconButton, Menu, MenuItem, MenuSeparator } from './ui';
 import { useState } from 'react';
-import { groupSessionStatus } from '../lib/groups';
+import { activeMembers, isBusy } from '../lib/groups';
 import { stopGroup } from '../lib/groupActions';
 
 const TITLES = { workspace: 'Workspace', tasks: 'Tasks', activity: 'Activity', map: 'Agent map', settings: 'Settings' } as const;
@@ -19,6 +19,7 @@ export function Header() {
   const terminalOpen = useRelay((s) => s.terminalOpen);
   const { openDialog, toggleContext, toggleTerminal, setSidebarOpen } = useRelay.getState();
   const [stopping, setStopping] = useState(false);
+  const hasActiveRun = group ? activeMembers(group).some((member) => isBusy(sessions.find((item) => item.id === member.sessionId))) : isBusy(session);
 
   const interrupt = async () => {
     if (!session) return;
@@ -52,7 +53,7 @@ export function Header() {
         <span className="crumbs__current" title={session?.branch ?? undefined}>{view === 'workspace' ? session?.name ?? 'Workspace' : TITLES[view]}</span>
       </div>
       <div className="header__actions">
-        {view === 'workspace' && session && (group ? ['running', 'waiting'].includes(groupSessionStatus(group, sessions)) : ['running', 'waiting'].includes(session.status)) ? (
+        {view === 'workspace' && session && hasActiveRun ? (
           <Button size="sm" variant="danger" busy={stopping} onClick={interrupt}><Square size={11} fill="currentColor" /> {group ? 'Stop group' : 'Interrupt'}</Button>
         ) : null}
         {view === 'tasks' ? (
@@ -68,7 +69,7 @@ export function Header() {
               trigger={(p) => <IconButton label="Session actions" disabled={!session} why="No session selected" {...p}><MoreHorizontal size={16} /></IconButton>}
             >
               <MenuItem icon={<Pencil size={14} />} onSelect={() => session && openDialog({ kind: 'rename', sessionId: session.id })}>Rename session</MenuItem>
-              <MenuItem icon={<Square size={14} />} disabled={!session || (group ? !['running', 'waiting'].includes(groupSessionStatus(group, sessions)) : !['running', 'waiting'].includes(session.status))} why="No active run to stop" onSelect={interrupt}>{group ? 'Stop group' : 'Interrupt run'}</MenuItem>
+              <MenuItem icon={<Square size={14} />} disabled={!session || !hasActiveRun} why="No active run to stop" onSelect={interrupt}>{group ? 'Stop group' : 'Interrupt run'}</MenuItem>
               {!group ? <><MenuSeparator /><MenuItem danger icon={<Archive size={14} />} onSelect={() => session && openDialog({ kind: 'archive', sessionId: session.id })}>Archive session…</MenuItem></> : null}
             </Menu>
           </>
