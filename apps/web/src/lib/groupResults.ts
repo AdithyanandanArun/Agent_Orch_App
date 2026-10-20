@@ -61,7 +61,28 @@ const unique = <T,>(items: readonly T[]): T[] => [...new Set(items)];
 
 /** Short plain-text preview for line-clamped display; formatting characters only, no interpretation. */
 export function reportPreview(text: string, max = 420): string {
-  const flat = text.replace(/```[^\n]*\n?/g, ' ').replace(/^\s{0,3}#{1,6}\s+/gm, '').replace(/^\s{0,3}>\s?/gm, '').replace(/[*`]+/g, '').replace(/\s+/g, ' ').trim();
+  const readable = text.replace(/!?\[([^\]]*)\]\((?:\\.|[^()\\]|\([^)]*\))*\)/g, '$1');
+  const plain = (line: string) => line.replace(/^\s{0,3}#{1,6}\s+/, '').replace(/^\s*(?:[-*+]\s+|\d+[.)]\s+)/, '').replace(/[*`]/g, '').trim();
+  const lines = readable.split(/\r?\n/).filter((line) => {
+    const value = plain(line);
+    if (!value || /^(?:(?:work|agent|final|completion)\s+)?(?:summary|report)\s*:?$/i.test(value)) return false;
+    if (/^status\s*:\s*(?:review|in review|needs review|awaiting review)[.!]?$/i.test(value)) return false;
+    if (/^(?:task|assignment)(?:\s+id)?\s*[:#-]/i.test(value) && /\b(?:tsk|asg)_[\w-]+\b/.test(value)) {
+      const remainder = value.replace(/\b(?:task|assignment)(?:\s+id)?\s*[:#-]?/gi, '').replace(/\b(?:tsk|asg)_[\w-]+\b/g, '').replace(/[\s_'"()[\]{}:,.;|/\\—–-]/g, '');
+      if (!remainder) return false;
+    }
+    const scope = /^scope\s*:\s*(.*)$/i.exec(value);
+    if (scope) {
+      const paths = scope[1]!.replace(/["'[\]]/g, '').split(/\s*[,;|·]\s*/).filter(Boolean);
+      if (!paths.length || paths.every((path) => !/\s/.test(path))) return false;
+    }
+    return true;
+  });
+  const changes = lines.findIndex((line) => /^(?:changes(?: made)?|what (?:changed|was changed)|implementation(?: summary)?|updates)\s*:?$/i.test(plain(line)));
+  // Metadata-only preambles are gone; retain any earlier outcome or blocker, including a heading.
+  const focused = changes === 0 ? lines.slice(1) : lines;
+  const selected = focused.length ? focused.join('\n') : readable;
+  const flat = selected.replace(/```[^\n]*\n?/g, ' ').replace(/^\s{0,3}#{1,6}\s+/gm, '').replace(/^\s{0,3}>\s?/gm, '').replace(/[*`]+/g, '').replace(/\s+/g, ' ').trim();
   return flat.length > max ? `${flat.slice(0, max).trimEnd()}…` : flat;
 }
 
