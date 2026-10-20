@@ -26,6 +26,11 @@ export function ContextPane() {
   const browserLive = useBrowserStore((s) => (session ? s.states[session.id]?.status === 'connected' : false));
   useEffect(() => setVisited((v) => (v.has(tab) ? v : new Set(v).add(tab))), [tab]);
 
+  const close = () => {
+    toggleContext(false);
+    window.requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('button[aria-label="Show context pane"]')?.focus({ preventScroll: true }));
+  };
+
   const onKey = (e: React.KeyboardEvent) => {
     const i = TABS.findIndex((t) => t.id === tab);
     if (e.key === 'ArrowRight') setContextTab(TABS[(i + 1) % TABS.length]!.id);
@@ -36,14 +41,15 @@ export function ContextPane() {
   };
 
   return (
-    <aside className={cx('context', open && 'is-open')} aria-label="Context" aria-hidden={!open}>
+    <aside className={cx('context', open && 'is-open')} aria-label="Context" aria-hidden={!open} inert={!open}>
+      <div className="context__content">
       <div className="context__tabs" role="tablist" aria-label="Context sections" ref={listRef} onKeyDown={onKey}>
         {TABS.map(({ id, label, icon: Icon }) => (
           <button key={id} type="button" role="tab" id={`ctx-tab-${id}`} aria-selected={tab === id} aria-controls={`ctx-panel-${id}`} tabIndex={tab === id ? 0 : -1} className={cx('ctab', tab === id && 'is-active')} onClick={() => setContextTab(id)}>
             <Icon size={13} aria-hidden="true" />{label}{id === 'browser' && browserLive ? <i className="ctab__live" title="Browser connected" role="img" aria-label="connected" /> : null}
           </button>
         ))}
-        <IconButton label="Close context pane" className="context__close" onClick={() => toggleContext(false)}><X size={15} /></IconButton>
+        <IconButton label="Close context pane" className="context__close" onClick={close}><X size={15} /></IconButton>
       </div>
       <div className="context__body">
         {TABS.map(({ id }) => (
@@ -55,6 +61,7 @@ export function ContextPane() {
             ) : null}
           </div>
         ))}
+      </div>
       </div>
     </aside>
   );

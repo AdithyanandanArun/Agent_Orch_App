@@ -84,7 +84,7 @@ export function App() {
     <div className={cx('app', `view-${view}`)}>
       <a className="skip" href="#main">Skip to content</a>
       <Sidebar />
-      {sidebarOpen ? <button type="button" className="sidebar-scrim" aria-label="Close sidebar" tabIndex={-1} onClick={() => useRelay.getState().setSidebarOpen(false)} /> : null}
+      <button type="button" className={cx('sidebar-scrim', sidebarOpen && 'is-open')} aria-label="Close sidebar" aria-hidden={!sidebarOpen} inert={!sidebarOpen} tabIndex={-1} onClick={() => useRelay.getState().setSidebarOpen(false)} />
       <main className="main" id="main" tabIndex={-1}>
         <Header />
         <ConnectionBanner />

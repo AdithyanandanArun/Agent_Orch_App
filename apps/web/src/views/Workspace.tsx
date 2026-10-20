@@ -110,7 +110,7 @@ export function Workspace() {
         ) : null}
       </div>
       <ContextPane />
-      {contextOpen ? <button type="button" className="context-scrim" aria-label="Close context pane" tabIndex={-1} onClick={() => useRelay.getState().toggleContext(false)} /> : null}
+      <button type="button" className={cx('context-scrim', contextOpen && 'is-open')} aria-label="Close context pane" aria-hidden={!contextOpen} inert={!contextOpen} tabIndex={-1} onClick={() => useRelay.getState().toggleContext(false)} />
     </div>
   );
 }
