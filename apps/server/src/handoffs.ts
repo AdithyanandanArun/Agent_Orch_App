@@ -19,7 +19,7 @@ export class HandoffService {
    * source session's history. Nothing is merged and no provider run is started; the receiving session gets a durable
    * system message that is included in its next explicit run.
    */
-  async create(input: HandoffInput): Promise<WorkspaceEvent> {
+  async create(input: HandoffInput, assertAuthorized?: () => void): Promise<WorkspaceEvent> {
     if (input.fromSessionId === input.toSessionId) throw unprocessable('Source and target sessions must differ');
     const from = this.store.getSession(input.fromSessionId);
     const to = this.store.getSession(input.toSessionId);
@@ -61,6 +61,7 @@ export class HandoffService {
     const reference = `handoff:${from.id}@${shortCommit}:${artifactPath}#${blob!.slice(0, 12)}`;
 
     return this.store.tx(() => {
+      assertAuthorized?.();
       const content = this.composeMessage({ from: from.name, provider: from.provider, branch: from.branch, worktree: from.worktreePath, artifactPath, commit, blob: blob!, size, reference, note: input.note, inline });
       const message = this.store.insertMessage({ sessionId: to.id, role: 'system', kind: 'handoff', content });
       return this.store.recordEvent({
