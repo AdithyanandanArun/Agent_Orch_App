@@ -67,16 +67,20 @@ function GroupMessageRow({ item, snapshot }: { item: GroupItem; snapshot: GroupS
   }
   if (message.kind === 'status') {
     const resultHandoff = !sender && deliveries.length > 0;
+    const states = new Set(deliveries.map((delivery) => delivery.status));
+    const followUp = states.has('running') ? 'Follow-up running' : states.has('queued') ? 'Follow-up queued'
+      : states.has('failed') ? 'Follow-up failed' : states.has('interrupted') ? 'Follow-up interrupted'
+        : states.has('cancelled') ? 'Follow-up cancelled' : states.has('completed') ? 'Follow-up finished' : 'Results ready';
     return (
       <section className={cx('group-status', resultHandoff && 'group-status--result')} role="note" aria-label={resultHandoff ? 'Results handoff' : 'Group status'}>
         <i aria-hidden="true" />
         <div className="group-status__main">
           <div className="group-status__heading">
             {sender ? <AgentIdentity handle={sender.handle} identityKey={sender.sessionId} provider={providerOf(sender)} /> : null}
-            {resultHandoff ? <><span className="group-status__source">Group</span><strong>Results ready</strong></> : <span>{message.content}</span>}
+            {resultHandoff ? <strong>{followUp}</strong> : <span>{message.content}</span>}
             {resultHandoff && recipients.length ? <><ArrowRight size={12} aria-hidden="true" /><Handles speakersList={recipients} sessions={sessions} /></> : null}
           </div>
-          <DeliveryChips deliveries={deliveries} snapshot={snapshot} sessions={sessions} />
+          {!resultHandoff ? <DeliveryChips deliveries={deliveries} snapshot={snapshot} sessions={sessions} /> : null}
           {resultHandoff ? <details className="group-status__detail"><summary>Show result details</summary><div><Markdown text={message.content} /></div></details> : null}
         </div>
         {time}

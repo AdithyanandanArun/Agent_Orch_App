@@ -7,7 +7,8 @@ import { useRelay, useProject } from '../store/store';
 import { useProjectContext } from '../store/projectContext';
 import { clockTime, cx } from '../lib/format';
 import { formatElapsed } from '../lib/activity';
-import { Badge, Button, EmptyState, PROVIDER_NAME, ProviderMark, StatusDot } from '../components/ui';
+import { Badge, Button, EmptyState, PROVIDER_NAME, StatusDot } from '../components/ui';
+import { AgentIdentity } from '../components/group/AgentIdentity';
 import { ContextCard } from '../components/automation/ContextSummary';
 import { SourceBadges } from '../components/automation/TaskSource';
 import { MAX_AGENT_NODES, MAX_COMPONENT_NODES, MAX_TASK_NODES, buildGraph, type AgentData, type Component, type ComponentData, type RootData, type SessionData, type TaskData } from './map/graph';
@@ -38,6 +39,14 @@ function ComponentNode({ data, selected }: NodeProps<Node<ComponentData>>) {
     </div>
   );
 }
+function SessionIdentity({ session }: { session: Session }) {
+  const member = useRelay((state) => {
+    const memberships = state.boot?.groups?.flatMap((snapshot) => snapshot.members) ?? [];
+    return memberships.find((entry) => entry.sessionId === session.id && !entry.removedAt) ?? memberships.find((entry) => entry.sessionId === session.id);
+  });
+  return <AgentIdentity handle={member?.handle ?? session.name} identityKey={session.id} provider={session.provider} prefix={Boolean(member)} removed={Boolean(member?.removedAt)} />;
+}
+
 function SessionNode({ data, selected }: NodeProps<Node<SessionData>>) {
   const { session, assigned } = data;
   return (
@@ -45,7 +54,7 @@ function SessionNode({ data, selected }: NodeProps<Node<SessionData>>) {
       <Handle type="source" position={Position.Right} />
       <Handle type="target" position={Position.Left} />
       <Handle type="target" position={Position.Top} id="up" />
-      <div className="gnode__row"><ProviderMark provider={session.provider} size={18} /><strong>{session.name}</strong></div>
+      <div className="gnode__row"><SessionIdentity session={session} /></div>
       <div className="gnode__row gnode__row--meta"><StatusDot status={session.status} /><span>{assigned} task{assigned === 1 ? '' : 's'}</span></div>
     </div>
   );
@@ -190,7 +199,7 @@ function SessionDetail({ session, tasks }: { session: Session; tasks: Task[] }) 
   const { selectSession, selectTask, setView, openDialog } = useRelay.getState();
   return (
     <div className="pane-pad stack">
-      <div className="card__head"><ProviderMark provider={session.provider} size={22} /><div className="card__title"><strong>{session.name}</strong><span>{PROVIDER_NAME[session.provider]} · {session.model}</span></div></div>
+      <div className="card__head"><div className="card__title"><SessionIdentity session={session} /><span>{PROVIDER_NAME[session.provider]} · {session.model}</span></div></div>
       <StatusDot status={session.status} />
       <p className="muted small">{session.isolated ? 'Isolated worktree' : 'Project folder'}{session.branch ? ` · ${session.branch}` : ''} · {session.policy} policy</p>
       <div className="card__actions">

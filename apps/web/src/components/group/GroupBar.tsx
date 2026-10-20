@@ -33,6 +33,7 @@ export function GroupBar({ snapshot, membersOpen, setMembersOpen }: { snapshot: 
     erroring ? `${erroring} with errors` : null,
     queued ? `${queued} queued` : null,
     request ? `turns ${request.turnsUsed}/${group.maxTurns}` : null,
+    !anyBusy && !queued && !group.paused ? 'Idle' : null,
   ].filter(Boolean);
 
   return (

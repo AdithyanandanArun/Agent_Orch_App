@@ -1,15 +1,11 @@
 import type { CSSProperties } from 'react';
 import type { Provider } from '@relay/contracts';
 import { cx } from '../../lib/format';
+import { useRelay } from '../../store/store';
+import { previewAgentColor, recordedAgentColor } from '../../lib/agentColors';
 
-const COLORS = ['#83a9bd', '#84b7a3', '#c3a278', '#c6817c', '#91a77a', '#7599b6', '#b08c72', '#75a9a8', '#b29a71', '#9a9b83'] as const;
-
-function colorFor(identityKey: string): string {
-  let hash = 2166136261;
-  for (let index = 0; index < identityKey.length; index++) hash = Math.imul(hash ^ identityKey.charCodeAt(index), 16777619);
-  return COLORS[(hash >>> 0) % COLORS.length]!;
-}
-
+/** Brand geometry: https://cdn.openai.com/brand/OpenAI-Logos-2025.zip and the mark in https://claude.com/ .
+ * Marks identify the connected provider; the handle color identifies an individual agent. */
 function ProviderLogo({ provider }: { provider: Provider }) {
   if (provider === 'codex') {
     return (
@@ -28,10 +24,16 @@ function ProviderLogo({ provider }: { provider: Provider }) {
 export function AgentIdentity({
   handle, identityKey, provider, role, removed = false, className, prefix = true,
 }: { handle: string; identityKey: string; provider?: Provider | null; role?: string; removed?: boolean; className?: string; prefix?: boolean }) {
+  const group = useRelay((state) => state.boot?.groups?.find((snapshot) => snapshot.members.some((member) => member.sessionId === identityKey || member.id === identityKey)));
+  const member = group?.members.find((entry) => entry.sessionId === identityKey || entry.id === identityKey);
+  const sessionId = member?.sessionId ?? identityKey;
+  const recordedProvider = useRelay((state) => state.boot?.sessions.find((session) => session.id === sessionId)?.provider);
+  const effectiveProvider = recordedProvider ?? provider;
+  const color = recordedAgentColor(group, sessionId) ?? previewAgentColor(identityKey);
   return (
-    <span className={cx('agent-identity', className)} style={{ '--agent-color': colorFor(identityKey) } as CSSProperties}>
-      {provider ? <span className="agent-identity__provider" role="img" aria-label={`${provider === 'codex' ? 'OpenAI Codex' : 'Claude'} provider`} title={provider === 'codex' ? 'OpenAI Codex' : 'Claude'}><ProviderLogo provider={provider} /></span> : null}
-      <strong>{prefix ? '@' : ''}{handle}</strong>
+    <span className={cx('agent-identity', className)} style={{ '--agent-color-dark': color.dark, '--agent-color-light': color.light } as CSSProperties}>
+      {effectiveProvider ? <span className="agent-identity__provider" role="img" aria-label={`${effectiveProvider === 'codex' ? 'OpenAI Codex' : 'Claude'} provider`} title={effectiveProvider === 'codex' ? 'OpenAI Codex' : 'Claude'}><ProviderLogo provider={effectiveProvider} /></span> : null}
+      <strong className="agent-identity__name">{prefix ? '@' : ''}{handle}</strong>
       {role ? <span className="agent-identity__role">{role}{removed ? ' · removed' : ''}</span> : removed ? <span className="agent-identity__role">Removed</span> : null}
     </span>
   );

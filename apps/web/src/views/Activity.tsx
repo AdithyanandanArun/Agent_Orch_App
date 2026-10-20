@@ -120,7 +120,7 @@ export function ActivityView() {
       const taskId = typeof e.payload.taskId === 'string' ? e.payload.taskId : undefined;
       const runId = typeof e.payload.runId === 'string' ? e.payload.runId : undefined;
       if (runId && /run|turn/i.test(e.type)) (/start|begin/i.test(e.type) ? covered.start : covered.finish).add(runId);
-      const identity = e.type.startsWith('group.') && e.sessionId ? groupIdentityBySession.get(e.sessionId) : undefined;
+      const identity = e.sessionId ? groupIdentityBySession.get(e.sessionId) : undefined;
       out.push({ key: `e:${e.id}`, at: stamp(e.createdAt), order: e.id, type: e.type, tone: toneFor(e.type), summary: e.summary, createdAt: e.createdAt, sessionId: e.sessionId, origin: `event #${e.id}`, payload: e.payload, source: taskId ? taskById.get(taskId)?.source : undefined, identity });
     }
     for (const run of runs ?? []) {
@@ -130,7 +130,7 @@ export function ActivityView() {
       if (run.status !== 'running' && run.finishedAt && !covered.finish.has(run.id)) {
         const files = run.changes?.status === 'available' ? ` · ${run.changes.fileCount} file${run.changes.fileCount === 1 ? '' : 's'} changed` : '';
         out.push({
-          key: `r:${run.id}:end`, at: stamp(run.finishedAt), order: 1, type: `run.${run.status}`, tone: RUN_TONE[run.status], createdAt: run.finishedAt, sessionId: run.sessionId, origin: 'run record',
+          key: `r:${run.id}:end`, at: stamp(run.finishedAt), order: 1, type: `run.${run.status}`, tone: RUN_TONE[run.status], createdAt: run.finishedAt, sessionId: run.sessionId, origin: 'run record', identity: groupIdentityBySession.get(run.sessionId),
           summary: `${name} run ${run.status}${run.durationMs !== null ? ` after ${formatElapsed(run.durationMs)}` : ''} · ${run.toolCount} tool call${run.toolCount === 1 ? '' : 's'}${files}`,
         });
       }
@@ -139,7 +139,7 @@ export function ActivityView() {
       for (const call of toolCalls ?? []) {
         if (call.sessionId !== toolSessionId) continue;
         out.push({
-          key: `t:${call.id}`, at: stamp(call.startedAt), order: 2, type: 'tool', tone: TOOL_TONE[call.status], createdAt: call.startedAt, sessionId: call.sessionId, origin: 'tool record',
+          key: `t:${call.id}`, at: stamp(call.startedAt), order: 2, type: 'tool', tone: TOOL_TONE[call.status], createdAt: call.startedAt, sessionId: call.sessionId, origin: 'tool record', identity: groupIdentityBySession.get(call.sessionId),
           summary: `${call.summary || call.name} · ${call.category} tool ${call.status}`,
           detail: (
             <dl className="evt__facts">
