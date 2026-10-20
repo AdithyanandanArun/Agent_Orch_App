@@ -112,7 +112,7 @@ export const modelOf = (info: ProviderInfo | undefined, id: string): ProviderMod
 export const effortChoices = (model: ProviderModel | undefined): Choice[] =>
   model?.reasoningEfforts ?? [];
 export const tierChoices = (model: ProviderModel | undefined): Choice[] =>
-  [{ id: 'standard', label: 'Standard', description: 'Standard service tier.' }, ...(model?.serviceTiers ?? []).filter((tier) => tier.id !== 'standard').map((tier) => ({ id: tier.id, label: tierLabel(tier.id, tier.name), description: tier.description }))];
+  (model?.serviceTiers ?? []).map((tier) => ({ id: tier.id, label: tierLabel(tier.id, tier.name), description: tier.description }));
 export const policyChoices = (info: ProviderInfo | undefined, model: ProviderModel | undefined): Policy[] => model?.policies ?? info?.policies ?? [];
 
 const defaultModelFor = defaultProviderModel;
@@ -161,9 +161,8 @@ export function configSummary(config: Pick<AgentConfiguration, 'model' | 'effort
   const info = providers.find((item) => item.id === provider);
   const model = modelOf(info, config.model);
   const tier = config.serviceTier === 'standard' ? '' : ` · ${tierLabel(config.serviceTier, model?.serviceTiers?.find((item) => item.id === config.serviceTier)?.name)}`;
-  const effort = model?.reasoningEfforts
-    ? model.reasoningEfforts.find((item) => item.id === config.effort)?.label ?? 'Not available'
-    : 'Native/default';
+  const reportedEffort = model?.reasoningEfforts?.find((item) => item.id === config.effort)?.label;
+  const effort = reportedEffort ?? (config.effort === 'none' || !model?.reasoningEfforts?.length ? 'Native/default' : 'Not available');
   const policies = policyChoices(info, model);
   const policy = policies.includes(config.policy) ? policyLabel(config.policy) : policies.length ? 'Not available' : 'Native/default';
   return { model: model?.name ?? config.model, detail: `${effort}${tier} · ${policy}` };

@@ -182,8 +182,10 @@ export function Composer({ session }: { session: Session }) {
     ...(currentModel?.serviceTiers ?? []).filter((item) => item.id !== 'standard'),
   ];
   const effortLabel = (id: string) => {
+    const reported = effortChoices.find((item) => item.id === id)?.label;
+    if (reported) return reported;
     const known: Record<string, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra High', 'extra-high': 'Extra High', max: 'Max', ultra: 'Ultra' };
-    return known[id.toLowerCase()] ?? effortChoices.find((item) => item.id === id)?.label ?? id[0]?.toUpperCase() + id.slice(1);
+    return known[id.toLowerCase()] ?? (id === 'none' ? 'Native/default' : id[0]?.toUpperCase() + id.slice(1));
   };
   const effortDefault = currentModel?.defaultReasoningEffort;
   const tierDefault = currentModel?.defaultServiceTier ?? 'standard';

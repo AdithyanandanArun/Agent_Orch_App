@@ -40,6 +40,7 @@
 .agy-runtime__meta strong { color: var(--fg-1); font-weight: 550; }
 .agy-runtime__path { max-width: 100%; color: var(--fg-1); font-size: 11px; overflow-wrap: anywhere; }
 .agy-runtime__error { color: var(--err); }
+.agy-runtime__auth { display: grid; justify-items: start; gap: 9px; }
 .settings-page__login { margin: 24px 0; color: var(--fg-2); font-size: 12px; line-height: 1.75; }
 .settings-page__login p + p { margin-top: 12px; }
 .settings-page__login code { color: var(--fg-1); font-size: 11px; }

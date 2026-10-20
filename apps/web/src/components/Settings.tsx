@@ -15,8 +15,6 @@ import { AntigravityRuntimeSetup } from './AntigravityRuntimeSetup';
 const CATEGORIES: { id: SettingsSection; name: string }[] = [
   { id: 'general', name: 'General' }, { id: 'project', name: 'Project' }, { id: 'agents', name: 'Agents' }, { id: 'providers', name: 'Providers' }, { id: 'browser', name: 'Browser' }, { id: 'appearance', name: 'Appearance' },
 ];
-const effortName = (id: string, label: string) => ({ low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra High', 'extra-high': 'Extra High', max: 'Max', ultra: 'Ultra' } as Record<string, string>)[id.toLowerCase()] ?? label;
-
 function ProviderStatus({ provider }: { provider: ProviderInfo }) {
   return <section className="settings-provider" aria-label={`${provider.name} status`}>
     <div className="settings-provider__head"><h3>{provider.name}</h3><span className={provider.available ? 'settings-provider__state is-ready' : 'settings-provider__state'}><i aria-hidden="true" />{provider.available ? 'Configured' : 'Setup needed'}</span></div>
@@ -71,7 +69,7 @@ export function SettingsPage() {
   const selectedModel = models.find((m) => m.id === defaultModel || m.aliases?.includes(defaultModel));
   const selectedModelId = selectedModel?.id ?? defaultModel;
   const efforts = selectedModel?.reasoningEfforts ?? [];
-  const tiers = [{ id: 'standard', name: 'Standard', description: 'Standard service tier.' }, ...(selectedModel?.serviceTiers ?? []).filter((item) => item.id !== 'standard')];
+  const tiers = selectedModel?.serviceTiers ?? [];
   const policies = selectedModel?.policies ?? boot.providers.find((p) => p.id === settings.defaultProvider)?.policies ?? [];
   const updateDefaultModel = (value: string) => {
     const nextModel = models.find((model) => model.id === value);
@@ -79,9 +77,34 @@ export function SettingsPage() {
     const patch: Partial<AppSettings> = { [modelKey]: value };
     const nextEfforts = nextModel.reasoningEfforts ?? [];
     if (nextEfforts.length && !nextEfforts.some((item) => item.id === settings.defaultEffort)) patch.defaultEffort = nextModel.defaultReasoningEffort ?? nextEfforts[0]!.id;
-    const nextTiers = [{ id: 'standard', name: 'Standard' }, ...(nextModel.serviceTiers ?? []).filter((item) => item.id !== 'standard')];
-    if (!nextTiers.some((item) => item.id === (settings.defaultServiceTier ?? 'standard'))) patch.defaultServiceTier = nextModel.defaultServiceTier ?? nextTiers[0]!.id;
+    const nextTiers = nextModel.serviceTiers ?? [];
+    if (nextTiers.length && !nextTiers.some((item) => item.id === (settings.defaultServiceTier ?? 'standard'))) patch.defaultServiceTier = nextModel.defaultServiceTier ?? nextTiers[0]!.id;
     void update(patch, 'model');
+  };
+  const updateDefaultProvider = (provider: AppSettings['defaultProvider']) => {
+    const info = boot.providers.find((item) => item.id === provider);
+    const preferredModel = defaultProviderModel(provider, settings);
+    const model = info?.models.find((item) => item.id === preferredModel || item.aliases?.includes(preferredModel))
+      ?? info?.models[0];
+    const patch: Partial<AppSettings> = { defaultProvider: provider };
+    if (model) patch[providerModelSetting(provider)] = model.id;
+    else if (provider === 'antigravity' && preferredModel === 'default') patch.defaultAntigravityModel = 'default';
+
+    const efforts = model?.reasoningEfforts ?? [];
+    if (efforts.length && !efforts.some((item) => item.id === settings.defaultEffort)) {
+      patch.defaultEffort = model?.defaultReasoningEffort && efforts.some((item) => item.id === model.defaultReasoningEffort)
+        ? model.defaultReasoningEffort : efforts[0]!.id;
+    }
+    const policies = model?.policies ?? info?.policies ?? [];
+    if (policies.length && !policies.includes(settings.defaultPolicy)) {
+      patch.defaultPolicy = policies.includes('supervised') ? 'supervised' : policies[0]!;
+    }
+    const tiers = model?.serviceTiers ?? [];
+    if (tiers.length && !tiers.some((item) => item.id === (settings.defaultServiceTier ?? 'standard'))) {
+      patch.defaultServiceTier = model?.defaultServiceTier && tiers.some((item) => item.id === model.defaultServiceTier)
+        ? model.defaultServiceTier : tiers[0]!.id;
+    }
+    void update(patch, 'provider');
   };
   const pathsDirty = claude.trim() !== settings.claudeExecutable || codex.trim() !== settings.codexExecutable || antigravity.trim() !== (settings.antigravityExecutable ?? '');
   const status = busy === 'providers' ? 'Checking providers…' : busy ? 'Saving…' : error ? 'Could not complete change' : saved ? 'All changes saved' : category === 'project' ? 'Project details' : 'Changes save automatically';
@@ -96,16 +119,16 @@ export function SettingsPage() {
       {category === 'general' ? <div className="settings-page__section">
         <div className="settings-page__section-head"><h2>New sessions</h2><p>Defaults for your next session. Existing conversations keep their own settings.</p></div>
         <SettingRow title="Provider" description="The agent used when you start a session." htmlFor="st-provider">
-          <SelectMenu id="st-provider" label="Default provider" value={settings.defaultProvider} disabled={disabled} options={boot.providers.map((provider) => ({ value: provider.id, label: PROVIDER_NAMES[provider.id], description: provider.available ? 'Available' : provider.reason ?? 'Needs setup' }))} onChange={(value) => void update({ defaultProvider: value as AppSettings['defaultProvider'] }, 'provider')} />
+          <SelectMenu id="st-provider" label="Default provider" value={settings.defaultProvider} disabled={disabled} options={boot.providers.map((provider) => ({ value: provider.id, label: PROVIDER_NAMES[provider.id], description: provider.available ? 'Available' : provider.reason ?? 'Needs setup' }))} onChange={(value) => updateDefaultProvider(value as AppSettings['defaultProvider'])} />
         </SettingRow>
         <SettingRow title="Model" description={`Default for ${PROVIDER_NAMES[settings.defaultProvider]} sessions.`} htmlFor="st-model">
           <SelectMenu id="st-model" label="Default model" value={selectedModelId} disabled={disabled || models.length === 0} options={models.map((m) => ({ value: m.id, label: m.name }))} onChange={updateDefaultModel} />
         </SettingRow>
         <SettingRow title="Reasoning effort" description="How much reasoning to use for a response." htmlFor="st-effort">
-          <SelectMenu id="st-effort" label="Default effort" value={settings.defaultEffort} displayValue={efforts.length ? efforts.some((item) => item.id === settings.defaultEffort) ? undefined : 'Not available' : 'Native/default'} disabled={disabled || efforts.length === 0} options={efforts.map((item) => ({ value: item.id, label: `${effortName(item.id, item.label)}${item.id === selectedModel?.defaultReasoningEffort ? ' · Default' : ''}`, description: item.description }))} onChange={(value) => void update({ defaultEffort: value }, 'effort')} />
+          <SelectMenu id="st-effort" label="Default effort" value={settings.defaultEffort} displayValue={efforts.length ? efforts.some((item) => item.id === settings.defaultEffort) ? undefined : 'Not available' : 'Native/default'} disabled={disabled || efforts.length === 0} options={efforts.map((item) => ({ value: item.id, label: `${item.label}${item.id === selectedModel?.defaultReasoningEffort ? ' · Default' : ''}`, description: item.description }))} onChange={(value) => void update({ defaultEffort: value }, 'effort')} />
         </SettingRow>
         <SettingRow title="Service tier" description="Request speed for the default model." htmlFor="st-tier">
-          <SelectMenu id="st-tier" label="Default service tier" value={settings.defaultServiceTier ?? 'standard'} disabled={disabled} options={tiers.map((item) => ({ value: item.id, label: `${item.id === 'priority' ? 'Fast' : item.name}${item.id === (selectedModel?.defaultServiceTier ?? 'standard') ? ' · Default' : ''}`, description: item.description }))} onChange={(value) => void update({ defaultServiceTier: value }, 'tier')} />
+          <SelectMenu id="st-tier" label="Default service tier" value={settings.defaultServiceTier ?? 'standard'} displayValue={tiers.length ? tiers.some((item) => item.id === (settings.defaultServiceTier ?? 'standard')) ? undefined : 'Not available' : 'Native/default'} disabled={disabled || tiers.length === 0} options={tiers.map((item) => ({ value: item.id, label: `${item.id === 'priority' ? 'Fast' : item.name}${item.id === selectedModel?.defaultServiceTier ? ' · Default' : ''}`, description: item.description }))} onChange={(value) => void update({ defaultServiceTier: value }, 'tier')} />
         </SettingRow>
         <div className="settings-page__section-head settings-page__section-head--next"><h2>Context</h2></div>
         <AutoCompactSetting settings={settings} disabled={disabled} update={update} />
@@ -124,8 +147,8 @@ export function SettingsPage() {
         <div className="settings-page__section-head settings-page__section-head--actions"><div><h2>Connected agents</h2><p>Local installations and login status.</p></div><Button size="sm" disabled={disabled} busy={busy === 'providers'} onClick={() => void refreshProviders()}><RefreshCw size={12} /> Re-check</Button></div>
         {boot.providers.map((provider) => <ProviderStatus key={provider.id} provider={provider} />)}
         {!boot.providers.length ? <p className="settings-page__hint">Provider information is loading. Re-check to request a fresh status.</p> : null}
-        <AntigravityRuntimeSetup onInstalled={refreshAntigravityAfterInstall} />
-        <div className="settings-page__login"><p>Sign in on this machine with <code>claude auth login</code> or <code>codex login</code>, then re-check. For Antigravity, install the Antigravity runtime, then follow its reported authentication instructions.</p><p>Claude uses its existing login. An <code>ANTHROPIC_API_KEY</code> in the server environment takes precedence and uses API billing. Relay stores no credentials.</p></div>
+        <AntigravityRuntimeSetup providerInfo={boot.providers.find((provider) => provider.id === 'antigravity')} onProviderChanged={refreshAntigravityAfterInstall} />
+        <div className="settings-page__login"><p>Sign in on this machine with <code>claude auth login</code> or <code>codex login</code>, then re-check. Antigravity sign-in opens its native Google browser flow.</p><p>Claude uses its existing login. An <code>ANTHROPIC_API_KEY</code> in the server environment takes precedence and uses API billing. Relay stores no credentials.</p></div>
         <details className="settings-page__advanced"><summary>Executable paths</summary><p className="settings-page__hint">Leave empty to use automatic discovery.</p>
           <form className="settings-page__paths" onSubmit={(event) => { event.preventDefault(); void update({ claudeExecutable: claude.trim(), codexExecutable: codex.trim(), antigravityExecutable: antigravity.trim() }, 'paths').then((ok) => { if (ok) void refreshProviders(); }); }}>
             <label htmlFor="st-claude">Claude executable</label><input id="st-claude" className="input input--mono" value={claude} disabled={disabled} onChange={(event) => setClaude(event.target.value)} placeholder="claude" spellCheck={false} />

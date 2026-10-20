@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import type { AgentConfiguration, Provider } from '@relay/contracts';
 import { useRelay } from '../../store/store';
 import {
-  POLICY_DESCRIPTION, effortChoices, effortLabel, modelOf, normalizeConfig, policyChoices, policyLabel, providerAvailability, providerName, tierChoices,
+  POLICY_DESCRIPTION, effortChoices, modelOf, normalizeConfig, policyChoices, policyLabel, providerAvailability, providerName, tierChoices,
 } from '../../lib/groups';
 import { Field } from '../ui';
 import { SelectMenu } from '../SelectMenu';
@@ -44,7 +44,7 @@ export function ConfigFields({ value, onChange, idPrefix, lockProvider = false, 
         <Field label="Reasoning effort" htmlFor={`${idPrefix}-effort`}>
           <SelectMenu id={`${idPrefix}-effort`} label="Reasoning effort" value={value.effort} disabled={disabled || efforts.length === 0}
             displayValue={efforts.length ? efforts.some((item) => item.id === value.effort) ? undefined : 'Not available' : 'Native/default'}
-            options={efforts.map((item) => ({ value: item.id, label: effortLabel(item.id), badge: item.id === model?.defaultReasoningEffort ? 'Default' : undefined, description: item.description }))}
+            options={efforts.map((item) => ({ value: item.id, label: item.label, badge: item.id === model?.defaultReasoningEffort ? 'Default' : undefined, description: item.description }))}
             onChange={(next) => patch({ effort: next })} />
         </Field>
         <Field label="Permissions" htmlFor={`${idPrefix}-policy`}>
@@ -55,6 +55,7 @@ export function ConfigFields({ value, onChange, idPrefix, lockProvider = false, 
         </Field>
         <Field label="Service tier" htmlFor={`${idPrefix}-tier`}>
           <SelectMenu id={`${idPrefix}-tier`} label="Service tier" value={value.serviceTier} disabled={disabled || tiers.length === 0}
+            displayValue={tiers.length ? tiers.some((item) => item.id === value.serviceTier) ? undefined : 'Not available' : 'Native/default'}
             options={tiers.map((item) => ({ value: item.id, label: item.label, badge: item.id === (model?.defaultServiceTier ?? 'standard') ? 'Default' : undefined, description: item.id === 'standard' ? undefined : item.description }))}
             onChange={(next) => patch({ serviceTier: next })} />
         </Field>
