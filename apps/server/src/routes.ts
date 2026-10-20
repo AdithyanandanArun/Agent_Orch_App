@@ -25,6 +25,7 @@ import type { ProjectIntelligenceService } from './project-intelligence/service.
 import type { RepositoryService } from './repository/service.ts';
 import type { GroupService } from './groups/service.ts';
 import type { BrowserService } from './browser/service.ts';
+import { antigravityInstallState, startAntigravityInstall } from './antigravity-install.ts';
 
 export interface Services {
   config: ServerConfig; store: Store; hub: Hub; workspace: WorkspaceService; runtime: SessionRuntime; tasks: TaskService; handoffs: HandoffService;
@@ -361,6 +362,18 @@ export function buildRouter(s: Services) {
     return next;
   });
   add('GET', '/api/providers', () => s.providers.list());
+  add('GET', '/api/providers/antigravity/install', () => antigravityInstallState(s.config.dataDir));
+  add('POST', '/api/providers/antigravity/install', async (ctx) => {
+    await ctx.body(z.object({}).strict());
+    return startAntigravityInstall(s.config.dataDir, (executable) => {
+      s.store.tx(() => {
+        s.store.updateSettings({ antigravityExecutable: executable });
+        s.store.recordEvent({ type: 'provider.installed', summary: 'Antigravity runtime installed', payload: { provider: 'antigravity', version: '1.4.1' } });
+      });
+      s.providers.invalidate();
+      touch();
+    });
+  });
   add('POST', '/api/providers/refresh', async () => {
     const result = await s.providers.refresh();
     touch();
