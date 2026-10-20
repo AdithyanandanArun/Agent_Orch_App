@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { closeSync, constants, fstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, fstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { z } from 'zod';
@@ -39,6 +39,16 @@ function filename(executable: string, context: string, env: NodeJS.ProcessEnv): 
   return join(directory(env), `${key}.json`);
 }
 
+function prune(env: NodeJS.ProcessEnv): void {
+  const root = directory(env);
+  const entries = readdirSync(root).filter((name) => /^[a-f0-9]{64}\.json$/.test(name)).flatMap((name) => {
+    try { const path = join(root, name); return [{ path, modified: statSync(path).mtimeMs }]; } catch { return []; }
+  }).sort((a, b) => b.modified - a.modified);
+  for (const [index, entry] of entries.entries()) {
+    if (index >= 16 || Date.now() - entry.modified > MAX_AGE) { try { unlinkSync(entry.path); } catch { /* Another process can prune concurrently. */ } }
+  }
+}
+
 export function readAntigravityMetadata(executable: string, context: string, env: NodeJS.ProcessEnv): AntigravityMetadata | undefined {
   let fd: number | undefined;
   try {
@@ -64,6 +74,7 @@ export function writeAntigravityMetadata(executable: string, context: string, en
     temporary = `${target}.${randomUUID()}.tmp`;
     writeFileSync(temporary, data, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
     renameSync(temporary, target);
+    prune(env);
   } catch { /* An unwritable cache never prevents using live native metadata. */ }
   finally { if (temporary) { try { unlinkSync(temporary); } catch { /* Already atomically renamed. */ } } }
 }
