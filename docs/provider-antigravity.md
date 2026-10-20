@@ -12,6 +12,12 @@ For explicit sign-in, Relay delegates the packaged runtime's Python browser open
 
 Settings reports **Starting Google sign-in**, browser waiting only after a native link arrives, then **Loading Antigravity models** after native authentication succeeds. Cached native credentials can proceed directly to loading models without opening a browser. While waiting, **Open Google sign-in** is available through Electron's external-link handler if automatic launch fails. The validated link exists only in the active in-memory auth job and UI state; it is cleared on model loading, cancellation, completion, failure, replacement or shutdown. Opener failures are reported without including the URL. Browser processes are never terminated when setup is canceled.
 
+### Linux startup compatibility
+
+Some desktop launch environments pass a zero `RLIMIT_RTTIME` soft/hard limit to descendants. On the affected Arch desktop, the pinned Google ACP 1.4.1 binary exited with SIGKILL before initialization in roughly two seconds; launching the identical binary from a user service with `LimitRTTIME=infinity` completed initialization and closed cleanly on stdin EOF. This reproduced independently of browser authentication, with no kernel or cgroup OOM event.
+
+Relay checks its inherited Linux realtime timeout before launching the real provider. Only the zero-limit case uses a unique, temporary `systemd-run --user` service with a normal realtime timeout. Other Linux launches, macOS and Windows retain their direct launch path. The service inherits the intended working directory and provider environment; environment values are not command arguments, removed credential variables remain excluded, and direct stdin/stdout/stderr pipes preserve ACP transport and private login links. The service is collected after exit. Cancellation stops its whole control group, including the native harness, before retiring the local proxy. This changes no system-wide limits, files, scheduler priority or browser settings. A missing user service manager is reported as a setup failure.
+
 After sign-in, a metadata session obtains the advertised models and measures each bounded model selector's reasoning choices without submitting a prompt. These choices and provider-reported commands live in a bounded memory cache. Other model families are not assigned the current model's reasoning controls. Unmeasured choices expose **Native default** only. Metadata is refreshed explicitly or refined by real session setup.
 
 Metadata and quota operations each use a new private, empty temporary workspace, with mode `0700` on POSIX. They do not discover project instructions, skills or MCP configuration from the shared temporary directory. Relay removes the workspace after the native child stops; a failed startup or unconfirmed shutdown can leave the private directory in place.
@@ -64,3 +70,5 @@ Primary references:
 - [ACP session configuration](https://agentclientprotocol.com/protocol/v1/session-config-options)
 - [ACP tool calls and one-time permission responses](https://agentclientprotocol.com/protocol/v1/tool-calls)
 - [Python browser launch behavior and the BROWSER override](https://docs.python.org/3/library/webbrowser.html)
+- [Upstream Linux startup and inherited realtime-limit reproduction](https://github.com/google-antigravity/antigravity-cli/issues/1112)
+- [systemd-run user services, direct pipes and environment forwarding](https://www.freedesktop.org/software/systemd/man/latest/systemd-run.html)
