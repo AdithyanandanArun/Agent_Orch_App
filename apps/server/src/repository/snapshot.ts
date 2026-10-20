@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { constants, type BigIntStats } from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import type { Project, RepositoryChange, RepositoryState, Session } from '@relay/contracts';
@@ -7,9 +8,17 @@ import { git } from './git-run.ts';
 import { locate, operationInProgress, remotes as readRemotes, tracking as readTracking, type RemoteInfo, type Tracking } from './inspect.ts';
 
 export const MAX_CHANGES = 1000;
+const MAX_OUTSIDE_SCOPE = 100;
 const MAX_BRANCHES = 500;
-const MAX_FILE_BYTES = 100 * 1024 * 1024;
-const STAT_CONCURRENCY = 32;
+/** Content of every committable file is hashed into the fingerprint, so files are bounded in size and per-read volume. */
+const MAX_FILE_BYTES = 64 * 1024 * 1024;
+const READ_BUDGET_BYTES = 256 * 1024 * 1024;
+const STAT_CONCURRENCY = 16;
+const MEMO_LIMIT = 5000;
+const RACY_MS = 2000;
+
+/** Content hashes keyed by full-precision stat identity, so unchanged files are not reread on every poll. */
+const hashMemo = new Map<string, string>();
 
 export interface Scope { project: Project; root: string; session?: Session }
 
@@ -18,10 +27,15 @@ export interface Entry extends RepositoryChange {
   companion?: string;
 }
 
+interface ReadBudget { remaining: number }
+
 export interface Snapshot {
   state: RepositoryState;
+  /** Canonical Git work-tree root; used for Git commands and the mutation lock. state.root is the displayed project/session folder. */
   top: string | null;
   prefix: string;
+  /** Number of changed paths in the whole work tree (including outside this folder and beyond the visible cap). */
+  dirty: number;
   unborn: boolean;
   operation: string | null;
   remotes: RemoteInfo[];
@@ -102,36 +116,77 @@ function isInside(root: string, candidate: string): boolean {
   return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
 }
 
-/** Decides whether a changed path may be committed by Relay; also returns a cheap content signature for the fingerprint. */
-async function assess(top: string, prefix: string, raw: Raw): Promise<{ reason?: string; sig: string }> {
-  const sig = (stat: { size: number; mtimeMs: number; mode: number } | null) => (stat ? `${stat.size}:${Math.trunc(stat.mtimeMs)}:${stat.mode}` : 'absent');
-  if (raw.kind === 'unmerged') return { reason: 'Resolve the merge conflict outside Relay first', sig: sig(null) };
-  if (raw.submodule) return { reason: 'Submodule changes are not committed from Relay', sig: sig(null) };
-  if (raw.path.endsWith('/')) return { reason: 'Nested Git repository; commit it from its own folder', sig: sig(null) };
-  if (!inScope(prefix, raw.path) || (raw.originalPath !== undefined && !inScope(prefix, raw.originalPath))) return { reason: 'Outside this project folder', sig: sig(null) };
+const statSig = (stat: BigIntStats) => `${stat.dev}:${stat.ino}:${stat.size}:${stat.mode}:${stat.mtimeNs}:${stat.ctimeNs}`;
+
+async function digest(abs: string, stat: BigIntStats, budget: ReadBudget): Promise<{ hash?: string; reason?: string }> {
+  const sig = statSig(stat);
+  const key = `${abs}\0${sig}`;
+  const known = hashMemo.get(key);
+  if (known) return { hash: known };
+  const size = Number(stat.size);
+  if (size > budget.remaining) return { reason: 'Too many large changes to verify at once; refresh and try again' };
+  budget.remaining -= size;
+  let hash: string;
+  try {
+    const handle = await fsp.open(abs, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const sum = createHash('sha256');
+      for await (const chunk of handle.createReadStream({ autoClose: false })) sum.update(chunk as Buffer);
+      const after = await handle.stat({ bigint: true });
+      if (statSig(after) !== sig) return { reason: 'Changed while being read; refresh and try again' };
+      hash = sum.digest('hex');
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return { reason: 'Could not be read' };
+  }
+  // A file modified moments ago could still change within the clock's granularity, so only settled files are remembered.
+  if (Date.now() - Number(stat.mtimeNs / 1_000_000n) > RACY_MS && Date.now() - Number(stat.ctimeNs / 1_000_000n) > RACY_MS) {
+    hashMemo.set(key, hash);
+    while (hashMemo.size > MEMO_LIMIT) hashMemo.delete(hashMemo.keys().next().value!);
+  }
+  return { hash };
+}
+
+/** Decides whether a changed path may be committed by Relay; returns its content identity (stat + hash) for the fingerprint. */
+async function assess(top: string, prefix: string, raw: Raw, budget: ReadBudget): Promise<{ reason?: string; identity: string }> {
+  const none = (reason?: string) => ({ ...(reason ? { reason } : {}), identity: '' });
+  if (raw.kind === 'unmerged') return none('Resolve the merge conflict outside Relay first');
+  if (raw.submodule) return none('Submodule changes are not committed from Relay');
+  if (raw.path.endsWith('/')) return none('Nested Git repository; commit it from its own folder');
+  if (!inScope(prefix, raw.path) || (raw.originalPath !== undefined && !inScope(prefix, raw.originalPath))) return none('Outside this project folder');
   for (const file of [raw.path, raw.originalPath]) {
-    if (file !== undefined && file.split('/').some((part) => !part || isDeniedName(part))) return { reason: 'Protected file (credentials or secrets)', sig: sig(null) };
+    if (file !== undefined && file.split('/').some((part) => !part || isDeniedName(part))) return none('Protected file (credentials or secrets)');
   }
   const abs = path.join(top, ...raw.path.split('/'));
-  const stat = await fsp.lstat(abs).catch(() => null);
-  if (!stat) return { sig: sig(null) }; // deleted in the work tree
+  let stat: BigIntStats;
+  try {
+    stat = await fsp.lstat(abs, { bigint: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT' || (error as NodeJS.ErrnoException).code === 'ENOTDIR') return { identity: 'absent' }; // deleted in the work tree
+    return none('Could not be inspected (permission denied or unreadable)');
+  }
+  const identity = (hash: string) => `${statSig(stat)}:${hash}`;
   const dir = path.posix.dirname(raw.path);
   const expectedParent = dir === '.' ? top : path.join(top, ...dir.split('/'));
   const realParent = await fsp.realpath(path.dirname(abs)).catch(() => null);
-  if (realParent !== expectedParent) return { reason: 'Path passes through a symbolic link', sig: sig(stat) };
+  if (realParent !== expectedParent) return none('Path passes through a symbolic link');
   if (stat.isSymbolicLink()) {
     const link = await fsp.readlink(abs).catch(() => null);
-    if (link === null) return { reason: 'Unreadable symbolic link', sig: sig(stat) };
+    if (link === null) return none('Unreadable symbolic link');
     const lexical = path.resolve(path.dirname(abs), link);
     const target = await fsp.realpath(lexical).catch(() => lexical);
-    if (!isInside(top, lexical) || !isInside(top, target)) return { reason: 'Symbolic link points outside the repository', sig: sig(stat) };
-    if (path.relative(top, target).split(path.sep).some((part) => part && isDeniedName(part))) return { reason: 'Symbolic link points at a protected path', sig: sig(stat) };
-    return { sig: sig(stat) };
+    if (!isInside(top, lexical) || !isInside(top, target)) return none('Symbolic link points outside the repository');
+    if (path.relative(top, target).split(path.sep).some((part) => part && isDeniedName(part))) return none('Symbolic link points at a protected path');
+    return { identity: identity(createHash('sha256').update(link).digest('hex')) };
   }
-  if (stat.isDirectory()) return { reason: 'Directory entries must be committed file by file', sig: sig(stat) };
-  if (!stat.isFile()) return { reason: 'Not a regular file', sig: sig(stat) };
-  if (stat.size > MAX_FILE_BYTES) return { reason: 'File is larger than 100 MiB', sig: sig(stat) };
-  return { sig: sig(stat) };
+  if (stat.isDirectory()) return none('Directory entries must be committed file by file');
+  if (!stat.isFile()) return none('Not a regular file');
+  if (stat.size > BigInt(MAX_FILE_BYTES)) return none('File is larger than 64 MiB; commit it from a terminal');
+  const content = await digest(abs, stat, budget);
+  if (content.reason) return none(content.reason);
+  return { identity: identity(content.hash!) };
 }
 
 async function listBranches(top: string, current: string | null, unborn: boolean, signal?: AbortSignal): Promise<RepositoryState['branches']> {
@@ -158,7 +213,7 @@ function emptyState(scope: Scope, root: string, notices: string[], fingerprintSe
       branches: [], remotes: [], upstream: null, ahead: null, behind: null, changes: [], fetchedAt,
       fingerprint: createHash('sha256').update(`none\0${fingerprintSeed}`).digest('hex'), notices,
     },
-    top: null, prefix: '', unborn: false, operation: null, remotes: [], tracking: { remote: null, merge: null }, entries: new Map(),
+    top: null, prefix: '', dirty: 0, unborn: false, operation: null, remotes: [], tracking: { remote: null, merge: null }, entries: new Map(),
   };
 }
 
@@ -183,8 +238,12 @@ export async function readSnapshot(scope: Scope, signal?: AbortSignal): Promise<
     listBranches(top, branch, unborn, signal), readRemotes(top, signal), readTracking(top, branch, signal), operationInProgress(top, signal),
   ]);
 
-  const listed = parsed.raw.slice(0, MAX_CHANGES);
-  const assessed = await inChunks(listed, STAT_CONCURRENCY, async (raw) => ({ raw, ...await assess(top, prefix, raw) }));
+  // In-scope paths are listed first so changes elsewhere in a larger work tree can never push eligible files out of the visible cap.
+  const insideScope = parsed.raw.filter((raw) => inScope(prefix, raw.path));
+  const outsideScope = parsed.raw.filter((raw) => !inScope(prefix, raw.path));
+  const listed = [...insideScope.slice(0, MAX_CHANGES), ...outsideScope.slice(0, Math.min(MAX_OUTSIDE_SCOPE, Math.max(0, MAX_CHANGES - insideScope.length)))];
+  const budget: ReadBudget = { remaining: READ_BUDGET_BYTES };
+  const assessed = await inChunks(listed, STAT_CONCURRENCY, async (raw) => ({ raw, ...await assess(top, prefix, raw, budget) }));
   const entries = new Map<string, Entry>();
   const changes: RepositoryChange[] = [];
   for (const { raw, reason } of assessed) {
@@ -199,9 +258,11 @@ export async function readSnapshot(scope: Scope, signal?: AbortSignal): Promise<
     changes.push(visible);
   }
 
+  // Binds the full index/status text and the stat + content identity of every listed file, so a same-status content edit changes it.
   const fingerprint = createHash('sha256')
-    .update(JSON.stringify([parsed.oid, parsed.head, parsed.body, assessed.map((row) => row.sig)]))
+    .update(JSON.stringify([parsed.oid, parsed.head, parsed.body, assessed.map((row) => row.identity)]))
     .digest('hex');
+  const displayRoot = prefix ? path.join(top, ...prefix.split('/')) : top;
 
   const notices: string[] = [];
   if (detached) notices.push('HEAD is detached. Switch to or create a branch before committing, pushing or opening a pull request.');
@@ -212,16 +273,15 @@ export async function readSnapshot(scope: Scope, signal?: AbortSignal): Promise<
   if (!remotes.length) notices.push('No Git remote is configured.');
   for (const remote of remotes.filter((r) => r.credentials)) notices.push(`Remote "${remote.name}" embeds credentials in its URL. Relay will not push to it; use SSH or a Git credential helper.`);
   if (parsed.upstream && parsed.ahead === null) notices.push(`The upstream branch ${parsed.upstream} no longer exists.`);
-  if (parsed.raw.length > MAX_CHANGES) notices.push(`Showing the first ${MAX_CHANGES} of ${parsed.raw.length} changed paths.`);
-  const outside = listed.filter((raw) => !inScope(prefix, raw.path)).length;
-  if (outside) notices.push(`${outside} changed path${outside === 1 ? ' is' : 's are'} outside this project folder and cannot be committed from here.`);
+  if (insideScope.length > MAX_CHANGES) notices.push(`Showing the first ${MAX_CHANGES} of ${insideScope.length} changed paths in this folder; commit some to see the rest.`);
+  if (outsideScope.length) notices.push(`${outsideScope.length} changed path${outsideScope.length === 1 ? ' is' : 's are'} outside this project folder and cannot be committed from here.`);
 
   return {
     state: {
-      projectId: scope.project.id, sessionId: scope.session?.id ?? null, root: top, isRepo: true, branch, head: parsed.oid, detached, branches,
+      projectId: scope.project.id, sessionId: scope.session?.id ?? null, root: displayRoot, isRepo: true, branch, head: parsed.oid, detached, branches,
       remotes: remotes.map(({ name, host, repository }) => ({ name, host, repository })), upstream: parsed.upstream, ahead: parsed.ahead, behind: parsed.behind,
       changes, fetchedAt: new Date().toISOString(), fingerprint, notices,
     },
-    top, prefix, unborn, operation, remotes, tracking, entries,
+    top, prefix, dirty: parsed.raw.length, unborn, operation, remotes, tracking, entries,
   };
 }

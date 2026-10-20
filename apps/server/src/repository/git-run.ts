@@ -17,13 +17,14 @@ export interface GitRunOptions {
   env?: Record<string, string>;
   /** Talks to a remote: keeps the user's SSH selection, disables every interactive prompt and drops the controlling terminal. */
   network?: boolean;
+  /** Runs without a controlling terminal so tools such as gpg cannot block on a prompt Relay cannot show. */
+  detached?: boolean;
   signal?: AbortSignal;
   allowFailure?: boolean;
 }
 
 const CONFIG = [
   'core.quotepath=false', 'core.fsmonitor=false', `core.hooksPath=${devNull}`, 'protocol.ext.allow=never', 'submodule.recurse=false',
-  'commit.gpgsign=false', 'tag.gpgsign=false',
 ];
 const SSH_PASSTHROUGH = new Set(['GIT_SSH', 'GIT_SSH_COMMAND', 'GIT_SSH_VARIANT']);
 
@@ -42,9 +43,9 @@ function gitEnv(options: GitRunOptions): NodeJS.ProcessEnv {
 export async function git(cwd: string, args: string[], options: GitRunOptions = {}): Promise<RunResult> {
   const result = await run('git', [...CONFIG.flatMap((entry) => ['-c', entry]), ...args], {
     cwd, env: gitEnv(options), timeoutMs: options.timeoutMs ?? 20_000, maxBuffer: options.maxBuffer ?? 32 * 1024 * 1024,
-    stdin: options.stdin, signal: options.signal, detached: options.network,
+    stdin: options.stdin, signal: options.signal, detached: options.network || options.detached,
   });
-  if (result.spawnError) throw new GitFailure(result.spawnError.code === 'ENOENT' ? 'Git is not installed or is not on PATH' : `Git could not be started: ${failureSummary(result.spawnError.message)}`, '', null);
+  if (result.spawnError) throw new GitFailure(result.spawnError.code === 'ENOENT' ? 'Git is not installed, is not on PATH, or the folder no longer exists' : `Git could not be started: ${failureSummary(result.spawnError.message)}`, '', null);
   if (result.aborted) throw new GitFailure('Git was cancelled because the server is shutting down', '', null);
   if (result.timedOut) throw new GitFailure(`git ${args[0] ?? ''} timed out`, result.stderr, null, true);
   if (result.truncated) throw new GitFailure(`git ${args[0] ?? ''} produced more output than Relay will read`, result.stderr, result.code);
