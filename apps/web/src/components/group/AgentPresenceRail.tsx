@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Approval, GroupMember, GroupSnapshot, ProviderInfo, Session, SessionRun } from '@relay/contracts';
 import { configSummary, ROLE_LABEL } from '../../lib/groups';
 import { memberPresence } from '../../lib/groupPresence';
+import { formatElapsed } from '../../lib/activity';
 import { AgentIdentity } from './AgentIdentity';
 
 function useElapsed(startedAt: string | null, active: boolean): string | null {
@@ -15,8 +16,7 @@ function useElapsed(startedAt: string | null, active: boolean): string | null {
   if (!active || !startedAt) return null;
   const start = Date.parse(startedAt);
   if (!Number.isFinite(start)) return null;
-  const seconds = Math.max(0, Math.floor((now - start) / 1000));
-  return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+  return formatElapsed(Math.max(0, now - start));
 }
 
 function PresenceRow({
@@ -31,12 +31,11 @@ function PresenceRow({
   return (
     <li className={`agent-presence__row is-${presence.state}`}>
       <div className="agent-presence__identity">
-        <AgentIdentity handle={member.handle} identityKey={member.sessionId} provider={session?.provider} prefix={false} />
+        <AgentIdentity handle={member.handle} identityKey={member.sessionId} provider={session?.provider} />
         <span className="agent-presence__role">{ROLE_LABEL[member.role]}</span>
       </div>
       {summary && session ? <small className="agent-presence__model" title={`${summary.model} · ${summary.detail}`}>{summary.model} · {summary.detail.split(' · ')[0]}</small> : null}
       <div className="agent-presence__state" aria-label={`${presence.label}${elapsed ? `, elapsed ${elapsed}` : ''}`}>
-        <span className="agent-presence__dot" aria-hidden="true" />
         <span className={presence.working ? 'activity-shimmer' : undefined}>{presence.label}</span>
         {elapsed ? <time className="agent-presence__elapsed" dateTime={presence.startedAt ?? undefined} aria-live="off">{elapsed}</time> : null}
       </div>
@@ -53,7 +52,7 @@ export function AgentPresenceRail({
 }) {
   return (
     <aside className="agent-presence" aria-label="Live agent presence">
-      <header className="agent-presence__head"><strong>Agents</strong><span>LIVE</span></header>
+      <header className="agent-presence__head"><strong>Agents</strong><span>{connection === 'online' ? members.length : connection === 'connecting' ? 'Reconnecting' : 'Offline'}</span></header>
       <ul className="agent-presence__list">
         {members.map((member) => (
           <PresenceRow key={member.id} snapshot={snapshot} member={member} session={sessions.find((item) => item.id === member.sessionId)} runs={runs} approvals={approvals} connection={connection} providers={providers} />
