@@ -7,7 +7,7 @@ import { runProbe } from '../process.js';
 export interface AntigravityLaunchOptions {
   cwd: string;
   env: Record<string, string>;
-  /** Variable names never forwarded into the service, even if present in `env`. */
+  /** Variable names removed after the user manager assembles the service environment. */
   unsetEnv?: readonly string[];
 }
 export interface AntigravityLaunchPlan {
@@ -26,11 +26,12 @@ const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const CONTROL_ENV_KEYS = ['PATH', 'HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'];
 
 /**
- * The runtime's native Google sign-in aborts when its hard realtime-timeout limit (RLIMIT_RTTIME) is
+ * The native runtime aborts during startup when its realtime-timeout limit (RLIMIT_RTTIME) is
  * inherited as zero. The systemd user manager has a normal limit, so in that situation the runtime is
  * started as a transient user service with the limit lifted instead of inheriting ours.
- * `--pipe` forwards stdio to the caller (nothing goes to the journal) and `--wait` ties the unit's
- * lifetime to the returned command. Environment values travel through the spawn environment, never argv.
+ * `--pipe` forwards stdio to the caller instead of the journal; `--wait` observes unit completion.
+ * The caller must stop the unit before terminating its proxy. Environment values travel through
+ * the spawn environment, never argv.
  * The caller must spawn the returned command with `options.env` (including XDG_RUNTIME_DIR and the user bus).
  */
 export async function antigravityLinuxLaunch(file: string, args: string[], options: AntigravityLaunchOptions): Promise<AntigravityLaunchPlan> {
@@ -42,20 +43,22 @@ export async function antigravityLinuxLaunch(file: string, args: string[], optio
   if (!systemdRun || !systemctl) {
     const missing = [!systemdRun && 'systemd-run', !systemctl && 'systemctl'].filter(Boolean).join(' and ');
     throw new Error(
-      `Antigravity cannot start here: this process has a zero realtime-timeout (RTTIME) limit that its native sign-in rejects, `
+      `Antigravity cannot start here: this process has a zero realtime-timeout (RTTIME) limit that its native runtime rejects during startup, `
       + `and ${missing} was not found in ${TOOL_DIRECTORIES.join(' or ')}. Install systemd, or start Relay from a session `
       + `whose RTTIME limit is not zero (ulimit -R).`);
   }
 
-  const omitted = new Set(options.unsetEnv ?? []);
+  const omitted = new Set((options.unsetEnv ?? []).filter((key) => ENV_KEY.test(key)));
   const unit = `relay-antigravity-${process.pid}-${randomUUID()}.service`;
   const launchArgs = [
-    '--user', '--pipe', '--wait', '--collect', '--quiet',
+    '--user', '--pipe', '--wait', '--collect', '--quiet', '--no-ask-password',
     '--service-type=exec',
     '--expand-environment=no',
     `--unit=${unit}`,
     '--property=LimitRTTIME=infinity',
     '--property=TimeoutStopSec=2s',
+    '--property=KillMode=control-group',
+    ...(omitted.size ? [`--property=UnsetEnvironment=${[...omitted].join(' ')}`] : []),
     `--working-directory=${isAbsolute(options.cwd) ? options.cwd : resolve(options.cwd)}`,
     ...Object.keys(options.env).filter((key) => ENV_KEY.test(key) && !omitted.has(key)).map((key) => `--setenv=${key}`),
     '--', file, ...args,
@@ -63,7 +66,7 @@ export async function antigravityLinuxLaunch(file: string, args: string[], optio
 
   const control = async (controlArgs: string[]): Promise<void> => {
     // Failures are expected when the unit already exited, so the outcome is intentionally not reported.
-    await runProbe(systemctl, ['--user', ...controlArgs, unit], {
+    await runProbe(systemctl, ['--user', '--no-ask-password', ...controlArgs, unit], {
       timeoutMs: CONTROL_TIMEOUT_MS, cwd: options.cwd, env: controlEnvironment(options.env),
     });
   };
@@ -71,7 +74,7 @@ export async function antigravityLinuxLaunch(file: string, args: string[], optio
     file: systemdRun,
     args: launchArgs,
     stop: () => control(['stop', '--no-block']),
-    kill: () => control(['kill', '--signal=SIGKILL']),
+    kill: () => control(['kill', '--kill-who=all', '--signal=SIGKILL']),
   };
 }
 
