@@ -38,6 +38,13 @@ export async function loadContext(projectId: string): Promise<void> {
   }
 }
 
+const reloadTimers = new Map<string, number>();
+/** Coalesces bursts of realtime hints (and several mounted surfaces) into one read. */
+export function scheduleContextReload(projectId: string, delayMs = 1500): void {
+  window.clearTimeout(reloadTimers.get(projectId));
+  reloadTimers.set(projectId, window.setTimeout(() => { reloadTimers.delete(projectId); void loadContext(projectId); }, delayMs));
+}
+
 const rescans = new Map<string, number>();
 
 /**

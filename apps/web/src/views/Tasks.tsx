@@ -17,7 +17,7 @@ const COLUMNS: { id: TaskStatus; label: string; hint: string }[] = [
   { id: 'running', label: 'Running', hint: 'Set when a run is dispatched' },
   { id: 'blocked', label: 'Blocked', hint: 'Waiting on something' },
   { id: 'review', label: 'Review', hint: 'Turn finished; needs a human' },
-  { id: 'done', label: 'Done', hint: 'Accepted by you' },
+  { id: 'done', label: 'Done', hint: 'Finished' },
 ];
 
 const unfinishedDeps = (task: Task, byId: Map<string, Task>): Task[] =>
@@ -174,7 +174,7 @@ function TaskDrawer({ task, tasks, sessions }: { task: Task; tasks: Task[]; sess
           <Button onClick={run} busy={running} disabled={Boolean(runWhy)} why={runWhy}><Play size={13} /> Run task</Button>
           <Button variant="ghost" disabled={!owner || sessions.length < 2} why={!owner ? 'Assign a session first' : 'Needs a second session in this project'} onClick={() => useRelay.getState().openDialog({ kind: 'handoff', taskId: task.id, fromSessionId: owner?.id })}><ArrowRightLeft size={13} /> Handoff</Button>
         </div>
-        <p className="field__hint">Run sends this task to the assigned session as a real provider turn. A successful turn moves it to Review — Relay never marks tasks Done on its own.</p>
+        <p className="field__hint">Run sends this task to the assigned session as a real provider turn. A successful turn moves it to Review.</p>
       </div>
     </aside>
   );
