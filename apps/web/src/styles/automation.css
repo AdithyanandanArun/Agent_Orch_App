@@ -1,1 +1,36 @@
 .chat--projectonly > .empty { flex: 1; }
+
+/* Project scan strip and summaries */
+.ctxstrip { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; margin: 0 24px 12px; padding: 6px 4px 6px 10px; border: 1px solid var(--line-soft); border-radius: 9px; color: var(--fg-2); font-size: 12px; }
+.ctxstrip__main { flex: 1 1 280px; min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
+.ctxstrip__main > span { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ctxstrip__err { color: var(--err); }
+.ctxstrip__warn { margin: 0 24px 10px; padding: 7px 10px; border-radius: 8px; background: var(--warn-soft); color: var(--fg-0); font-size: 12px; }
+.ctxstrip__notes { font-size: 11.5px; }
+.ctxstrip__notes summary { cursor: pointer; color: var(--fg-2); }
+.ctxstrip__notes ul { margin: 6px 0 0; padding-left: 18px; }
+.viewbar__error .ctxstrip__warn { margin: 0; }
+.ctxcard__facts { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; margin: 10px 0 0; font-size: 12.5px; }
+.ctxcard__facts dt { color: var(--fg-2); }
+.ctxcard__facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; color: var(--fg-0); }
+.ctxcard__facts code, .ctxcard__commits code { font-family: var(--font-mono); font-size: 11.5px; color: var(--fg-1); }
+.ctxcard__commits { margin: 6px 0 0; padding: 0; list-style: none; display: grid; gap: 4px; font-size: 12px; }
+.ctxcard__commits li { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: baseline; }
+.ctxcard__commits span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-1); }
+.ctxcard__commits time { color: var(--fg-3); font-size: 11px; }
+
+/* Task provenance */
+.tcard__source { display: flex; flex-wrap: wrap; gap: 4px; }
+.tcard__parent { display: block; color: var(--fg-3); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.source { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--bg-surface); }
+.source__head { display: grid; gap: 2px; }
+.source__head strong { font-size: 12.5px; }
+.source__head span { color: var(--fg-2); font-size: 12px; }
+.source__warn { margin: 0; padding: 7px 10px; border-radius: 8px; background: var(--warn-soft); color: var(--fg-0); font-size: 12px; }
+.source__facts { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; margin: 0; font-size: 12px; }
+.source__facts dt { color: var(--fg-2); }
+.source__facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; color: var(--fg-0); }
+.source__facts code { font-family: var(--font-mono); font-size: 11px; color: var(--fg-1); }
+.source__link { display: inline-flex; align-items: center; gap: 5px; text-align: left; overflow-wrap: anywhere; }
+.source__link:disabled { color: var(--fg-3); text-decoration: none; cursor: not-allowed; }
+@media (max-width: 899px) { .ctxstrip { margin-inline: 16px; } }

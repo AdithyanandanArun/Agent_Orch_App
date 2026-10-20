@@ -1,6 +1,7 @@
 import { FolderGit2, Info, KeyRound } from 'lucide-react';
 import { useRelay, useActiveSession, useProject } from '../../store/store';
 import { Badge, PROVIDER_NAME, ProviderMark, StatusDot } from '../ui';
+import { ContextCard } from '../automation/ContextSummary';
 
 export function Overview() {
   const project = useProject();
@@ -37,6 +38,8 @@ export function Overview() {
           {project.isExample ? <Badge tone="neutral">Example</Badge> : null}
         </header>
       </section>
+
+      <ContextCard projectId={project.id} />
 
       {mine.length > 0 ? (
         <section className="card">

@@ -23,7 +23,7 @@ function headline(repo: RepositoryState, github: GitHubState | null, error: stri
   return { tone: summary.tone, label: `Actions · ${summary.label}` };
 }
 
-const toneClass: Record<RunTone, string> = { pass: 'ok', fail: 'err', pending: 'warn', unknown: 'neutral' };
+const toneClass: Record<RunTone, string> = { pass: 'ok', fail: 'err', pending: 'warn', skipped: 'neutral', unknown: 'neutral' };
 const Dot = ({ tone }: { tone: string }) => <i className={cx('gh-dot', `gh-dot--${tone}`)} aria-hidden="true" />;
 
 /** Read-only GitHub checks for the exact current HEAD, with commit-labelled workflow history underneath. */

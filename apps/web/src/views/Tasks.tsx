@@ -4,8 +4,12 @@ import type { Session, Task, TaskStatus } from '@relay/contracts';
 import { useRelay, useProject } from '../store/store';
 import { api, errorMessage } from '../lib/api';
 import { cx, relativeTime, useNow } from '../lib/format';
+import { SOURCE_LABEL } from '../components/automation/TaskSource';
 import { Badge, Button, EmptyState, Field, IconButton, InlineError, PROVIDER_NAME, ProviderMark } from '../components/ui';
 import { SelectMenu } from '../components/SelectMenu';
+import { ContextStrip } from '../components/automation/ContextSummary';
+import { SourceBadges, SourceDetails } from '../components/automation/TaskSource';
+import { useProjectContext } from '../store/projectContext';
 
 const COLUMNS: { id: TaskStatus; label: string; hint: string }[] = [
   { id: 'backlog', label: 'Backlog', hint: 'Not yet scheduled' },
@@ -21,6 +25,7 @@ const unfinishedDeps = (task: Task, byId: Map<string, Task>): Task[] =>
 
 function TaskCard({ task, byId, session, selected, onDragStart }: { task: Task; byId: Map<string, Task>; session?: Session; selected: boolean; onDragStart: (e: DragEvent, id: string) => void }) {
   const open = unfinishedDeps(task, byId);
+  const parent = task.source?.parentTaskId ? byId.get(task.source.parentTaskId) : undefined;
   return (
     <button
       type="button" className={cx('tcard', selected && 'is-selected')} draggable onDragStart={(e) => onDragStart(e, task.id)}
@@ -28,6 +33,8 @@ function TaskCard({ task, byId, session, selected, onDragStart }: { task: Task; 
     >
       <span className="tcard__title">{task.title}</span>
       {task.description ? <span className="tcard__desc">{task.description}</span> : null}
+      {parent ? <span className="tcard__parent" title="Grouping only — not a dependency">Part of {parent.title}</span> : null}
+      {task.source ? <span className="tcard__source"><SourceBadges task={task} /></span> : null}
       <span className="tcard__meta">
         {session ? <span className="tcard__owner"><ProviderMark provider={session.provider} size={14} />{session.name}</span> : <span className="tcard__owner tcard__owner--none">Unassigned</span>}
         {task.dependsOn.length > 0 ? (
@@ -52,6 +59,7 @@ function descendants(taskId: string, tasks: Task[]): Set<string> {
 
 function TaskDrawer({ task, tasks, sessions }: { task: Task; tasks: Task[]; sessions: Session[] }) {
   const providers = useRelay((s) => s.boot?.providers);
+  const runs = useRelay((s) => s.boot?.runs);
   const connection = useRelay((s) => s.connection);
   const now = useNow();
   const [title, setTitle] = useState(task.title);
@@ -135,6 +143,7 @@ function TaskDrawer({ task, tasks, sessions }: { task: Task; tasks: Task[]; sess
         <IconButton label="Close task details" onClick={() => useRelay.getState().selectTask(null)}><X size={15} /></IconButton>
       </header>
       <div className="drawer__body form">
+        <SourceDetails task={task} tasks={tasks} sessions={sessions} runs={runs ?? []} />
         <Field label="Title" htmlFor="td-title"><input id="td-title" className="input" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} /></Field>
         <Field label="Description" htmlFor="td-desc"><textarea id="td-desc" className="textarea" value={description} onChange={(e) => setDescription(e.target.value)} rows={4} /></Field>
         <Field label="Acceptance criteria" htmlFor="td-ac" hint="Sent with the task when it is run."><textarea id="td-ac" className="textarea" value={criteria} onChange={(e) => setCriteria(e.target.value)} rows={3} /></Field>
@@ -177,14 +186,20 @@ export function TasksView() {
   const selectedId = useRelay((s) => s.selectedTaskId);
   const [over, setOver] = useState<TaskStatus | null>(null);
   const [filter, setFilter] = useState('');
+  const [origin, setOrigin] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const scan = useProjectContext(project?.id).entry.context;
 
   const tasks = useMemo(() => (boot?.tasks ?? []).filter((t) => t.projectId === project?.id), [boot?.tasks, project?.id]);
   const sessions = useMemo(() => (boot?.sessions ?? []).filter((s) => s.projectId === project?.id), [boot?.sessions, project?.id]);
   const byId = useMemo(() => new Map(tasks.map((t) => [t.id, t])), [tasks]);
   const sById = useMemo(() => new Map(sessions.map((s) => [s.id, s])), [sessions]);
   const selected = selectedId ? byId.get(selectedId) : undefined;
-  const visible = filter ? tasks.filter((t) => (filter === 'none' ? !t.sessionId : t.sessionId === filter)) : tasks;
+  const visible = tasks
+    .filter((t) => !filter || (filter === 'none' ? !t.sessionId : t.sessionId === filter))
+    .filter((t) => !origin || (origin === 'manual' ? !t.source : t.source?.kind === origin));
+  const originKinds = useMemo(() => Array.from(new Set(tasks.flatMap((t) => (t.source ? [t.source.kind] : [])))), [tasks]);
+  const missingCount = tasks.filter((t) => t.source?.missing).length;
 
   if (!project) return <EmptyState title="No project">Open a project to manage tasks.</EmptyState>;
 
@@ -213,13 +228,27 @@ export function TasksView() {
             <p className="muted small">{tasks.length} in {project.name}. Dependencies gate when a task can start; runs are always started by you.</p>
           </div>
           <span className="spacer" />
+          {originKinds.length > 0 ? (
+            <>
+              <label className="sr-only" htmlFor="task-origin">Filter by source</label>
+              <SelectMenu id="task-origin" label="Filter by source" value={origin} onChange={setOrigin} options={[
+                { value: '', label: 'All sources' }, { value: 'manual', label: 'Manual' },
+                ...originKinds.map((kind) => ({ value: kind, label: SOURCE_LABEL[kind] })),
+              ]} />
+            </>
+          ) : null}
           <label className="sr-only" htmlFor="task-filter">Filter by session</label>
           <SelectMenu id="task-filter" label="Filter by session" value={filter} onChange={setFilter} options={[{ value: '', label: 'All sessions' }, { value: 'none', label: 'Unassigned' }, ...sessions.map((s) => ({ value: s.id, label: s.name }))]} />
+          <Button size="sm" variant="primary" onClick={() => useRelay.getState().openDialog({ kind: 'task' })}><ListPlus size={13} /> New task</Button>
         </div>
+        <ContextStrip projectId={project.id} />
+        {missingCount > 0 ? <div className="viewbar__error"><p className="ctxstrip__warn" role="status">{missingCount} task{missingCount === 1 ? ' is' : 's are'} no longer found at {missingCount === 1 ? 'its' : 'their'} source and kept on the board. Open one to see where it came from.</p></div> : null}
         {error ? <div className="viewbar__error"><InlineError>{error}</InlineError></div> : null}
         {tasks.length === 0 ? (
           <EmptyState icon={<ListPlus size={20} />} title="No tasks yet" action={<Button variant="primary" onClick={() => useRelay.getState().openDialog({ kind: 'task' })}>Create the first task</Button>}>
-            Break work into tasks, assign each to a session, and chain them with dependencies.
+            {scan?.status === 'ready' && scan.scannedAt
+              ? 'The project scan found no tasks to track automatically. Tasks also appear from provider plans in sessions; or create one yourself and chain tasks with dependencies.'
+              : 'Break work into tasks, assign each to a session, and chain them with dependencies. Tasks found by the project scan appear here automatically.'}
           </EmptyState>
         ) : (
           <div className="board" role="list">

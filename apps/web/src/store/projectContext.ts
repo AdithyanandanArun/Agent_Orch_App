@@ -21,6 +21,8 @@ const bump = (id: string): number => { const next = (seqs.get(id) ?? 0) + 1; seq
 const isAbort = (e: unknown): boolean => e instanceof DOMException && e.name === 'AbortError';
 
 export async function loadContext(projectId: string): Promise<void> {
+  // A rescan in flight returns the freshest context itself; reading now would only race it.
+  if (useContextStore.getState().entries[projectId]?.refreshing) return;
   const seq = bump(projectId);
   controllers.get(projectId)?.abort();
   const ctl = new AbortController();
@@ -36,18 +38,27 @@ export async function loadContext(projectId: string): Promise<void> {
   }
 }
 
-/** Explicit rescan: the server answers with the new context, which also supersedes any older read. */
+const rescans = new Map<string, number>();
+
+/**
+ * Explicit rescan: the server answers with the new context, which supersedes any older read.
+ * `refreshing` is owned by the newest rescan, so it always clears when that one settles.
+ */
 export async function rescanContext(projectId: string): Promise<void> {
-  const seq = bump(projectId);
+  if (useContextStore.getState().entries[projectId]?.refreshing) return;
+  const token = (rescans.get(projectId) ?? 0) + 1;
+  rescans.set(projectId, token);
+  bump(projectId);
   controllers.get(projectId)?.abort();
   patchEntry(projectId, { refreshing: true, error: null });
   try {
     const context = await api.refreshProjectContext(projectId);
-    if (seqs.get(projectId) !== seq) return;
-    patchEntry(projectId, { context, error: null, refreshing: false, loading: false });
+    bump(projectId);
+    patchEntry(projectId, { context, error: null, loading: false, refreshing: false });
   } catch (e) {
-    if (seqs.get(projectId) !== seq) { patchEntry(projectId, { refreshing: false }); return; }
-    patchEntry(projectId, { error: errorMessage(e), refreshing: false });
+    patchEntry(projectId, { error: errorMessage(e), loading: false, refreshing: false });
+  } finally {
+    if (rescans.get(projectId) === token) rescans.delete(projectId);
   }
 }
 

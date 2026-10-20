@@ -14,9 +14,10 @@ export function openExternal(url: string): boolean {
   }
 }
 
-export type RunTone = 'pass' | 'fail' | 'pending' | 'unknown';
+export type RunTone = 'pass' | 'fail' | 'pending' | 'skipped' | 'unknown';
 
-const PASS = new Set(['success', 'successful', 'pass', 'passed', 'neutral', 'skipped']);
+const PASS = new Set(['success', 'successful', 'pass', 'passed']);
+const SKIPPED = new Set(['neutral', 'skipped', 'skipping']);
 const FAIL = new Set(['failure', 'failed', 'fail', 'error', 'timed_out', 'cancelled', 'canceled', 'startup_failure', 'action_required', 'stale']);
 const PENDING = new Set(['queued', 'in_progress', 'pending', 'waiting', 'requested', 'expected', 'running']);
 
@@ -24,6 +25,7 @@ const PENDING = new Set(['queued', 'in_progress', 'pending', 'waiting', 'request
 export function classifyRun(status: string, conclusion: string | null): RunTone {
   const value = (conclusion ?? status).toLowerCase().replace(/[\s-]+/g, '_');
   if (PASS.has(value)) return 'pass';
+  if (SKIPPED.has(value)) return 'skipped';
   if (FAIL.has(value)) return 'fail';
   if (PENDING.has(value)) return 'pending';
   return 'unknown';
@@ -34,12 +36,15 @@ export const runLabel = (status: string, conclusion: string | null): string => (
 export interface ChecksSummary { tone: 'ok' | 'err' | 'warn' | 'neutral'; label: string }
 
 export function summarizeChecks(checks: GitHubState['checks']): ChecksSummary {
-  const counts: Record<RunTone, number> = { pass: 0, fail: 0, pending: 0, unknown: 0 };
+  if (checks.length === 0) return { tone: 'neutral', label: 'no checks reported' };
+  const counts: Record<RunTone, number> = { pass: 0, fail: 0, pending: 0, skipped: 0, unknown: 0 };
   for (const check of checks) counts[classifyRun(check.status, check.conclusion)] += 1;
   if (counts.fail) return { tone: 'err', label: `${counts.fail} failing` };
   if (counts.pending) return { tone: 'warn', label: `${counts.pending} running` };
   if (counts.unknown) return { tone: 'neutral', label: `${counts.unknown} unrecognised` };
-  return { tone: 'ok', label: checks.length === 1 ? 'passed' : `all ${checks.length} passed` };
+  if (counts.pass === 0) return { tone: 'neutral', label: counts.skipped === 1 ? 'skipped' : `${counts.skipped} skipped` };
+  if (counts.skipped) return { tone: 'ok', label: `${counts.pass} passed · ${counts.skipped} skipped` };
+  return { tone: 'ok', label: counts.pass === 1 ? 'passed' : `all ${counts.pass} passed` };
 }
 
 /** GitHub data is only meaningful for the exact commit and branch the checkout is on right now. */
