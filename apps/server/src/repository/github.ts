@@ -5,7 +5,10 @@ import { scrub } from './scrub.ts';
 type PullRequest = NonNullable<GitHubState['pullRequest']>;
 type Check = GitHubState['checks'][number];
 type Workflow = GitHubState['workflows'][number];
-export type CiState = 'none' | 'pending' | 'success' | 'failure';
+export type CiState = 'none' | 'unknown' | 'pending' | 'success' | 'neutral' | 'failure';
+
+/** GitHubState plus completeness flags: false means a read failed, was truncated or had an unexpected shape, so "all passed" must not be claimed. */
+export type GitHubReading = GitHubState & { checksComplete?: boolean; workflowsComplete?: boolean };
 
 export interface GitHubTarget {
   repository: string;
@@ -23,6 +26,7 @@ const MIN_REFRESH_MS = 5_000;
 const MAX_CACHE = 50;
 const MAX_ITEMS = 100;
 const MAX_RUNS = 20;
+const MAX_WORKFLOWS_SHOWN = 30;
 const SHA = /^[0-9a-f]{40,64}$/;
 const BRANCH_ARG = /^[^\u0000-\u001f\u007f]{1,255}$/;
 
@@ -60,7 +64,7 @@ export async function listPullRequests(repository: string, branch: string, signa
   return { ok: true, data: found };
 }
 
-async function fetchChecks(repository: string, head: string, signal?: AbortSignal): Promise<GhResult<{ checks: Check[]; notices: string[] }>> {
+async function fetchChecks(repository: string, head: string, signal?: AbortSignal): Promise<GhResult<{ checks: Check[]; notices: string[]; complete: boolean }>> {
   const [runs, statuses] = await Promise.all([
     ghApi(`repos/${repository}/commits/${head}/check-runs?per_page=${MAX_ITEMS}`, signal),
     ghApi(`repos/${repository}/commits/${head}/status?per_page=${MAX_ITEMS}`, signal),
@@ -68,57 +72,107 @@ async function fetchChecks(repository: string, head: string, signal?: AbortSigna
   if (!runs.ok && !statuses.ok) return runs;
   const checks: Check[] = [];
   const notices: string[] = [];
+  let complete = true;
   if (runs.ok && isRecord(runs.data) && Array.isArray(runs.data.check_runs)) {
     for (const row of runs.data.check_runs.slice(0, MAX_ITEMS)) {
-      if (!isRecord(row) || typeof row.id !== 'number') continue;
+      if (!isRecord(row) || typeof row.id !== 'number') { complete = false; continue; }
       checks.push({ id: `check-${row.id}`, name: str(row.name, 200) ?? 'check', status: str(row.status, 40) ?? 'unknown', conclusion: str(row.conclusion, 40), url: httpsUrl(row.html_url) ?? httpsUrl(row.details_url) });
     }
-    if (typeof runs.data.total_count === 'number' && runs.data.total_count > MAX_ITEMS) notices.push(`Showing the first ${MAX_ITEMS} of ${runs.data.total_count} check runs.`);
-  } else if (!runs.ok) notices.push(`Check runs: ${runs.failure.message}`);
+    if (typeof runs.data.total_count !== 'number' || runs.data.total_count > checks.length) {
+      complete = false;
+      if (typeof runs.data.total_count === 'number') notices.push(`Showing ${checks.length} of ${runs.data.total_count} check runs.`);
+    }
+  } else {
+    complete = false;
+    notices.push(runs.ok ? 'Check runs: GitHub returned a response Relay could not read.' : `Check runs: ${runs.failure.message}`);
+  }
   if (statuses.ok && isRecord(statuses.data) && Array.isArray(statuses.data.statuses)) {
+    let counted = 0;
     for (const row of statuses.data.statuses.slice(0, MAX_ITEMS)) {
-      if (!isRecord(row) || typeof row.id !== 'number') continue;
+      if (!isRecord(row) || typeof row.id !== 'number') { complete = false; continue; }
       const state = str(row.state, 20) ?? 'pending';
+      counted++;
       checks.push({ id: `status-${row.id}`, name: str(row.context, 200) ?? 'status', status: state === 'pending' ? 'pending' : 'completed', conclusion: state === 'pending' ? null : state, url: httpsUrl(row.target_url) });
     }
-  } else if (!statuses.ok) notices.push(`Commit statuses: ${statuses.failure.message}`);
-  return { ok: true, data: { checks, notices } };
-}
-
-async function fetchWorkflows(repository: string, head: string, signal?: AbortSignal): Promise<GhResult<{ workflows: Workflow[]; notices: string[] }>> {
-  const result = await ghApi(`repos/${repository}/actions/runs?head_sha=${head}&per_page=${MAX_RUNS}`, signal);
-  if (!result.ok) return result;
-  const workflows: Workflow[] = [];
-  const notices: string[] = [];
-  const rows = isRecord(result.data) && Array.isArray(result.data.workflow_runs) ? result.data.workflow_runs : [];
-  for (const row of rows.slice(0, MAX_RUNS)) {
-    if (!isRecord(row) || typeof row.id !== 'number') continue;
-    const headSha = str(row.head_sha, 80)?.toLowerCase();
-    const url = httpsUrl(row.html_url);
-    if (headSha !== head || !url) continue; // never present a run for another commit as current
-    workflows.push({
-      id: String(row.id), name: str(row.name, 200) ?? 'workflow', title: str(row.display_title, 300) ?? str(row.name, 200) ?? '', status: str(row.status, 40) ?? 'unknown',
-      conclusion: str(row.conclusion, 40), url, headSha, branch: str(row.head_branch, 255) ?? '', createdAt: str(row.created_at, 40) ?? '', updatedAt: str(row.updated_at, 40) ?? '',
-    });
+    if (typeof statuses.data.total_count !== 'number' || statuses.data.total_count > counted) {
+      complete = false;
+      if (typeof statuses.data.total_count === 'number') notices.push(`Showing ${counted} of ${statuses.data.total_count} commit statuses.`);
+    }
+  } else {
+    complete = false;
+    notices.push(statuses.ok ? 'Commit statuses: GitHub returned a response Relay could not read.' : `Commit statuses: ${statuses.failure.message}`);
   }
-  workflows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  if (isRecord(result.data) && typeof result.data.total_count === 'number' && result.data.total_count > MAX_RUNS) notices.push(`Showing the ${MAX_RUNS} most recent of ${result.data.total_count} workflow runs for this commit.`);
-  return { ok: true, data: { workflows, notices } };
+  if (!complete && !notices.length) notices.push('Some checks could not be read, so the check summary is incomplete.');
+  return { ok: true, data: { checks, notices, complete } };
 }
 
-const FAILING = new Set(['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure', 'stale', 'error']);
+/**
+ * Workflow runs for the exact commit plus recent history of the branch. Every run keeps its own headSha so callers can tell
+ * current CI from older commits; only exact-head runs ever count toward the current summary.
+ */
+async function fetchWorkflows(repository: string, head: string, remoteBranch: string | null, signal?: AbortSignal): Promise<GhResult<{ workflows: Workflow[]; notices: string[]; complete: boolean }>> {
+  const [exact, history] = await Promise.all([
+    ghApi(`repos/${repository}/actions/runs?head_sha=${head}&per_page=${MAX_RUNS}`, signal),
+    remoteBranch ? ghApi(`repos/${repository}/actions/runs?branch=${encodeURIComponent(remoteBranch)}&per_page=${MAX_RUNS}`, signal) : Promise.resolve(null),
+  ]);
+  if (!exact.ok && (!history || !history.ok)) return exact;
+  const notices: string[] = [];
+  let complete = exact.ok && (history === null || history.ok);
+  const byId = new Map<string, Workflow>();
+  const collect = (result: GhResult<unknown>, exactOnly: boolean) => {
+    if (!result.ok) { notices.push(`Workflow runs: ${result.failure.message}`); return; }
+    const data = result.data;
+    const rows = isRecord(data) && Array.isArray(data.workflow_runs) ? data.workflow_runs : null;
+    if (!rows) { complete = false; notices.push('Workflow runs: GitHub returned a response Relay could not read.'); return; }
+    for (const row of rows.slice(0, MAX_RUNS)) {
+      if (!isRecord(row) || typeof row.id !== 'number') { complete = false; continue; }
+      const headSha = str(row.head_sha, 80)?.toLowerCase();
+      const url = httpsUrl(row.html_url);
+      if (!headSha || !SHA.test(headSha) || !url) { complete = false; continue; }
+      if (exactOnly && headSha !== head) continue;
+      // Branch history can include runs for same-named branches of forks; keep only this repository's own.
+      const source = isRecord(row.head_repository) ? str(row.head_repository.full_name, 200)?.toLowerCase() : undefined;
+      if (!exactOnly && source && source !== repository.toLowerCase()) continue;
+      byId.set(String(row.id), {
+        id: String(row.id), name: str(row.name, 200) ?? 'workflow', title: str(row.display_title, 300) ?? str(row.name, 200) ?? '', status: str(row.status, 40) ?? 'unknown',
+        conclusion: str(row.conclusion, 40), url, headSha, branch: str(row.head_branch, 255) ?? '', createdAt: str(row.created_at, 40) ?? '', updatedAt: str(row.updated_at, 40) ?? '',
+      });
+    }
+    if (exactOnly && (typeof (data as Record<string, unknown>).total_count !== 'number' || ((data as Record<string, unknown>).total_count as number) > rows.length)) {
+      complete = false;
+      notices.push(`Showing ${rows.length} of ${String((data as Record<string, unknown>).total_count)} workflow runs for this commit.`);
+    }
+  };
+  collect(exact, true);
+  if (history) collect(history, false);
+  const all = [...byId.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  // Runs for the current commit are never crowded out by older history.
+  const current = all.filter((w) => w.headSha === head);
+  const older = all.filter((w) => w.headSha !== head).slice(0, Math.max(0, MAX_WORKFLOWS_SHOWN - current.length));
+  const workflows = [...current, ...older].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return { ok: true, data: { workflows, notices, complete } };
+}
+
 const PASSING = new Set(['success', 'neutral', 'skipped']);
 
-/** Aggregate state of CI for the exact commit the state describes. */
-export function ciSummary(state: Pick<GitHubState, 'checks' | 'workflows'>): CiState {
-  const items = [...state.checks, ...(state.checks.length ? [] : state.workflows)];
-  if (!items.length) return 'none';
-  if (items.some((item) => item.status !== 'completed')) return 'pending';
-  if (items.some((item) => item.conclusion !== null && FAILING.has(item.conclusion))) return 'failure';
-  return items.every((item) => item.conclusion !== null && PASSING.has(item.conclusion)) ? 'success' : 'failure';
+/**
+ * Aggregate CI state for the commit the state describes. Only checks (always for the exact HEAD) and workflow runs whose headSha equals
+ * HEAD count; older-commit history never contributes. An incomplete read can report failure or pending, but never a pass.
+ */
+export function ciSummary(state: Pick<GitHubReading, 'checks' | 'workflows' | 'head' | 'checksComplete' | 'workflowsComplete'>): CiState {
+  const current = state.workflows.filter((w) => w.headSha.toLowerCase() === state.head?.toLowerCase());
+  const items = [...state.checks, ...(state.checks.length ? [] : current)];
+  const complete = state.checksComplete !== false && (state.checks.length > 0 || state.workflowsComplete !== false);
+  let result: CiState;
+  if (!items.length) result = 'none';
+  else if (items.some((item) => item.status !== 'completed')) result = 'pending';
+  else if (items.some((item) => item.conclusion === null || !PASSING.has(item.conclusion))) result = 'failure';
+  else result = items.some((item) => item.conclusion === 'success') ? 'success' : 'neutral';
+  if (!complete && (result === 'none' || result === 'success' || result === 'neutral')) return 'unknown';
+  return result;
 }
 
-interface CacheEntry { at: number; state?: GitHubState; pending?: Promise<GitHubState> }
+interface CacheEntry { at: number; state?: GitHubReading; pending?: Promise<GitHubReading> }
 
 /** Reads GitHub state through the signed-in gh CLI. Results are cached and coalesced per exact (repository, branch, HEAD). */
 export class GitHubReader {
@@ -134,7 +188,7 @@ export class GitHubReader {
     this.cache.clear();
   }
 
-  read(target: GitHubTarget, refresh: boolean): Promise<GitHubState> {
+  read(target: GitHubTarget, refresh: boolean): Promise<GitHubReading> {
     const key = [target.repository, target.branch ?? '', target.remoteBranch ?? '', target.head].join('\0');
     const entry = this.cache.get(key);
     if (entry?.pending) return entry.pending;
@@ -156,9 +210,9 @@ export class GitHubReader {
     return fresh.pending;
   }
 
-  private async fetch(target: GitHubTarget): Promise<GitHubState> {
+  private async fetch(target: GitHubTarget): Promise<GitHubReading> {
     const { repository, head } = target;
-    const state: GitHubState = {
+    const state: GitHubReading = {
       status: 'available', repository, url: `https://github.com/${repository}`, branch: target.branch, head, pullRequest: null, checks: [], workflows: [],
       fetchedAt: new Date().toISOString(), notices: [],
     };
@@ -166,7 +220,7 @@ export class GitHubReader {
     const [prs, checks, workflows] = await Promise.all([
       target.remoteBranch ? listPullRequests(repository, target.remoteBranch, this.signal) : Promise.resolve(null),
       fetchChecks(repository, head, this.signal),
-      fetchWorkflows(repository, head, this.signal),
+      fetchWorkflows(repository, head, target.remoteBranch, this.signal),
     ]);
     const failures: GhFailure[] = [];
     const notices = new Set<string>();
@@ -186,8 +240,8 @@ export class GitHubReader {
       }
     } else if (prs) note('Pull request', prs.failure);
 
-    if (checks.ok) { state.checks = checks.data.checks; for (const n of checks.data.notices) notices.add(n); } else note('Checks', checks.failure);
-    if (workflows.ok) { state.workflows = workflows.data.workflows; for (const n of workflows.data.notices) notices.add(n); } else note('Workflow runs', workflows.failure);
+    if (checks.ok) { state.checks = checks.data.checks; state.checksComplete = checks.data.complete; for (const n of checks.data.notices) notices.add(n); } else { state.checksComplete = false; note('Checks', checks.failure); }
+    if (workflows.ok) { state.workflows = workflows.data.workflows; state.workflowsComplete = workflows.data.complete; for (const n of workflows.data.notices) notices.add(n); } else { state.workflowsComplete = false; note('Workflow runs', workflows.failure); }
 
     const attempted = (prs ? 1 : 0) + 2;
     const fatal = failures.find((f) => ['missing', 'auth', 'rate-limit', 'timeout', 'cancelled'].includes(f.kind));
@@ -197,7 +251,7 @@ export class GitHubReader {
       state.notices = fatal ? [fatal.message] : [...notices];
     } else {
       state.notices = [...notices];
-      if (state.checks.length === 0 && state.workflows.length === 0 && failures.length === 0) state.notices.push('GitHub reports no checks or workflow runs for this exact commit.');
+      if (state.checks.length === 0 && !state.workflows.some((w) => w.headSha === head) && failures.length === 0) state.notices.push('GitHub reports no checks or workflow runs for this exact commit.');
     }
     state.notices = state.notices.map((n) => scrub(n, 300));
     return state;

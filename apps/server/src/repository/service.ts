@@ -13,7 +13,7 @@ import { HttpError, badRequest, conflict, errorMessage, notFound, unprocessable 
 import type { WorkspaceService } from '../workspace.ts';
 import { createCommit } from './commit.ts';
 import { classify, ghRun, isRepositorySlug } from './gh.ts';
-import { ciSummary, GitHubReader, listPullRequests, type GitHubTarget } from './github.ts';
+import { ciSummary, GitHubReader, listPullRequests, type GitHubReading, type GitHubTarget } from './github.ts';
 import { git, GitFailure } from './git-run.ts';
 import { basics, configuredPushRemote, identityProblem, isMirrorRemote, locate, remotes as readRemotes, signingConfigured, tracking as readTracking, type RemoteInfo, type Tracking } from './inspect.ts';
 import { KeyedLock } from './lock.ts';
@@ -447,18 +447,19 @@ export class RepositoryService {
   }
 
   /** Records an event only when CI for the same commit, or a pull request, genuinely changes state between observations. */
-  private observe(scope: Scope, state: GitHubState): void {
+  private observe(scope: Scope, state: GitHubReading): void {
     if (state.status !== 'available' || !state.repository || !state.head) return;
     const sessionId = scope.session?.id ?? null;
     const ciKey = `${state.repository}\0${state.head}`;
     const ci = ciSummary(state);
     const previousCi = this.ciSeen.get(ciKey);
-    remember(this.ciSeen, ciKey, ci);
-    if (previousCi !== undefined && previousCi !== ci && (ci === 'success' || ci === 'failure')) {
-      const failing = [...state.checks, ...state.workflows].filter((i) => i.conclusion && !['success', 'neutral', 'skipped'].includes(i.conclusion)).slice(0, 10).map((i) => i.name);
+    // An incomplete read says nothing reliable about CI, so it neither emits nor becomes the baseline for the next comparison.
+    if (ci !== 'unknown') remember(this.ciSeen, ciKey, ci);
+    if (ci !== 'unknown' && previousCi !== undefined && previousCi !== ci && (ci === 'success' || ci === 'neutral' || ci === 'failure')) {
+      const failing = [...state.checks, ...state.workflows.filter((w) => w.headSha === state.head)].filter((i) => i.conclusion && !['success', 'neutral', 'skipped'].includes(i.conclusion)).slice(0, 10).map((i) => i.name);
       this.store.recordEvent({
         projectId: scope.project.id, sessionId, type: 'repository.checks.changed',
-        summary: `Checks ${ci === 'success' ? 'passed' : 'failed'} for ${state.repository} at ${state.head.slice(0, 7)}`,
+        summary: `Checks ${ci === 'failure' ? 'failed' : ci === 'neutral' ? 'finished without a pass (neutral or skipped)' : 'passed'} for ${state.repository} at ${state.head.slice(0, 7)}`,
         payload: { repository: state.repository, head: state.head, branch: state.branch, from: previousCi, state: ci, failing },
       });
     }
