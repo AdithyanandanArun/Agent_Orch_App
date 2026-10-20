@@ -4,7 +4,7 @@
 .sidebar__logo { flex-shrink: 0; }
 .sidebar__local { color: var(--fg-3); font-size: 12px; }
 .sidebar__toolbar { display: flex; align-items: center; gap: 3px; padding: 5px 10px 10px; }
-.sidebar__search { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 0; height: 28px; padding: 0 5px; border: 0; border-radius: 6px; background: transparent; color: var(--fg-2); font-size: 13px; text-align: left; }
+.sidebar__search { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 0; height: 28px; padding: 0 5px; border: 0; border-radius: 6px; background: transparent; color: var(--fg-2); font-size: 13px; text-align: left; transition: color var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard); }
 .sidebar__search:hover { color: var(--fg-0); }
 .sidebar__toolbar .ibtn { width: 27px; height: 27px; }
 .sidebar__project { padding: 0 10px 9px; }
@@ -41,7 +41,7 @@
 /* Session actions stay quiet until the row is hovered or reached with the keyboard. */
 .sitem-row { position: relative; }
 .sitem-row .sitem { padding-right: 32px; }
-.sitem__actions { position: absolute; right: 6px; bottom: 10px; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--fg-3); opacity: 0; }
+.sitem__actions { position: absolute; right: 6px; bottom: 10px; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--fg-3); opacity: 0; transition: opacity var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard); }
 .sitem-row:hover .sitem__actions, .sitem-row:focus-within .sitem__actions, .sitem__actions[aria-expanded='true'] { opacity: 1; }
 .sitem__actions:hover, .sitem__actions:focus-visible { color: var(--fg-0); background: var(--bg-active); }
 .sitem__state { display: flex; align-items: center; gap: 5px; color: var(--fg-3); flex: none; }

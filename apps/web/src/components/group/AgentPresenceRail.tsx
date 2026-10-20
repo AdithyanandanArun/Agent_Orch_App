@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type TransitionEvent } from 'react';
 import type { Approval, GroupMember, GroupSnapshot, ProviderInfo, Session, SessionRun } from '@mingle/contracts';
 import { configSummary, ROLE_LABEL } from '../../lib/groups';
 import { memberPresence } from '../../lib/groupPresence';
@@ -51,8 +51,11 @@ export function AgentPresenceRail({
   hidden?: boolean;
 }) {
   const panel = useRef<HTMLElement>(null);
+  const head = useRef<HTMLElement>(null);
   const listId = useId();
   const preference = useRef<boolean | null>(null);
+  const resizeFrame = useRef<number | null>(null);
+  const resizeVersion = useRef(0);
   const [expanded, setExpanded] = useState(true);
   const presence = members.map((member) => memberPresence({
     snapshot, member, session: sessions.find((session) => session.id === member.sessionId), runs, approvals, connection,
@@ -67,6 +70,11 @@ export function AgentPresenceRail({
         : otherState?.label ?? (members.length ? 'All idle' : 'No agents');
   const caption = connection === 'connecting' ? 'Reconnecting' : connection === 'offline' ? 'Offline'
     : expanded ? members.length : activity;
+
+  useEffect(() => () => {
+    resizeVersion.current++;
+    if (resizeFrame.current !== null) window.cancelAnimationFrame(resizeFrame.current);
+  }, []);
 
   useLayoutEffect(() => {
     const container = panel.current?.parentElement;
@@ -95,20 +103,55 @@ export function AgentPresenceRail({
   }, []);
 
   const toggle = () => {
-    preference.current = !expanded;
-    setExpanded(!expanded);
+    const next = !expanded;
+    preference.current = next;
+    const element = panel.current;
+    if (!element) { setExpanded(next); return; }
+
+    const version = ++resizeVersion.current;
+    if (resizeFrame.current !== null) window.cancelAnimationFrame(resizeFrame.current);
+    resizeFrame.current = null;
+    const currentHeight = element.getBoundingClientRect().height;
+    element.style.height = `${currentHeight}px`;
+    element.getBoundingClientRect();
+    setExpanded(next);
+
+    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+    const cap = Number.parseFloat(window.getComputedStyle(element).maxHeight);
+    const limit = Number.isFinite(cap) ? cap : Number.POSITIVE_INFINITY;
+    const collapsedHeight = Math.min(limit, Math.max(38, (head.current?.offsetHeight ?? 34) + 2));
+    if (reduced) {
+      element.style.height = next ? 'auto' : `${collapsedHeight}px`;
+      return;
+    }
+    resizeFrame.current = window.requestAnimationFrame(() => {
+      resizeFrame.current = null;
+      if (version !== resizeVersion.current || !panel.current) return;
+      const currentCap = Number.parseFloat(window.getComputedStyle(element).maxHeight);
+      const currentLimit = Number.isFinite(currentCap) ? currentCap : element.scrollHeight + 2;
+      const target = next ? Math.min(element.scrollHeight + 2, currentLimit) : collapsedHeight;
+      element.style.height = `${target}px`;
+    });
+  };
+
+  const settleSize = (event: TransitionEvent<HTMLElement>) => {
+    const element = panel.current;
+    if (!element || event.target !== element || event.propertyName !== 'height') return;
+    const target = Number.parseFloat(element.style.height);
+    if (!Number.isFinite(target) || Math.abs(element.getBoundingClientRect().height - target) > 1) return;
+    if (expanded) element.style.height = 'auto';
   };
 
   return (
-    <aside ref={panel} className={`agent-presence${expanded ? ' is-expanded' : ' is-collapsed'}${hidden ? ' is-hidden' : ''}`} aria-label="Agent presence" aria-hidden={hidden} inert={hidden}>
-      <header className="agent-presence__head">
+    <aside ref={panel} onTransitionEnd={settleSize} className={`agent-presence${expanded ? ' is-expanded' : ' is-collapsed'}${hidden ? ' is-hidden' : ''}`} aria-label="Agent presence" aria-hidden={hidden} inert={hidden}>
+      <header ref={head} className="agent-presence__head">
         <strong>Agents</strong>
         <span>{caption}</span>
         <button type="button" className="agent-presence__toggle" aria-label={expanded ? 'Collapse agent presence' : 'Expand agent presence'} aria-expanded={expanded} aria-controls={listId} onClick={toggle}>
           <span aria-hidden="true">{expanded ? '−' : '+'}</span>
         </button>
       </header>
-      <ul className="agent-presence__list" id={listId}>
+      <ul className="agent-presence__list" id={listId} aria-hidden={!expanded} inert={!expanded}>
         {members.map((member) => (
           <PresenceRow key={member.id} snapshot={snapshot} member={member} session={sessions.find((item) => item.id === member.sessionId)} runs={runs} approvals={approvals} connection={connection} providers={providers} />
         ))}

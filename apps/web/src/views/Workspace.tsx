@@ -3,6 +3,7 @@ import { FileCode2, X } from 'lucide-react';
 import { useMingle, useProject } from '../store/store';
 import { isDirty, useEditor } from '../store/editor';
 import { cx } from '../lib/format';
+import { usePresence } from '../lib/motion';
 import { Boundary, Badge, Spinner } from '../components/ui';
 import { SessionPane } from '../components/Chat';
 import { ContextPane } from '../components/ContextPane';
@@ -47,14 +48,34 @@ export function Workspace() {
   const centerTab = useMingle((s) => s.centerTab);
   const tabs = useEditor((s) => s.tabs);
   const terminalOpen = useMingle((s) => s.terminalOpen);
+  const { present: terminalPresent, closing: terminalClosing } = usePresence(terminalOpen);
   const termHeight = useMingle((s) => s.terminalHeight);
   const contextOpen = useMingle((s) => s.contextOpen);
   const editorActive = centerTab !== 'session' && tabs.some((t) => t.key === centerTab);
   const drag = useRef<{ y: number; h: number } | null>(null);
+  const wasTerminalOpen = useRef(terminalOpen);
+  const terminalFocusFrame = useRef<number | null>(null);
 
   useEffect(() => {
     if (centerTab !== 'session' && !tabs.some((t) => t.key === centerTab)) useMingle.getState().setCenterTab('session');
   }, [centerTab, tabs]);
+  useEffect(() => {
+    if (terminalOpen) {
+      wasTerminalOpen.current = true;
+      if (terminalFocusFrame.current !== null) window.cancelAnimationFrame(terminalFocusFrame.current);
+      terminalFocusFrame.current = null;
+      return;
+    }
+    if (!wasTerminalOpen.current) return;
+    wasTerminalOpen.current = false;
+    const active = document.activeElement;
+    if (!(active instanceof HTMLElement) || (!active.closest('.workspace__term') && active !== document.body)) return;
+    terminalFocusFrame.current = window.requestAnimationFrame(() => {
+      terminalFocusFrame.current = null;
+      if (!useMingle.getState().terminalOpen) document.querySelector<HTMLButtonElement>('.header__actions button[aria-label="Show terminal"]')?.focus({ preventScroll: true });
+    });
+  }, [terminalOpen]);
+  useEffect(() => () => { if (terminalFocusFrame.current !== null) window.cancelAnimationFrame(terminalFocusFrame.current); }, []);
 
   const onDrag = useCallback((e: PointerEvent) => {
     if (!drag.current) return;
@@ -87,8 +108,8 @@ export function Workspace() {
             </div>
           ) : null}
         </div>
-        {terminalOpen ? (
-          <div className="workspace__term" style={{ height: termHeight }}>
+        {terminalPresent ? (
+          <div className={cx('workspace__term', terminalClosing && 'is-closing')} aria-hidden={terminalClosing || undefined} inert={terminalClosing} style={{ height: terminalClosing ? 0 : termHeight }}>
             <div
               className="resizer" role="separator" aria-orientation="horizontal" aria-label="Resize terminal" tabIndex={0}
               onPointerDown={(e) => {
@@ -104,7 +125,7 @@ export function Workspace() {
               }}
             />
             <Boundary label="Terminal">
-              <Suspense fallback={<div className="editor__state"><Spinner label="Loading terminal" /><Badge>Loading terminal…</Badge></div>}><TerminalPanel /></Suspense>
+              <Suspense fallback={<div className="editor__state"><Spinner label="Loading terminal" /><Badge>Loading terminal…</Badge></div>}><TerminalPanel active={terminalOpen} /></Suspense>
             </Boundary>
           </div>
         ) : null}

@@ -10,10 +10,15 @@ import { ScopeSwitch } from './context/scope';
 
 const css = (name: string): string => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
-export default function TerminalPanel() {
+export default function TerminalPanel({ active }: { active: boolean }) {
   const host = useRef<HTMLDivElement>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const term = useRef<Terminal | null>(null);
+  const activeRef = useRef(active);
+  const alive = useRef(true);
+  const setupFrame = useRef<number | null>(null);
+  const disposeTerminal = useRef<(() => void) | null>(null);
+  activeRef.current = active;
   const status = useMingle((s) => s.terminal.status);
   const exitCode = useMingle((s) => s.terminal.exitCode);
   const label = useMingle((s) => s.terminal.label);
@@ -23,14 +28,27 @@ export default function TerminalPanel() {
   const hasProject = useMingle((s) => Boolean(s.activeProjectId));
 
   useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+      if (setupFrame.current !== null) window.cancelAnimationFrame(setupFrame.current);
+      setupFrame.current = null;
+      disposeTerminal.current?.();
+      disposeTerminal.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!active || term.current || setupFrame.current !== null) return;
     const el = host.current;
     if (!el) return;
-    let disposed = false;
+    let cancelled = false;
     let cleanup: (() => void) | null = null;
 
     // Opening on the next frame avoids xterm touching a renderer that StrictMode tears down immediately.
     const frame = window.requestAnimationFrame(() => {
-      if (disposed) return;
+      setupFrame.current = null;
+      if (cancelled || !alive.current || !activeRef.current) return;
       const t = new Terminal({
         fontFamily: 'JetBrains Mono, ui-monospace, SF Mono, Menlo, Consolas, monospace', fontSize: 12.5, lineHeight: 1.25, cursorBlink: true,
         scrollback: 5000, theme: { background: css('--bg-inset'), foreground: css('--fg-0'), cursor: css('--accent'), selectionBackground: css('--accent-soft') },
@@ -40,7 +58,7 @@ export default function TerminalPanel() {
       t.open(el);
       fitRef.current = fit;
       term.current = t;
-      const safeFit = () => { if (!disposed) { try { fit.fit(); } catch { /* host not measurable yet */ } } };
+      const safeFit = () => { if (alive.current && activeRef.current && term.current === t) { try { fit.fit(); } catch { /* host not measurable yet */ } } };
       safeFit();
 
       const snapshot = terminalBus.snapshot();
@@ -58,14 +76,17 @@ export default function TerminalPanel() {
         ro.disconnect(); off(); dataSub.dispose(); resizeSub.dispose(); t.dispose();
         term.current = null; fitRef.current = null;
       };
+      disposeTerminal.current = cleanup;
     });
+    setupFrame.current = frame;
 
     return () => {
-      disposed = true;
+      if (setupFrame.current !== frame) return;
+      cancelled = true;
       window.cancelAnimationFrame(frame);
-      cleanup?.();
+      setupFrame.current = null;
     };
-  }, []);
+  }, [active]);
 
   useEffect(() => {
     if (term.current) term.current.options.theme = { background: css('--bg-inset'), foreground: css('--fg-0'), cursor: css('--accent'), selectionBackground: css('--accent-soft') };

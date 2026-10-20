@@ -10,6 +10,7 @@ import { SelectMenu } from '../components/SelectMenu';
 import { ContextStrip } from '../components/automation/ContextSummary';
 import { SourceBadges, SourceDetails } from '../components/automation/TaskSource';
 import { useProjectContext } from '../store/projectContext';
+import { useRetainedPresence } from '../lib/motion';
 
 const COLUMNS: { id: TaskStatus; label: string; hint: string }[] = [
   { id: 'backlog', label: 'Backlog', hint: 'Not yet scheduled' },
@@ -28,7 +29,7 @@ function TaskCard({ task, byId, session, selected, onDragStart }: { task: Task; 
   const parent = task.source?.parentTaskId ? byId.get(task.source.parentTaskId) : undefined;
   return (
     <button
-      type="button" className={cx('tcard', selected && 'is-selected')} draggable onDragStart={(e) => onDragStart(e, task.id)}
+      id={`task-card-${encodeURIComponent(task.id)}`} type="button" className={cx('tcard', selected && 'is-selected')} draggable onDragStart={(e) => onDragStart(e, task.id)}
       onClick={() => useMingle.getState().selectTask(task.id)} aria-label={`Task ${task.title}, ${task.status}`}
     >
       <span className="tcard__title">{task.title}</span>
@@ -57,7 +58,7 @@ function descendants(taskId: string, tasks: Task[]): Set<string> {
   return out;
 }
 
-function TaskDrawer({ task, tasks, sessions }: { task: Task; tasks: Task[]; sessions: Session[] }) {
+function TaskDrawer({ task, tasks, sessions, closing }: { task: Task; tasks: Task[]; sessions: Session[]; closing: boolean }) {
   const providers = useMingle((s) => s.boot?.providers);
   const runs = useMingle((s) => s.boot?.runs);
   const connection = useMingle((s) => s.connection);
@@ -135,7 +136,7 @@ function TaskDrawer({ task, tasks, sessions }: { task: Task; tasks: Task[]; sess
   const statusOptions = COLUMNS.filter((c) => c.id !== 'running' || task.status === 'running');
 
   return (
-    <aside className="drawer" aria-label={`Task details: ${task.title}`}>
+    <aside className={cx('drawer', closing && 'is-closing')} aria-label={`Task details: ${task.title}`} aria-hidden={closing || undefined} inert={closing}>
       <header className="drawer__head">
         <Badge tone="accent">{task.status}</Badge>
         <span className="muted small">Updated {relativeTime(task.updatedAt, now)}</span>
@@ -195,11 +196,33 @@ export function TasksView() {
   const byId = useMemo(() => new Map(tasks.map((t) => [t.id, t])), [tasks]);
   const sById = useMemo(() => new Map(sessions.map((s) => [s.id, s])), [sessions]);
   const selected = selectedId ? byId.get(selectedId) : undefined;
+  const { present: drawerPresent, closing: drawerClosing, key: drawerKey } = useRetainedPresence(selected?.id ?? null);
+  const retainedTask = useRef<Task | null>(selected ?? null);
+  if (selected) retainedTask.current = selected;
+  const drawerTask = selected ?? retainedTask.current;
+  const previousSelectedId = useRef(selectedId);
+  const returnFocusFrame = useRef<number | null>(null);
   const visible = tasks
     .filter((t) => !filter || (filter === 'none' ? !t.sessionId : t.sessionId === filter))
     .filter((t) => !origin || (origin === 'manual' ? !t.source : t.source?.kind === origin));
   const originKinds = useMemo(() => Array.from(new Set(tasks.flatMap((t) => (t.source ? [t.source.kind] : [])))), [tasks]);
   const missingCount = tasks.filter((t) => t.source?.missing).length;
+
+  useEffect(() => {
+    const previous = previousSelectedId.current;
+    previousSelectedId.current = selectedId;
+    if (!previous || selectedId) return;
+    if (returnFocusFrame.current !== null) window.cancelAnimationFrame(returnFocusFrame.current);
+    returnFocusFrame.current = window.requestAnimationFrame(() => {
+      returnFocusFrame.current = null;
+      if (useMingle.getState().selectedTaskId !== null || useMingle.getState().view !== 'tasks') return;
+      const target = document.getElementById(`task-card-${encodeURIComponent(previous)}`)
+        ?? document.querySelector<HTMLElement>('.board .tcard')
+        ?? document.getElementById('main');
+      target?.focus({ preventScroll: true });
+    });
+  }, [selectedId]);
+  useEffect(() => () => { if (returnFocusFrame.current !== null) window.cancelAnimationFrame(returnFocusFrame.current); }, []);
 
   if (!project) return <EmptyState title="No project">Open a project to manage tasks.</EmptyState>;
 
@@ -270,7 +293,7 @@ export function TasksView() {
           </div>
         )}
       </div>
-      {selected ? <TaskDrawer key={selected.id} task={selected} tasks={tasks} sessions={sessions} /> : null}
+      {drawerPresent && drawerTask ? <TaskDrawer key={drawerKey} task={drawerTask} tasks={tasks} sessions={sessions} closing={drawerClosing} /> : null}
     </div>
   );
 }
