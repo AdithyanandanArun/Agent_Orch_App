@@ -81,7 +81,9 @@ export class ClaudeMessageMapper {
   private lastAssistantError: string | null = null;
   finished = false;
 
-  constructor(private readonly requestedModel: string, private readonly emit: (event: AdapterEvent) => void) {}
+  constructor(private readonly requestedModel: string, private readonly emit: (event: AdapterEvent) => void, nativeTasks: ProviderTaskPlan['steps'] = []) {
+    for (const step of nativeTasks.slice(0, 100)) this.planTasks.set(JSON.stringify(['root', step.id]), step);
+  }
 
   get providerSessionId(): string | null { return this.sessionId; }
 
@@ -361,7 +363,16 @@ export class ClaudeMessageMapper {
       if (step) {
         const deps = new Set([...(previous?.dependsOn ?? []), ...(Array.isArray(input.addBlockedBy) ? input.addBlockedBy.filter(validId) : [])]);
         step.dependsOn = [...deps].slice(0, 100);
-        emit([step]);
+        const updated = [step];
+        if (Array.isArray(input.addBlocks)) {
+          for (const blockedId of input.addBlocks.filter(validId)) {
+            const blocked = this.planTasks.get(JSON.stringify([scope, blockedId]));
+            if (!blocked || blocked.id === step.id) continue;
+            blocked.dependsOn = [...new Set([...(blocked.dependsOn ?? []), step.id])].slice(0, 100);
+            updated.push(blocked);
+          }
+        }
+        emit(updated);
       }
     }
   }

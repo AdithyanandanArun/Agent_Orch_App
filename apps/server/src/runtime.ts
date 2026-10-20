@@ -1,7 +1,7 @@
 import { ProviderTaskPlanSchema } from '@relay/contracts';
 import type { ProjectIntelligenceService } from './project-intelligence/service.ts';
 import { existsSync, statSync } from 'node:fs';
-import type { AdapterEvent, Approval, Message, ProviderSkill, RunChanges, Session, ToolActivity, ToolCall } from '@relay/contracts';
+import type { ProviderTaskPlan, AdapterEvent, Approval, Message, ProviderSkill, RunChanges, Session, ToolActivity, ToolCall } from '@relay/contracts';
 import type { Hub } from './hub.ts';
 import type { Store } from './store.ts';
 import type { TaskService } from './tasks.ts';
@@ -123,7 +123,7 @@ export class SessionRuntime {
       const browserMcp = settings.browserAgentEnabled !== false ? this.browserMcp?.create(run.id, session, run.controller.signal, (request) => this.requestApproval(run, request)) : undefined;
       browserToken = browserMcp?.token;
       const adapterRun = Promise.resolve().then(() => adapter.run({
-        session, prompt, skills: run.skills, browserMcp, signal: run.controller.signal, settings,
+        session, prompt, providerTaskState: this.nativeTaskState(session), skills: run.skills, browserMcp, signal: run.controller.signal, settings,
         onEvent: (event) => this.handleEvent(run, browserToken ? JSON.parse(JSON.stringify(event).split(browserToken).join('[redacted]')) as AdapterEvent : event),
         requestApproval: (request) => this.requestApproval(run, request),
       }));
@@ -162,6 +162,14 @@ export class SessionRuntime {
       changes = unavailableRunChanges('Workspace changes could not be captured for this run.');
     }
     this.finish(run, outcome, failure, changes);
+  }
+
+  /** Rehydrate only genuine root Claude task IDs; this metadata is never replayed as prompt text. */
+  private nativeTaskState(session: Session): ProviderTaskPlan['steps'] | undefined {
+    if (session.provider !== 'claude') return undefined;
+    const tasks = this.store.listTasks(session.projectId).filter(task => task.sessionId === session.id && task.source?.kind === 'provider' && task.source.providerId && task.source.key === `provider:${session.id}:claude-tasks:root:${task.source.providerId}` && !task.source.missing).slice(-100);
+    const byId = new Map(tasks.map(task => [task.id, task.source!.providerId!]));
+    return tasks.map(task => ({ id: task.source!.providerId!, title: task.title.slice(0, 200), description: task.description.slice(0, 4000), status: task.source!.reportedStatus ?? 'pending', dependsOn: task.dependsOn.map(id => byId.get(id)).filter((id): id is string => Boolean(id)) }));
   }
 
   private releaseAfterCleanup(run: ActiveRun): void {

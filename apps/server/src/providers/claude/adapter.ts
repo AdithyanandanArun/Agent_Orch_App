@@ -119,7 +119,7 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): AgentAdapter 
       const emit = (event: AdapterEvent): void => {
         try { onEvent(event); } catch { /* host listener errors must not break the stream */ }
       };
-      const mapper = new ClaudeMessageMapper(session.model, emit);
+      const mapper = new ClaudeMessageMapper(session.model, emit, run.providerTaskState);
       let stream: Query | AsyncGenerator<unknown, void> | undefined;
       try {
         const query = deps.query ?? (await loadSdkQuery());
