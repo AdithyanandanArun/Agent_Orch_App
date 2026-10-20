@@ -60,7 +60,7 @@ See [provider research](docs/provider-research.md) for the T3 architecture inves
 
 ## Workspace behavior
 
-**New Session** creates and selects a session immediately from the sidebar toolbar. Set its default provider, model and effort in **Settings → General → New sessions**. Settings opens as a full page with General, Project, Providers, Browser and Appearance sections. Each provider remembers its own default model. Existing sessions keep their choices, and their model and effort can be changed in the composer between runs. A provider conversation is retained when switching models within that provider; use a new session to switch providers after a conversation has started.
+**New Session** creates and selects a session immediately from the sidebar toolbar. Set its default provider, model and effort in **Settings → General → New sessions**. Settings opens as a full page with General, Project, Providers, Agents & orchestration, Browser and Appearance sections. Each provider remembers its own default model. Existing sessions keep their choices, and their model and effort can be changed in the composer between runs. A provider conversation is retained when switching models within that provider; use a new session to switch providers after a conversation has started.
 
 The composer reads each model's supported reasoning levels and speed options from its provider. Its combined reasoning/speed popover shows the reported defaults. Permission choices include **Supervised**, **Auto-accept edits**, **Auto** and **Full access**, where supported. Settings also saves a default service tier. Explicit unsupported choices fail before a run; inherited defaults adapt when changing models.
 
@@ -81,6 +81,16 @@ Tasks include an owner, prerequisites and acceptance criteria. A successful assi
 Use the file pane to inspect and edit permitted project files, the changes pane for Git diffs, and the terminal for an interactive shell in the selected local workspace. The app is intended for a trusted local user and binds to loopback; exposing it through a network tunnel is not a supported team collaboration mode.
 
 State lives in the ignored `.relay/` directory by default. Override it with `RELAY_DATA_DIR`. Worktrees and provider conversation references are retained; deleting application data is not a supported cleanup procedure for repositories with unmerged work.
+
+## Group conversations
+
+Use **Add agent** in a session to choose **Cowork**, **Orchestrated** with a separate coordinator, or **Current agent leads** with the existing session as orchestrator. Preview each new agent's provider, model, effort, permissions and isolated workspace before adding it. The separate-orchestrator choice also offers Keep/Change for the existing worker's configuration. Creating a group starts no inference.
+
+A shared timeline keeps each member's responses, tools, timing, approvals and file changes distinct. Use `@claude1`, `@codex1` or the recipient picker to address a member. Without a recipient, Cowork lets one peer split the request before the others edit; either coordinated mode sends it to its orchestrator. Both providers receive scoped team tools for actual assignments, peer questions, progress and verified artifact references. Tasks follow those assignments automatically.
+
+**Settings → Agents & orchestration** saves coordinator/worker defaults and delegation bounds. **Members** opens per-agent settings, queue state, stop/resume and mode/limit controls. Pause holds new scheduling; Stop also interrupts active runs. Queued work stays paused after a server restart until explicitly resumed. Native project skills remain available to providers, but attaching a selected skill through the group composer is not yet supported; independent sessions retain their skill picker.
+
+See [group setup, communication and recovery](docs/group-sessions.md). Live multi-provider integration has not yet been demonstrated; source implementation and local checks are recorded separately from that remaining proof.
 
 ## Repository controls and automatic tracking
 

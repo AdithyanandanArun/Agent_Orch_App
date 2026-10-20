@@ -1,6 +1,6 @@
 # Phase 2 — Group sessions and coordination modes
 
-Status: proposed implementation specification, based on the owner's updated vision. Group conversations, participant messaging and automatic delegation are not implemented yet. Phase 1's independent provider sessions remain the execution foundation.
+Status: implemented in the application, based on the owner's updated vision. Group conversations, participant messaging and bounded automatic delegation use Phase 1's independent provider sessions as their execution foundation. Local implementation checks and the remaining paid integration demonstration are recorded separately below.
 
 ## Experience
 
@@ -114,7 +114,7 @@ SQLite stores membership, group messages, deliveries and assignments. WebSocket 
 
 ### Agent communication
 
-Both providers receive a narrow, run-scoped team tool interface, following the existing server-owned browser capability pattern. Proposed operations are:
+Both providers receive a narrow, run-scoped team tool interface, following the existing server-owned browser capability pattern. The implemented operations are:
 
 - List members and their actual status/capabilities.
 - Assign a bounded task to an eligible worker.
@@ -171,7 +171,7 @@ Browser access continues to honor the actual connection/tab owner and human cont
 
 Acceptance must include no extra coordinator participant in Cowork or Current agent leads; the existing agent retaining its history, configuration and orchestrator role in Current agent leads; the selected mode and roster persisting through reload; the worker configuration question appearing only for Orchestrated conversion; reduced-motion and keyboard alternatives for mode animations; preserved original history and provider conversation IDs; actual model/effort/policy in the add-agent preview; only intended recipients running for direct mentions; live simultaneous streams remaining distinct; changes to busy members refusing safely; restored pending messages without duplicate dispatch; bounded communication; and visible interruption/failure behavior. A real provider-backed integration demonstration requires explicit owner authorization for its model runs. Completion evidence must distinguish implementation, local checks and the live demonstration.
 
-The current record defines the next phase. It does not declare any group-session feature complete. Distributed computers, voice control and general autonomous integration remain later milestones.
+The application now implements this coordination layer. A real provider-backed integrated feature demonstration remains pending; this record does not claim that proof has run. Distributed computers, voice control and general autonomous integration remain later milestones.
 
 
 ## Interaction preview review — 2026-10-20
@@ -184,3 +184,22 @@ In the native collaborative preview, both choices rendered at 1280px. Selecting 
 ### Third-mode preview review
 
 Added Current agent leads to the specification and standalone preview. Native browser inspection at 1280px confirmed three cards without horizontal overflow, the existing agent labeled Orchestrator, the new agent labeled Worker, and a two-participant review summary. The separate coordinator row and existing-worker configuration question were hidden. Switching from a lighter-model/Medium Orchestrated preview back to Current agent leads restored the unchanged current-model/High preview. Pause stopped all three SVG clocks. At 390px, cards stacked without horizontal overflow. JavaScript syntax and Git whitespace checks passed. Screenshot capture failed, and the browser host disconnected during the final desktop resize, so no new screenshot was captured. No automated tests or provider runs were started. This remains a design preview, not implemented group execution.
+
+
+## Application implementation review — 2026-10-20
+
+The actual Relay application now exposes all three modes through Add agent, with live provider configuration, independent native sessions, group defaults, shared timelines, resolved recipients, team tools, assignment/task integration and persisted queue controls. The standalone HTML preview above remains a historical design artifact.
+
+Implementation used authorized Claude Sonnet 5.5 High workers. Claude reached its session quota after writing the backend and most frontend components; an actual GPT-6 Luna High CLI worker completed frontend wiring/styles, and integration review corrected routing, interruption and persistence boundaries. Every implementation worker committed its scoped files. No attribution trailers or publication were added.
+
+Local evidence:
+
+- Workspace TypeScript checks and the production web/server build pass. Desktop entry-point syntax checks pass through the workspace typecheck. No automated tests were added or run.
+- The native collaborative browser rendered three cards at 1280px and the current-agent-led two-member preview without a worker downgrade question. Provider selection changed the proposed worker from Codex to the actual Claude catalog. Pausing stopped all three SVG clocks.
+- A mobile dialog overflow was found and corrected with an explicit viewport width cap. Reinspection at 390px measured the modal from x=20 to x=370, with cards stacked and no dialog/card overflow.
+- In the built application, `@claude1` selected only that worker, an unknown custom handle disabled Send, and a handle inside inline code retained default orchestrator routing. Drafts were cleared without sending.
+- In a separate cache data directory and explicitly labeled example workspace, configuration-only API calls created Current agent leads with orchestrator/worker, Cowork with two peers and no coordinator, and Orchestrated with a separate coordinator and two workers. The original orchestrator kept High effort; the separate-coordinator conversion applied the explicitly selected Low effort to its existing worker. All new members had isolated workspaces. Bootstrap reported zero runs and zero deliveries.
+- A previously running development watcher opened an early v7 schema during integration. Migration 8 upgraded it without deleting data. Read-only SQLite foreign-key checks reported zero violations in both the existing development database and separate review database.
+- Screenshot capture failed in the collaborative browser, although DOM inspection and focused interactions worked. No screenshot is claimed.
+
+A live multi-provider assignment/communication/integration demonstration has not been run. It remains the unchecked proof milestone in roadmap.md. Group messages currently carry text and resolved recipients; attaching selected native skills in the group composer is explicitly unavailable, while independent-session skill controls remain supported. This does not claim distributed machines or general autonomous integration are complete.
