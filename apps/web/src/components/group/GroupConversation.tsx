@@ -16,6 +16,7 @@ import { GitBar } from '../git/GitBar';
 import { GroupBar } from './GroupBar';
 import { GroupComposer } from './GroupComposer';
 import { AgentIdentity } from './AgentIdentity';
+import { AgentPresenceRail } from './AgentPresenceRail';
 
 const NO_SESSIONS: Session[] = [];
 const NO_MESSAGES: Message[] = [];
@@ -130,6 +131,9 @@ export function GroupConversation({ snapshot }: { snapshot: GroupSnapshot }) {
   const allRuns = useRelay((s) => s.boot?.runs ?? NO_RUNS);
   const allCalls = useRelay((s) => s.boot?.toolCalls ?? NO_CALLS);
   const approvals = useRelay((s) => s.boot?.approvals);
+  const providers = useRelay((s) => s.boot?.providers ?? []);
+  const connection = useRelay((s) => s.connection);
+  const contextOpen = useRelay((s) => s.contextOpen);
   const creating = useRelay((s) => s.creatingSession);
   const [membersOpen, setMembersOpen] = useState(false);
   const anchor = sessions.find((session) => session.id === snapshot.group.anchorSessionId);
@@ -222,6 +226,8 @@ export function GroupConversation({ snapshot }: { snapshot: GroupSnapshot }) {
   return (
     <div className="chat chat--group">
       <GroupBar snapshot={snapshot} membersOpen={membersOpen} setMembersOpen={setMembersOpen} />
+      <div className="group-body">
+      <section className="group-body__conversation" aria-label="Group conversation">
       <div
         className="chat__scroll" ref={scroller} role="log" aria-live="polite" aria-label={`Group conversation: ${snapshot.group.title || anchor.name}`}
         onScroll={(event) => {
@@ -269,6 +275,9 @@ export function GroupConversation({ snapshot }: { snapshot: GroupSnapshot }) {
         </button>
       ) : null}
       <GroupComposer key={snapshot.group.id} snapshot={snapshot} anchor={anchor} onOpenMembers={() => setMembersOpen(true)} footer={<GitBar project={project} session={anchor} />} />
+      </section>
+      {!contextOpen ? <AgentPresenceRail snapshot={snapshot} members={members} sessions={sessions} runs={allRuns} approvals={approvals ?? []} connection={connection} providers={providers} /> : null}
+      </div>
     </div>
   );
 }
