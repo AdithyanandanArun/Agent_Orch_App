@@ -26,7 +26,11 @@ export const CreateGroupSchema = z.object({
   currentConfiguration: AgentConfigurationSchema.omit({ provider: true }).optional(),
 }).strict();
 export type CreateGroup = z.infer<typeof CreateGroupSchema>;
-export const UpdateGroupSchema = z.object({ mode: GroupModeSchema.optional(), orchestratorMemberId: z.string().min(1).max(100).optional() }).strict();
+export const UpdateGroupSchema = z.object({
+  mode: GroupModeSchema.optional(), orchestratorMemberId: z.string().min(1).max(100).optional(),
+  maxParallel: z.number().int().min(1).max(6).optional(), maxTurns: z.number().int().min(2).max(80).optional(),
+  maxHops: z.number().int().min(1).max(12).optional(),
+}).strict().refine((patch) => Object.keys(patch).length > 0, 'Supply a group setting to update');
 export const SendGroupMessageSchema = z.object({
   content: z.string().trim().min(1).max(100_000), recipients: z.array(z.string().min(1).max(100)).min(1).max(8).optional(),
   clientMessageId: z.string().min(1).max(100).optional(),
