@@ -1,6 +1,7 @@
-import { app, BrowserWindow, dialog, shell } from 'electron';
+import { app, BrowserWindow, dialog, shell, safeStorage } from 'electron';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, rmSync } from 'node:fs';
+import { randomBytes, createHash } from 'node:crypto';
 import { createServer } from 'node:net';
 import { dirname, delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -65,11 +66,27 @@ async function openWorkspace() {
   mkdirSync(userData, { recursive: true, mode: 0o700 });
   const dataOverride = process.env.MINGLE_DATA_DIR !== undefined ? process.env.MINGLE_DATA_DIR : process.env.RELAY_DATA_DIR;
   const workspaceDataDir = dataOverride?.trim() || join(userData, 'workspace');
+  // Refuse Chromium's plaintext fallback. Unsupported/locked keyrings use memory-only sessions.
+  let accountKey = null;
+  try {
+    if (safeStorage.isEncryptionAvailable() && (process.platform !== 'linux' || !['basic_text', 'unknown'].includes(safeStorage.getSelectedStorageBackend()))) {
+      const scope = createHash('sha256').update(workspaceDataDir).digest('hex').slice(0, 16);
+      const keyFile = join(userData, `account-key-${scope}.enc`);
+      if (existsSync(keyFile)) accountKey = safeStorage.decryptString(readFileSync(keyFile));
+      else {
+        accountKey = randomBytes(32).toString('base64');
+        const temporary = `${keyFile}.tmp`;
+        try { writeFileSync(temporary, safeStorage.encryptString(accountKey), { mode: 0o600, flag: 'wx' }); renameSync(temporary, keyFile); }
+        finally { rmSync(temporary, { force: true }); }
+      }
+    }
+  } catch { accountKey = null; }
   // Canonical values override any legacy environment inherited from another local server.
   const environment = {
     ...process.env, NODE_ENV: 'production', MINGLE_HOST: '127.0.0.1',
     MINGLE_PORT: String(port), PORT: String(port), MINGLE_DATA_DIR: workspaceDataDir,
     MINGLE_WEB_DIST: join(root, 'apps/web/dist'), MINGLE_ALLOWED_ORIGINS: '',
+    MINGLE_ACCOUNT_IPC: '1',
   };
   delete environment.ELECTRON_RUN_AS_NODE;
   delete environment.NODE_OPTIONS;
@@ -79,8 +96,16 @@ async function openWorkspace() {
   backend = spawn(runtimeNode, serverArgs, {
     cwd: app.isPackaged ? userData : root,
     env: environment,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
+  const keyReceiver = (message) => {
+    if (message?.type !== 'mingle.account-key.request' || !backend?.connected) return;
+    backend.off('message', keyReceiver);
+    backend.send({ type: 'mingle.account-key', key: accountKey });
+    accountKey = null;
+  };
+  backend.on('message', keyReceiver);
+  backend.once('exit', () => { accountKey = null; });
   let startupErrors = '';
   backend.stdout.on('data', chunk => process.stdout.write(chunk));
   backend.stderr.on('data', chunk => {
