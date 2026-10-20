@@ -129,7 +129,7 @@ class CodexRun {
 
   async execute(): Promise<void> {
     const { session, signal } = this.options;
-    const env = cleanEnv(this.ctx.env, ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN']);
+    const env = cleanEnv(this.ctx.env, ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN', 'RELAY_TEAM_MCP_TOKEN']);
     if (this.options.browserMcp) env.RELAY_BROWSER_MCP_TOKEN = this.options.browserMcp.token;
     if (this.options.teamMcp) env.RELAY_TEAM_MCP_TOKEN = this.options.teamMcp.token;
     this.child = this.ctx.spawn(this.executable, ['app-server'], {

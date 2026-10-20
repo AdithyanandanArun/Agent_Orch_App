@@ -215,7 +215,8 @@ export function itemToolActivity(item: Record<string, unknown>, phase: 'started'
     case 'dynamicToolCall': {
       const name = str(item.tool) ?? '?';
       const identity = `${str(item.namespace) ?? ''} ${name}`.toLowerCase();
-      const category: ToolCategory = /browser|playwright/.test(identity) || (/t3_code/.test(identity) && /preview_/.test(identity)) ? 'browser' : 'other';
+      const category: ToolCategory = (str(item.namespace) === 'relay_team' && /^team_/.test(name)) || /^mcp__relay_team__team_/.test(name) ? 'agent'
+        : /browser|playwright/.test(identity) || (/t3_code/.test(identity) && /preview_/.test(identity)) ? 'browser' : 'other';
       const output = done ? dynamicResultText(item.contentItems) : undefined;
       return { ...base, name: `tool:${name}`, category, summary: truncate(name, 300), ...(item.arguments !== undefined ? { input: describeValue(item.arguments, 4_000) } : {}), ...(output ? { output } : {}) };
     }

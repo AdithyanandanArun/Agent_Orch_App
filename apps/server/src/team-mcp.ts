@@ -132,7 +132,7 @@ export class TeamMcpBridge {
     binding.inFlight += 1;
     const requestController = new AbortController();
     const server = this.tools(binding, requestController.signal);
-    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true, maxRequestBodySize: MAX_BODY_BYTES });
     let released = false;
     const release = () => { if (!released) { released = true; binding.inFlight -= 1; } };
     res.once('close', () => { if (!res.writableFinished) requestController.abort(); release(); void transport.close(); void server.close(); });
