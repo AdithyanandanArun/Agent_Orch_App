@@ -374,7 +374,7 @@ class CodexRun {
       return;
     }
     if (item.type === 'fileChange' && id) this.changesByItem.set(id, summarizeChanges(item.changes));
-    const isTool = ['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'webSearch', 'collabAgentToolCall', 'imageView'].includes(String(item.type));
+    const isTool = ['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'webSearch', 'collabAgentToolCall', 'collabToolCall', 'imageView'].includes(String(item.type));
     if (isTool && !id) {
       this.info(`Codex ${String(item.type)} item had no provider id; its tool activity was omitted.`);
       return;

@@ -227,9 +227,10 @@ export function itemToolActivity(item: Record<string, unknown>, phase: 'started'
         : str(action.url) ?? str(action.pattern) ?? 'Web action';
       return { ...base, name, category, ...(item.action !== undefined || item.query !== undefined || phase === 'started' ? { summary: truncate(summary, 600) } : {}), ...(item.action !== undefined || item.query !== undefined ? { input: describeValue(item.action ?? item.query, 4_000) } : {}), ...(str(item.result) ? { output: truncate(str(item.result)!, 20_000) } : {}) };
     }
+    case 'collabToolCall':
     case 'collabAgentToolCall': {
       const tool = str(item.tool) ?? '?';
-      const category: ToolCategory = tool === 'spawnAgent' ? 'agent' : 'other';
+      const category: ToolCategory = ['spawnAgent', 'spawn_agent'].includes(tool) ? 'agent' : 'other';
       return { ...base, name: `agent:${tool}`, category, summary: truncate(str(item.prompt) ?? `Agent ${tool}`, 600), input: describeValue(item, 4_000), ...(str(item.output) ? { output: truncate(str(item.output)!, 20_000) } : {}) };
     }
     case 'imageView': return { ...base, name: 'image_view', category: 'other', summary: str(item.path) ?? 'View image', input: str(item.path) ?? '' };
