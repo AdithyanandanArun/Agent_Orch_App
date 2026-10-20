@@ -15,52 +15,72 @@ import { RunChanges } from '../RunChanges';
 import { GitBar } from '../git/GitBar';
 import { GroupBar } from './GroupBar';
 import { GroupComposer } from './GroupComposer';
+import { AgentIdentity } from './AgentIdentity';
 
 const NO_SESSIONS: Session[] = [];
 const NO_MESSAGES: Message[] = [];
 const NO_RUNS: SessionRun[] = [];
 const NO_CALLS: ToolCall[] = [];
 
-function DeliveryChips({ deliveries, label }: { deliveries: GroupDelivery[]; label: (memberId: string) => string }) {
+function DeliveryChips({ deliveries, snapshot, sessions }: { deliveries: GroupDelivery[]; snapshot: GroupSnapshot; sessions: readonly Session[] }) {
   if (!deliveries.length) return null;
+  const members = new Map(snapshot.members.map((member) => [member.id, member]));
+  const sessionById = new Map(sessions.map((session) => [session.id, session]));
   return (
     <ul className="deliveries" aria-label="Delivery state">
       {deliveries.map((delivery) => (
         <li key={delivery.id} className={cx('delivery', `is-${delivery.status}`)} title={delivery.error ?? undefined}>
-          <i aria-hidden="true" />{label(delivery.memberId)} · {DELIVERY_LABEL[delivery.status]}{delivery.hop > 0 ? ` · hop ${delivery.hop}` : ''}
+          <i aria-hidden="true" />
+          {members.get(delivery.memberId) ? (() => {
+            const member = members.get(delivery.memberId)!;
+            return <AgentIdentity handle={member.handle} identityKey={member.sessionId} provider={sessionById.get(member.sessionId)?.provider} />;
+          })() : '@unknown'}
+          <span>{DELIVERY_LABEL[delivery.status]}{delivery.hop > 0 ? ` · hop ${delivery.hop}` : ''}</span>
         </li>
       ))}
     </ul>
   );
 }
 
-function Handles({ speakersList }: { speakersList: Speaker[] }) {
-  return <>{speakersList.map((speaker, index) => <Fragment key={speaker.memberId}>{index ? ', ' : ''}<span className="handle">@{speaker.handle}</span></Fragment>)}</>;
+function Handles({ speakersList, sessions }: { speakersList: Speaker[]; sessions: readonly Session[] }) {
+  return <>{speakersList.map((speaker, index) => {
+    const provider = sessions.find((session) => session.id === speaker.sessionId)?.provider;
+    return <Fragment key={speaker.memberId}>{index ? ', ' : ''}<AgentIdentity handle={speaker.handle} identityKey={speaker.sessionId} provider={provider} /></Fragment>;
+  })}</>;
 }
 
 function GroupMessageRow({ item, snapshot }: { item: GroupItem; snapshot: GroupSnapshot }) {
   const { message, sender, recipients, deliveries } = item;
   const tasks = useRelay((s) => s.boot?.tasks);
-  const handleOf = (memberId: string) => `@${snapshot.members.find((member) => member.id === memberId)?.handle ?? 'unknown'}`;
+  const sessions = useRelay((s) => s.boot?.sessions ?? NO_SESSIONS);
+  const providerOf = (speaker: Speaker) => sessions.find((session) => session.id === speaker.sessionId)?.provider;
   const time = message.createdAt ? <time className="msg__time" dateTime={message.createdAt} title={clockTime(message.createdAt)}>{clockTime(message.createdAt)}</time> : null;
   if (message.kind === 'user') {
     return (
       <article className="msg msg--user" aria-label="Your message">
         <div className="msg__bubble"><Markdown text={message.content} /></div>
-        {recipients.length ? <div className="msg__to">To <Handles speakersList={recipients} /></div> : null}
-        <DeliveryChips deliveries={deliveries} label={handleOf} />
+        {recipients.length ? <div className="msg__to">To <Handles speakersList={recipients} sessions={sessions} /></div> : null}
+        <DeliveryChips deliveries={deliveries} snapshot={snapshot} sessions={sessions} />
         {time}
       </article>
     );
   }
   if (message.kind === 'status') {
+    const resultHandoff = !sender && deliveries.length > 0;
     return (
-      <div className="group-status" role="note">
+      <section className={cx('group-status', resultHandoff && 'group-status--result')} role="note" aria-label={resultHandoff ? 'Results handoff' : 'Group status'}>
         <i aria-hidden="true" />
-        {sender ? <strong>@{sender.handle}</strong> : null}
-        <span>{message.content}</span>
+        <div className="group-status__main">
+          <div className="group-status__heading">
+            {sender ? <AgentIdentity handle={sender.handle} identityKey={sender.sessionId} provider={providerOf(sender)} /> : null}
+            {resultHandoff ? <><span className="group-status__source">Group</span><strong>Results ready</strong></> : <span>{message.content}</span>}
+            {resultHandoff && recipients.length ? <><ArrowRight size={12} aria-hidden="true" /><Handles speakersList={recipients} sessions={sessions} /></> : null}
+          </div>
+          <DeliveryChips deliveries={deliveries} snapshot={snapshot} sessions={sessions} />
+          {resultHandoff ? <details className="group-status__detail"><summary>Show result details</summary><div><Markdown text={message.content} /></div></details> : null}
+        </div>
         {time}
-      </div>
+      </section>
     );
   }
   if (message.kind === 'assignment' || message.kind === 'artifact') {
@@ -69,7 +89,7 @@ function GroupMessageRow({ item, snapshot }: { item: GroupItem; snapshot: GroupS
       <section className="group-card" aria-label={message.kind === 'assignment' ? 'Assignment' : 'Artifact'}>
         <header>
           <span className="group-card__kind">{message.kind === 'assignment' ? 'Assignment' : 'Artifact'}</span>
-          <span className="group-card__route">{sender ? `@${sender.handle}` : 'Group'}{recipients.length ? <> <ArrowRight size={11} aria-hidden="true" /> <Handles speakersList={recipients} /></> : null}</span>
+          <span className="group-card__route">{sender ? <AgentIdentity handle={sender.handle} identityKey={sender.sessionId} provider={providerOf(sender)} /> : 'Group'}{recipients.length ? <> <ArrowRight size={11} aria-hidden="true" /> <Handles speakersList={recipients} sessions={sessions} /></> : null}</span>
         </header>
         <div className="group-card__body"><Markdown text={message.content} /></div>
         {assignments.map((assignment) => {
@@ -81,7 +101,7 @@ function GroupMessageRow({ item, snapshot }: { item: GroupItem; snapshot: GroupS
             </div>
           );
         })}
-        <DeliveryChips deliveries={deliveries} label={handleOf} />
+        <DeliveryChips deliveries={deliveries} snapshot={snapshot} sessions={sessions} />
         {time}
       </section>
     );
@@ -89,9 +109,9 @@ function GroupMessageRow({ item, snapshot }: { item: GroupItem; snapshot: GroupS
   return (
     <article className="msg msg--assistant" aria-label={sender ? `Message from @${sender.handle}` : 'Group message'}>
       <div className="msg__main">
-        {sender ? <SpeakerLabel speaker={sender} trailing={recipients.length ? <span className="speaker__to"><ArrowRight size={11} aria-hidden="true" /> <Handles speakersList={recipients} /></span> : undefined} /> : null}
+        {sender ? <SpeakerLabel speaker={sender} provider={providerOf(sender)} identityKey={sender.sessionId} trailing={recipients.length ? <span className="speaker__to"><ArrowRight size={11} aria-hidden="true" /> <Handles speakersList={recipients} sessions={sessions} /></span> : undefined} /> : null}
         <div className="msg__content"><Markdown text={message.content} /></div>
-        <DeliveryChips deliveries={deliveries} label={handleOf} />
+        <DeliveryChips deliveries={deliveries} snapshot={snapshot} sessions={sessions} />
         {time}
       </div>
     </article>
@@ -145,9 +165,10 @@ export function GroupConversation({ snapshot }: { snapshot: GroupSnapshot }) {
   items.forEach((item, index) => {
     if (item.type === 'group') { rendered.push(<GroupMessageRow key={item.key} item={item} snapshot={snapshot} />); return; }
     if (item.type === 'failure') {
+      const session = item.member && sessions.find((candidate) => candidate.id === item.member?.sessionId);
       rendered.push(
         <div key={item.key} className="chat__error" role="alert">
-          <strong>Delivery to {item.member ? `@${item.member.handle}` : 'a member'} failed</strong><span>{item.delivery.error}</span>
+          <strong>Delivery to {item.member ? <AgentIdentity handle={item.member.handle} identityKey={item.member.sessionId} provider={session?.provider} /> : 'a member'} failed</strong><span>{item.delivery.error}</span>
         </div>,
       );
       return;
@@ -168,14 +189,15 @@ export function GroupConversation({ snapshot }: { snapshot: GroupSnapshot }) {
       } else {
         const session = sessions.find((candidate) => candidate.id === item.sessionId);
         const labelled = item.speaker && (message.role === 'assistant' || (message.role === 'user' && item.sessionId !== snapshot.group.anchorSessionId));
-        body.push(<MessageRow key={`${item.key}:row`} m={message} provider={session?.provider ?? anchor.provider} speaker={labelled ? item.speaker : null} />);
+        body.push(<MessageRow key={`${item.key}:row`} m={message} provider={session?.provider} speaker={labelled ? item.speaker : null} />);
       }
     }
     for (const run of placement.activityAfter.get(item.key) ?? []) {
       const who = bySession.get(run.sessionId);
+      const runSession = sessions.find((candidate) => candidate.id === run.sessionId);
       body.push(
         <div key={`run:${run.id}`} className="group-run">
-          {who ? <span className="group-run__who">@{who.handle}</span> : null}
+          {who ? <AgentIdentity className="group-run__who" handle={who.handle} identityKey={who.sessionId} provider={runSession?.provider} /> : null}
           <RunActivity run={run} initialCalls={calls.get(run.id) ?? NO_CALLS} />
         </div>,
       );
@@ -215,16 +237,26 @@ export function GroupConversation({ snapshot }: { snapshot: GroupSnapshot }) {
           {rendered}
           {placement.unplaced.map((run) => {
             const who = bySession.get(run.sessionId);
+            const session = sessions.find((candidate) => candidate.id === run.sessionId);
             return (
               <Fragment key={run.id}>
-                <div className="group-run">{who ? <span className="group-run__who">@{who.handle}</span> : null}<RunActivity run={run} initialCalls={calls.get(run.id) ?? NO_CALLS} /></div>
+                <div className="group-run">{who ? <AgentIdentity className="group-run__who" handle={who.handle} identityKey={who.sessionId} provider={session?.provider} /> : null}<RunActivity run={run} initialCalls={calls.get(run.id) ?? NO_CALLS} /></div>
                 {run.status !== 'running' ? <RunChanges runId={run.id} summary={run.changes} /> : null}
               </Fragment>
             );
           })}
-          {working.map((member) => <div key={member.id} className="working" role="status"><span className="activity-shimmer">@{member.handle} is working…</span></div>)}
-          {failed.map(({ member, error }) => <div key={member.id} className="chat__error" role="alert"><strong>@{member.handle} · session error</strong><span>{error}</span></div>)}
-          {pending.map((approval) => <ApprovalCard key={approval.id} approval={approval} speaker={bySession.get(approval.sessionId) ?? byMember.get(approval.sessionId) ?? null} />)}
+          {working.map((member) => {
+            const session = sessions.find((candidate) => candidate.id === member.sessionId);
+            return <div key={member.id} className="working" role="status"><span className="activity-shimmer"><AgentIdentity handle={member.handle} identityKey={member.sessionId} provider={session?.provider} /> is working…</span></div>;
+          })}
+          {failed.map(({ member, error }) => {
+            const session = sessions.find((candidate) => candidate.id === member.sessionId);
+            return <div key={member.id} className="chat__error" role="alert"><strong><AgentIdentity handle={member.handle} identityKey={member.sessionId} provider={session?.provider} /> · session error</strong><span>{error}</span></div>;
+          })}
+          {pending.map((approval) => {
+            const speaker = bySession.get(approval.sessionId) ?? byMember.get(approval.sessionId) ?? null;
+            return <ApprovalCard key={approval.id} approval={approval} speaker={speaker} provider={sessions.find((session) => session.id === approval.sessionId)?.provider} />;
+          })}
         </div>
       </div>
       {away ? (
@@ -236,4 +268,3 @@ export function GroupConversation({ snapshot }: { snapshot: GroupSnapshot }) {
     </div>
   );
 }
-

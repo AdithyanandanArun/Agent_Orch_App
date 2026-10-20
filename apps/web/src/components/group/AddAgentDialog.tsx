@@ -11,12 +11,13 @@ import {
 import { Button, Field, InlineError, Modal, Switch } from '../ui';
 import { ConfigFields } from './ConfigFields';
 import { ModeDiagram, useDiagramMotion } from './ModeDiagrams';
+import { AgentIdentity } from './AgentIdentity';
 
 const MODES: GroupMode[] = ['cowork', 'orchestrated', 'current-leads'];
 const TITLES: Record<GroupMode, string> = { cowork: 'Cowork', orchestrated: 'Orchestrated', 'current-leads': 'Current agent leads' };
 
 export interface RosterEntry {
-  key: string; handle: string; role: GroupMember['role']; note: string; provider: ProviderInfo['id'];
+  key: string; handle: string; role: GroupMember['role']; note: string; provider?: ProviderInfo['id'];
   model: string; effort: string; policy: AgentConfiguration['policy']; serviceTier: string; workspace: string; badge?: string;
 }
 
@@ -25,20 +26,19 @@ export function Roster({ entries, providers }: { entries: RosterEntry[]; provide
   return (
     <ul className="roster" aria-label="Participants">
       {entries.map((entry) => {
-        const summary = configSummary(entry, providers, entry.provider);
-        const availability = providerAvailability(providers, entry.provider);
+        const summary = entry.provider ? configSummary(entry, providers, entry.provider) : null;
+        const availability = entry.provider ? providerAvailability(providers, entry.provider) : null;
         return (
           <li key={entry.key} className="roster__row">
             <div className="roster__who">
-              <strong>{entry.handle ? `@${entry.handle}` : 'Orchestrator'}</strong>
-              <span className="roster__role">{ROLE_LABEL[entry.role]}</span>
+              <AgentIdentity handle={entry.handle || 'Orchestrator'} identityKey={entry.key} provider={entry.provider} role={ROLE_LABEL[entry.role]} prefix={Boolean(entry.handle)} />
               {entry.badge ? <span className="roster__badge">{entry.badge}</span> : null}
               <small>{entry.note}</small>
             </div>
             <div className="roster__detail">
-              <span>{providerName(entry.provider)} · {summary.model}</span>
-              <small>{summary.detail}</small>
-              {!availability.available ? <small className="roster__warn">Unavailable: {availability.reason}</small> : null}
+              {entry.provider && summary ? <span>{providerName(entry.provider)} · {summary.model}</span> : <span>Provider unknown</span>}
+              {summary ? <small>{summary.detail}</small> : null}
+              {availability && !availability.available ? <small className="roster__warn">Unavailable: {availability.reason}</small> : null}
             </div>
             <div className="roster__detail"><span>{entry.workspace}</span></div>
           </li>
@@ -133,7 +133,7 @@ export function AddAgentDialog({ sessionId }: { sessionId: string }) {
     const existing = activeMembers(group).map<RosterEntry>((member) => {
       const memberSession = boot?.sessions.find((item) => item.id === member.sessionId);
       return {
-        key: member.id, handle: member.handle, role: member.role, note: 'Existing conversation', provider: memberSession?.provider ?? 'claude',
+        key: member.id, handle: member.handle, role: member.role, note: 'Existing conversation', provider: memberSession?.provider,
         model: memberSession?.model ?? '', effort: memberSession?.effort ?? '', policy: memberSession?.policy ?? 'supervised', serviceTier: memberSession?.serviceTier ?? 'standard',
         workspace: memberSession ? workspaceOf(memberSession) : 'Unknown workspace',
       };

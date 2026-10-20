@@ -1,6 +1,6 @@
 import { memo, useState, type ReactNode } from 'react';
 import { ChevronRight, ShieldAlert, Terminal, Info } from 'lucide-react';
-import type { Approval } from '@relay/contracts';
+import type { Approval, Provider } from '@relay/contracts';
 import { useRelay } from '../store/store';
 import { api, errorMessage } from '../lib/api';
 import { clockTime, cx } from '../lib/format';
@@ -9,6 +9,7 @@ import type { DisplayMessage } from '../lib/conversation';
 import type { Speaker } from '../lib/groupTimeline';
 import { Markdown } from './Markdown';
 import { Button, PROVIDER_NAME } from './ui';
+import { AgentIdentity } from './group/AgentIdentity';
 
 function legacyToolTitle(m: DisplayMessage): string {
   const candidates = [m.kind, ...m.content.split('\n')];
@@ -51,18 +52,17 @@ export const LegacyToolGroup = memo(function LegacyToolGroup({ messages }: { mes
   );
 });
 
-/** Names who is speaking in a shared conversation; plain text, with no provider artwork. */
-export function SpeakerLabel({ speaker, trailing }: { speaker: Pick<Speaker, 'handle' | 'role' | 'removed'>; trailing?: ReactNode }) {
+/** Names who is speaking in a shared conversation; standalone assistant responses remain provider-icon-free. */
+export function SpeakerLabel({ speaker, provider, identityKey, trailing }: { speaker: Pick<Speaker, 'handle' | 'role' | 'removed' | 'memberId'>; provider?: Provider | null; identityKey?: string; trailing?: ReactNode }) {
   return (
     <div className="speaker">
-      <strong>@{speaker.handle}</strong>
-      <span>{ROLE_LABEL[speaker.role]}{speaker.removed ? ' · removed' : ''}</span>
+      <AgentIdentity handle={speaker.handle} identityKey={identityKey ?? speaker.memberId} provider={provider} role={ROLE_LABEL[speaker.role]} removed={speaker.removed} />
       {trailing}
     </div>
   );
 }
 
-export const MessageRow = memo(function MessageRow({ m, provider, speaker }: { m: DisplayMessage; provider: keyof typeof PROVIDER_NAME; speaker?: Speaker | null }) {
+export const MessageRow = memo(function MessageRow({ m, provider, speaker }: { m: DisplayMessage; provider?: keyof typeof PROVIDER_NAME; speaker?: Speaker | null }) {
   if (m.role === 'tool') return null;
   if (m.role === 'system') {
     const preview = m.content.split('\n').find((line) => line.trim()) ?? '';
@@ -87,9 +87,9 @@ export const MessageRow = memo(function MessageRow({ m, provider, speaker }: { m
     );
   }
   return (
-    <article className="msg msg--assistant" aria-label={speaker ? `Response from @${speaker.handle}, ${ROLE_LABEL[speaker.role]}` : `Assistant response from ${PROVIDER_NAME[provider]}`}>
+    <article className="msg msg--assistant" aria-label={speaker ? `Response from @${speaker.handle}, ${ROLE_LABEL[speaker.role]}` : `Assistant response${provider ? ` from ${PROVIDER_NAME[provider]}` : ''}`}>
       <div className="msg__main">
-        {speaker ? <SpeakerLabel speaker={speaker} /> : <span className="sr-only">Assistant</span>}
+        {speaker ? <SpeakerLabel speaker={speaker} provider={provider} identityKey={speaker.sessionId} /> : <span className="sr-only">Assistant</span>}
         <div className={cx('msg__content', m.live && 'is-live')}><Markdown text={m.content || '…'} /></div>
         {m.createdAt ? <time className="msg__time" dateTime={m.createdAt} title={clockTime(m.createdAt)}>{clockTime(m.createdAt)}</time> : null}
       </div>
@@ -97,7 +97,7 @@ export const MessageRow = memo(function MessageRow({ m, provider, speaker }: { m
   );
 });
 
-export function ApprovalCard({ approval, speaker }: { approval: Approval; speaker?: Pick<Speaker, 'handle'> | null }) {
+export function ApprovalCard({ approval, speaker, provider }: { approval: Approval; speaker?: Pick<Speaker, 'handle' | 'memberId'> | null; provider?: Provider | null }) {
   const [busy, setBusy] = useState<'approved' | 'denied' | null>(null);
   const [showInput, setShowInput] = useState(false);
   const decide = async (decision: 'approved' | 'denied') => {
@@ -117,7 +117,7 @@ export function ApprovalCard({ approval, speaker }: { approval: Approval; speake
       <div className="approval__head">
         <ShieldAlert size={15} aria-hidden="true" />
         <strong>Approval needed</strong>
-        {speaker ? <span className="approval__who">@{speaker.handle}</span> : null}
+        {speaker ? <AgentIdentity className="approval__who" handle={speaker.handle} identityKey={speaker.memberId} provider={provider} /> : null}
         <code>{approval.tool}</code>
       </div>
       <p className="approval__desc">{approval.description}</p>
@@ -135,4 +135,3 @@ export function ApprovalCard({ approval, speaker }: { approval: Approval; speake
     </section>
   );
 }
-

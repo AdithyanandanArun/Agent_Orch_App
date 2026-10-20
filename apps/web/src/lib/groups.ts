@@ -166,7 +166,7 @@ export function providerAvailability(providers: readonly ProviderInfo[], provide
 }
 
 /* ——— Mentions ——— */
-export interface MentionCandidate { id: string; handle: string; provider: Provider }
+export interface MentionCandidate { id: string; handle: string; provider?: Provider }
 export interface MentionProblem { token: string; message: string }
 export interface MentionResolution { ids: string[]; problems: MentionProblem[] }
 interface MentionToken { handle: string; start: number; end: number }

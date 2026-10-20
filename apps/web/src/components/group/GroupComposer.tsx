@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowUp, AtSign, Square, UserPlus, X } from 'lucide-react';
-import type { GroupSnapshot, Session } from '@relay/contracts';
+import type { GroupSnapshot, Provider, Session } from '@relay/contracts';
 import { useRelay } from '../../store/store';
 import { api, errorMessage } from '../../lib/api';
 import { cx } from '../../lib/format';
@@ -11,6 +11,7 @@ import {
 import { MOD } from '../ui';
 import { Popover } from '../git/Popover';
 import { UsagePanel } from '../UsagePanel';
+import { AgentIdentity } from './AgentIdentity';
 
 const COMMANDS = [
   { name: 'new', description: 'Create a new session' },
@@ -32,7 +33,7 @@ const COMMANDS = [
 const LOCAL_COMMAND = new RegExp(`^/(${COMMANDS.map((command) => command.name).join('|')})(?:\\s.*)?$`, 'i');
 const MAX_RECIPIENTS = 8;
 
-interface Suggestion { key: string; token: string; description: string; group: string }
+interface Suggestion { key: string; token: string; description: string; group: string; identityKey?: string; provider?: Provider }
 
 /** The group conversation's composer: it resolves recipients itself and sends one message to the group endpoint. */
 export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { snapshot: GroupSnapshot; anchor: Session; onOpenMembers: () => void; footer?: ReactNode }) {
@@ -59,7 +60,10 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
   const retired = useMemo(() => retiredHandles(snapshot), [snapshot]);
   const sessionOf = (sessionId: string) => sessions?.find((session) => session.id === sessionId);
   const candidates = useMemo<MentionCandidate[]>(
-    () => members.map((member) => ({ id: member.id, handle: member.handle, provider: sessions?.find((session) => session.id === member.sessionId)?.provider ?? 'claude' })),
+    () => members.flatMap((member) => {
+      const provider = sessions?.find((session) => session.id === member.sessionId)?.provider;
+      return provider ? [{ id: member.id, handle: member.handle, provider }] : [{ id: member.id, handle: member.handle }];
+    }),
     [members, sessions],
   );
   const caretIndex = Math.min(caret, draft.length);
@@ -106,7 +110,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
       const query = mentionMatch[1]!.toLowerCase();
       return members.filter((member) => member.handle.toLowerCase().startsWith(query)).slice(0, 8).map((member) => {
         const session = sessionOf(member.sessionId);
-        return { key: `m:${member.id}`, token: `@${member.handle}`, description: `${ROLE_LABEL[member.role]}${session ? ` · ${providerName(session.provider)} ${session.model}` : ''}`, group: 'Agents' };
+        return { key: `m:${member.id}`, token: `@${member.handle}`, description: `${ROLE_LABEL[member.role]}${session ? ` · ${providerName(session.provider)} ${session.model}` : ''}`, group: 'Agents', identityKey: member.sessionId, provider: session?.provider };
       });
     }
     return [];
@@ -215,7 +219,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
         <div className="recips" role="group" aria-label="Recipients">
           <span className="recips__label">To</span>
           {stalePicked.map((id) => <span key={id} className="recips__chip is-stale" title="This recipient is no longer in the group">
-            @{snapshot.members.find((member) => member.id === id)?.handle ?? 'removed-agent'}
+            <AgentIdentity handle={snapshot.members.find((member) => member.id === id)?.handle ?? 'removed-agent'} identityKey={id} removed />
             <button type="button" aria-label="Remove unavailable recipient" onClick={() => togglePick(id)}><X size={10} aria-hidden="true" /></button>
           </span>)}
           {direct.length ? direct.map((member) => {
@@ -223,12 +227,12 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
             const mentioned = mentions.ids.includes(member.id);
             return (
               <span key={member.id} className={cx('recips__chip', mentioned && !removable && 'is-mention')} title={mentioned ? 'Mentioned in your message' : 'Selected recipient'}>
-                @{member.handle}
+                <AgentIdentity handle={member.handle} identityKey={member.sessionId} provider={sessionOf(member.sessionId)?.provider} />
                 {removable ? <button type="button" aria-label={`Remove @${member.handle} from recipients`} onClick={() => togglePick(member.id)}><X size={10} aria-hidden="true" /></button> : null}
               </span>
             );
           }) : defaults.length && !stalePicked.length ? <>
-            {defaults.map((member) => <span key={member.id} className="recips__chip is-default">@{member.handle}</span>)}
+            {defaults.map((member) => <span key={member.id} className="recips__chip is-default"><AgentIdentity handle={member.handle} identityKey={member.sessionId} provider={sessionOf(member.sessionId)?.provider} /></span>)}
             <span className="recips__default">{defaultLabel}</span>
           </> : !stalePicked.length ? <span className="recips__default">no default recipient</span> : null}
           <button ref={pickerButton} type="button" className="recips__pick" aria-haspopup="dialog" aria-expanded={pickerOpen} onClick={() => setPickerOpen((value) => !value)}><AtSign size={12} aria-hidden="true" /> Choose</button>
@@ -260,7 +264,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
                 {index === 0 || suggestions[index - 1]?.group !== item.group ? <div className="composer-picker__group" role="presentation">{item.group}</div> : null}
                 <div role="option" id={`${pickerId}-option-${index}`} aria-selected={index === active} className={cx('composer-picker__item', index === active && 'is-active')}
                   onMouseDown={(event) => event.preventDefault()} onMouseMove={() => setActive(index)} onClick={() => choose(index)}>
-                  <span className="composer-picker__name">{item.token}</span><span className="composer-picker__description">{item.description}</span>
+                  <span className="composer-picker__name">{item.identityKey ? <AgentIdentity handle={item.token.slice(1)} identityKey={item.identityKey} provider={item.provider} /> : item.token}</span><span className="composer-picker__description">{item.description}</span>
                 </div>
               </div>
             ))}
@@ -293,7 +297,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
             return (
               <label key={member.id} className="check">
                 <input type="checkbox" checked={pickedActive.includes(member.id)} onChange={() => togglePick(member.id)} data-autofocus={member === members[0] ? '' : undefined} />
-                <span><strong>@{member.handle}</strong><small>{ROLE_LABEL[member.role]}{session ? ` · ${providerName(session.provider)} · ${session.status}` : ''}</small></span>
+                <span><AgentIdentity handle={member.handle} identityKey={member.sessionId} provider={session?.provider} /><small>{ROLE_LABEL[member.role]}{session ? ` · ${providerName(session.provider)} · ${session.status}` : ''}</small></span>
               </label>
             );
           })}

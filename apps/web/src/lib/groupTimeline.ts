@@ -85,7 +85,7 @@ export function buildTimeline({ snapshot, sessions, messages, streams }: {
   const order = new Map(natives.map((item, index) => [item.key, index]));
   natives.sort((a, b) => a.at - b.at || order.get(a.key)! - order.get(b.key)!);
 
-  // A group row mirroring a native row that is on screen would show the same words twice; the native row wins.
+  // Hide only agent mirrors of native rows. Status and delivery rows carry durable routing state.
   const displayed = new Set(natives.filter((item) => !item.hidden).map((item) => item.message.id));
   const deliveriesByMessage = new Map<string, GroupDelivery[]>();
   for (const delivery of snapshot.deliveries) {
@@ -94,7 +94,7 @@ export function buildTimeline({ snapshot, sessions, messages, streams }: {
     deliveriesByMessage.set(delivery.messageId, list);
   }
   const groupItems: GroupItem[] = snapshot.messages
-    .filter((message) => !(message.sourceMessageId && displayed.has(message.sourceMessageId)))
+    .filter((message) => !(message.kind === 'agent' && message.sourceMessageId && displayed.has(message.sourceMessageId)))
     .sort((a, b) => a.seq - b.seq)
     .map((message) => ({
       type: 'group' as const, key: `g:${message.id}`, at: time(message.createdAt), message,

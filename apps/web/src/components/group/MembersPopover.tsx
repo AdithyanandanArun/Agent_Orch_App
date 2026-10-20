@@ -9,6 +9,7 @@ import {
 } from '../../lib/groups';
 import { Button, IconButton, StatusDot } from '../ui';
 import { Popover } from '../git/Popover';
+import { AgentIdentity } from './AgentIdentity';
 
 function removalBlock(snapshot: GroupSnapshot, member: GroupMember, session: Session | undefined, online: boolean): string | null {
   if (!online) return 'Reconnect to the server first.';
@@ -58,7 +59,7 @@ export function MembersPopover({ snapshot, anchor, open, onClose }: { snapshot: 
             <li key={member.id} className="member">
               <div className="member__main">
                 <div className="member__title">
-                  <strong>@{member.handle}</strong><span className="roster__role">{ROLE_LABEL[member.role]}</span>
+                  <AgentIdentity handle={member.handle} identityKey={member.sessionId} provider={session?.provider} role={ROLE_LABEL[member.role]} />
                   {member.held ? <span className="roster__role">Paused by you</span> : null}
                   {session ? <StatusDot status={session.status} /> : null}
                 </div>
@@ -97,7 +98,11 @@ export function MembersPopover({ snapshot, anchor, open, onClose }: { snapshot: 
         {group.paused ? <p className="members__paused" role="status"><strong>Paused.</strong> {group.pauseReason ?? 'New work is not starting. Resume to continue queued work.'}</p> : null}
         {queued.length || running.length ? (
           <ul className="members__queue" aria-label="Deliveries">
-            {[...running, ...queued].map((delivery) => <li key={delivery.id}><span>@{handleOf(delivery.memberId)}</span><span>{delivery.status === 'queued' ? 'Queued' : 'Running'}{delivery.hop ? ` · hop ${delivery.hop}` : ''}</span></li>)}
+            {[...running, ...queued].map((delivery) => {
+              const member = snapshot.members.find((item) => item.id === delivery.memberId);
+              const session = member && sessions?.find((item) => item.id === member.sessionId);
+              return <li key={delivery.id}><AgentIdentity handle={handleOf(delivery.memberId)} identityKey={member?.sessionId ?? delivery.memberId} provider={session?.provider} /><span>{delivery.status === 'queued' ? 'Queued' : 'Running'}{delivery.hop ? ` · hop ${delivery.hop}` : ''}</span></li>;
+            })}
           </ul>
         ) : <p className="field__hint">No queued deliveries.</p>}
       </div>

@@ -6,6 +6,7 @@ import { pauseGroup, resumeGroup, stopGroup } from '../../lib/groupActions';
 import { MODE_LABEL, activeMembers, isBusy } from '../../lib/groups';
 import { Button } from '../ui';
 import { MembersPopover } from './MembersPopover';
+import { AgentIdentity } from './AgentIdentity';
 
 export function GroupBar({ snapshot, membersOpen, setMembersOpen }: { snapshot: GroupSnapshot; membersOpen: boolean; setMembersOpen: (open: boolean) => void }) {
   const sessions = useRelay((s) => s.boot?.sessions);
@@ -38,7 +39,7 @@ export function GroupBar({ snapshot, membersOpen, setMembersOpen }: { snapshot: 
     <div className="group-bar" role="region" aria-label="Group conversation">
       <div className="group-bar__info">
         <strong>{MODE_LABEL[group.mode]}</strong>
-        <span>{group.mode === 'cowork' ? `${members.length} peers` : lead ? `@${lead.handle} ${group.mode === 'orchestrated' ? 'coordinates' : 'leads'}` : `${members.length} agents`}</span>
+        <span>{group.mode === 'cowork' ? `${members.length} peers` : lead ? <><AgentIdentity handle={lead.handle} identityKey={lead.sessionId} provider={live.find((session) => session?.id === lead.sessionId)?.provider} /> {group.mode === 'orchestrated' ? 'coordinates' : 'leads'}</> : `${members.length} agents`}</span>
         {group.paused ? <span className="group-bar__paused" title={group.pauseReason ?? undefined}>Paused{group.pauseReason ? ` · ${group.pauseReason}` : ''}</span> : null}
         {facts.length ? <span className="group-bar__facts" role="status">{facts.join(' · ')}</span> : null}
       </div>

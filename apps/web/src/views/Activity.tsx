@@ -10,6 +10,7 @@ import { SelectMenu } from '../components/SelectMenu';
 import { ContextStrip } from '../components/automation/ContextSummary';
 import { SOURCE_LABEL, sourceLocation } from '../components/automation/TaskSource';
 import { shortSha } from '../components/git/gitUtil';
+import { AgentIdentity } from '../components/group/AgentIdentity';
 
 type Tone = 'ok' | 'warn' | 'err' | 'info' | 'accent' | 'neutral';
 const toneFor = (type: string): Tone => {
@@ -25,6 +26,7 @@ const toneFor = (type: string): Tone => {
 interface Entry {
   key: string; at: number; order: number; type: string; tone: Tone; summary: string; createdAt: string;
   sessionId: string | null; origin: string; detail?: ReactNode; payload?: Record<string, unknown>; source?: Task['source'];
+  identity?: { handle: string; key: string; provider?: import('@relay/contracts').Provider };
 }
 
 const RUN_TONE: Record<SessionRun['status'], Tone> = { running: 'info', completed: 'ok', failed: 'err', interrupted: 'warn' };
@@ -50,6 +52,7 @@ function EntryRow({ entry, sessionName, now }: { entry: Entry; sessionName?: str
         </div>
         <div className="evt__meta">
           <Badge tone={entry.tone}>{entry.type}</Badge>
+          {entry.identity ? <AgentIdentity handle={entry.identity.handle} identityKey={entry.identity.key} provider={entry.identity.provider} /> : null}
           {entry.source ? <Badge tone="neutral" title={where ?? entry.source.key}>{SOURCE_LABEL[entry.source.kind]}{where ? ` · ${where}` : ''}</Badge> : null}
           {sessionName ? <button type="button" className="chip chip--btn" onClick={() => entry.sessionId && useRelay.getState().selectSession(entry.sessionId)}>{sessionName}</button> : null}
           <span title={new Date(entry.createdAt).toLocaleString()}>{clockTime(entry.createdAt)} · {relativeTime(entry.createdAt, now)}</span>
@@ -88,12 +91,21 @@ export function ActivityView() {
   const runs = useRelay((s) => s.boot?.runs);
   const toolCalls = useRelay((s) => s.boot?.toolCalls);
   const tasks = useRelay((s) => s.boot?.tasks);
+  const groupSnapshots = useRelay((s) => s.boot?.groups);
   const [allProjects, setAllProjects] = useState(false);
   const [type, setType] = useState('');
   const [sessionId, setSessionId] = useState('');
   const now = useNow();
 
   const sessionName = useMemo(() => new Map((sessions ?? []).map((s) => [s.id, s.name])), [sessions]);
+  const groupIdentityBySession = useMemo(() => {
+    const identities = new Map<string, { handle: string; key: string; provider?: import('@relay/contracts').Provider }>();
+    for (const group of groupSnapshots ?? []) for (const member of group.members) {
+      const session = sessions?.find((item) => item.id === member.sessionId);
+      identities.set(member.sessionId, { handle: member.handle, key: member.sessionId, provider: session?.provider });
+    }
+    return identities;
+  }, [groupSnapshots, sessions]);
   const scopedSessions = useMemo(() => (sessions ?? []).filter((s) => allProjects || s.projectId === project?.id), [sessions, allProjects, project?.id]);
   const taskById = useMemo(() => new Map((tasks ?? []).map((t) => [t.id, t])), [tasks]);
   // Bootstrap tool records are bounded across all sessions, so they are only listed for one session at a time.
@@ -108,7 +120,8 @@ export function ActivityView() {
       const taskId = typeof e.payload.taskId === 'string' ? e.payload.taskId : undefined;
       const runId = typeof e.payload.runId === 'string' ? e.payload.runId : undefined;
       if (runId && /run|turn/i.test(e.type)) (/start|begin/i.test(e.type) ? covered.start : covered.finish).add(runId);
-      out.push({ key: `e:${e.id}`, at: stamp(e.createdAt), order: e.id, type: e.type, tone: toneFor(e.type), summary: e.summary, createdAt: e.createdAt, sessionId: e.sessionId, origin: `event #${e.id}`, payload: e.payload, source: taskId ? taskById.get(taskId)?.source : undefined });
+      const identity = e.type.startsWith('group.') && e.sessionId ? groupIdentityBySession.get(e.sessionId) : undefined;
+      out.push({ key: `e:${e.id}`, at: stamp(e.createdAt), order: e.id, type: e.type, tone: toneFor(e.type), summary: e.summary, createdAt: e.createdAt, sessionId: e.sessionId, origin: `event #${e.id}`, payload: e.payload, source: taskId ? taskById.get(taskId)?.source : undefined, identity });
     }
     for (const run of runs ?? []) {
       if (!sessionIds.has(run.sessionId)) continue;
@@ -142,7 +155,7 @@ export function ActivityView() {
       }
     }
     return out;
-  }, [events, runs, toolCalls, scopedSessions, toolSessionId, allProjects, project?.id, sessionName, taskById]);
+  }, [events, runs, toolCalls, scopedSessions, toolSessionId, allProjects, project?.id, sessionName, taskById, groupIdentityBySession]);
 
   const types = useMemo(() => Array.from(new Set(entries.map((e) => e.type))).sort(), [entries]);
   const filtered = useMemo(
