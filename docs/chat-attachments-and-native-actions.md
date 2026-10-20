@@ -2,6 +2,8 @@
 
 Relay lets you attach files to a single-agent or group message. Use the paperclip button to choose files, or paste an image into the composer. Uploads are staged as drafts before you send; failed uploads remain visible so you can retry or remove them. A message accepted by Relay keeps its attachments in history. Removing a project from Relay does not erase that history or its files.
 
+Previews appear in a row above the message field, starting from the left. Multiple attachments wrap within the composer and scroll when the row reaches its height limit. They reserve their own space rather than floating over the text or controls. The paperclip stays beside the send button.
+
 ## Limits and storage
 
 - Up to 10 files and 50 MiB total per message.
