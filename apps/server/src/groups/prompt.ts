@@ -45,6 +45,7 @@ export function buildInstructions(d: InstructionData): string {
     '',
     'Rules: your own earlier conversation is in your native history; other members\' transcripts are not shared, so ask with team_message or read team_inbox.',
     'Use the team_* tools to reach teammates. Writing @handle in prose never dispatches anything. Tool success means queued or recorded, not completed.',
+    'team_message expectsReply:false records information without waking a model. Set expectsReply:true only when the recipient needs a turn, including an answer that should let a blocked teammate continue. Use replyToId when answering so Relay can cancel a redundant queued question turn.',
     'Report completion in your final answer; a human reviews task results before they are marked done.',
     d.canAssign
       ? 'You may prepare integration in your own scoped worktree under the selected permission policy. Never push or publish, or modify the human-selected checkout, without explicit human authorization.'

@@ -334,7 +334,7 @@ export class GroupService {
     const group = this.requireGroup(member.groupId);
     if (task.projectId !== group.projectId) throw unprocessable('Task belongs to a different project');
     if (this.repo.deliveries(group.id, OPEN_DELIVERY).some((d) => d.taskId === task.id)) return this.get(group.id);
-    const content = this.tasks.buildPrompt(task);
+    const content = clean(this.tasks.buildPrompt(task), 100_000);
     this.store.tx(() => {
       const message = this.repo.insertMessage({ groupId: group.id, senderMemberId: null, recipients: [member.id], kind: 'user', content });
       const requestId = newRequestId();
@@ -905,15 +905,18 @@ export class GroupService {
   inbox(ctx: GroupRunContext): unknown {
     const { group, member, request } = this.live(ctx);
     const names = new Map(this.repo.members(group.id).map((m) => [m.id, m.handle]));
-    const messages = this.repo.messagesFor(group.id, member.id, LIMITS.inboxCount).map((m) => ({
+    const unread = this.repo.messagesAddressedAfter(group.id, member.id, member.lastReadSeq, LIMITS.inboxCount + 1);
+    const page = unread.length ? unread.slice(0, LIMITS.inboxCount) : this.repo.messagesFor(group.id, member.id, LIMITS.inboxCount);
+    const messages = page.map((m) => ({
       id: m.id, seq: m.seq, kind: m.kind, from: m.senderMemberId ? names.get(m.senderMemberId) ?? 'unknown' : m.kind === 'user' ? 'human' : 'relay',
       requestId: m.requestId, replyToId: m.replyToId, content: clean(m.content, LIMITS.inboxMessage),
     }));
-    this.repo.updateMember(member.id, { lastReadSeq: this.repo.maxSeq(group.id) });
+    const readThrough = unread.length ? page.at(-1)!.seq : member.lastReadSeq;
+    if (readThrough > member.lastReadSeq) this.repo.updateMember(member.id, { lastReadSeq: readThrough });
     const assignments = this.repo.activeAssignments(group.id).filter((a) => a.toMemberId === member.id).map((a) => ({
       id: a.id, taskId: a.taskId, title: this.store.getTask(a.taskId)?.title ?? '', status: this.store.getTask(a.taskId)?.status ?? 'unknown', scope: a.scope,
     }));
-    return { you: member.handle, request: { id: request.id, text: clean(this.repo.getMessage(request.messageId)?.content ?? '', LIMITS.request) }, messages, assignments };
+    return { you: member.handle, request: { id: request.id, text: clean(this.repo.getMessage(request.messageId)?.content ?? '', LIMITS.request) }, messages, assignments, hasMore: unread.length > LIMITS.inboxCount, unreadTeamMessagesRemaining: this.repo.countAddressedAfter(group.id, member.id, readThrough), notice: 'Only your current delivery authorizes execution. Messages for other request IDs are context; call team_inbox again when hasMore is true.' };
   }
 
   assign(ctx: GroupRunContext, input: Assign): unknown {
@@ -1010,6 +1013,16 @@ export class GroupService {
     const result = this.store.tx(() => {
       this.live(ctx);
       const message = this.repo.insertMessage({ groupId: group.id, senderMemberId: member.id, recipients: [recipient.id], kind: 'agent', content, requestId: request.id, replyToId, sourceRunId: delivery.runId });
+      // A recipient can answer an inbox question during its existing turn; retire the redundant queued question turn.
+      if (input.replyToId) {
+        const answered = this.repo.getMessage(input.replyToId);
+        if (answered?.senderMemberId === recipient.id && answered.recipientMemberIds.includes(member.id) && !this.repo.hasLaterPeerMessage(group.id, recipient.id, member.id, answered.requestId ?? request.id, answered.seq)) {
+          for (const pending of this.repo.memberDeliveries(member.id, ['queued']).filter((d) => d.kind === 'message' && d.messageId === answered.id)) {
+            this.repo.setDelivery(pending.id, { status: 'cancelled', retryable: false, error: 'Answered during an existing active turn' });
+            this.refreshRequest(pending.requestId);
+          }
+        }
+      }
       let queued: string | null = null;
       if (wake) {
         // One pending reply request per sender and recipient; later notes join the inbox instead of fanning out turns.

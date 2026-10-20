@@ -162,6 +162,13 @@ export class GroupRepo {
        ORDER BY seq DESC LIMIT ?`, groupId, member, member, limit,
     ).reverse().map(mapMessage);
   }
+  /** Oldest unread addressed messages first; never silently acknowledge messages omitted by the bound. */
+  messagesAddressedAfter(groupId: string, member: string, afterSeq: number, limit: number): GroupMessage[] {
+    return this.all(
+      `SELECT * FROM group_messages WHERE group_id = ? AND seq > ? AND sender_member_id IS NOT ?
+       AND EXISTS (SELECT 1 FROM json_each(recipient_member_ids) WHERE value = ?) ORDER BY seq ASC LIMIT ?`, groupId, afterSeq, member, member, limit,
+    ).map(mapMessage);
+  }
   countAddressedAfter(groupId: string, member: string, seq: number): number {
     return Number(this.get(
       `SELECT COUNT(*) AS n FROM group_messages WHERE group_id = ? AND seq > ? AND sender_member_id IS NOT ? AND kind IN ('agent', 'artifact', 'status')
@@ -178,6 +185,11 @@ export class GroupRepo {
        AND recipient_member_ids = ?`, groupId, sender, request, content, replyToId, JSON.stringify([recipient]),
     );
     return row ? mapMessage(row) : undefined;
+  }
+
+  hasLaterPeerMessage(groupId: string, from: string, to: string, requestId: string, afterSeq: number): boolean {
+    return Boolean(this.get(`SELECT 1 AS x FROM group_messages WHERE group_id = ? AND request_id = ? AND sender_member_id = ?
+      AND kind = 'agent' AND seq > ? AND EXISTS (SELECT 1 FROM json_each(recipient_member_ids) WHERE value = ?) LIMIT 1`, groupId, requestId, from, afterSeq, to));
   }
 
   // requests
