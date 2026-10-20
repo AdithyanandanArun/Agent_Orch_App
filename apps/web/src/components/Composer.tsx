@@ -7,6 +7,7 @@ import { MOD, PROVIDER_NAME } from './ui';
 import { cx } from '../lib/format';
 import { SelectMenu } from './SelectMenu';
 import { UsagePanel } from './UsagePanel';
+import { GitBar } from './git/GitBar';
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const hasSkillMarker = (text: string, name: string) => new RegExp(`(?:^|\\s)\\$${escapeRegExp(name)}(?=\\s|$)`).test(text);
@@ -19,6 +20,7 @@ export function Composer({ session }: { session: Session }) {
   const connection = useRelay((s) => s.connection);
   const provider = useRelay((s) => s.boot?.providers.find((p) => p.id === session.provider));
   const providers = useRelay((s) => s.boot?.providers);
+  const project = useRelay((s) => s.boot?.projects.find((p) => p.id === session.projectId));
   const ref = useRef<HTMLTextAreaElement>(null);
   const [sending, setSending] = useState(false);
   const [updating, setUpdating] = useState(false);
@@ -358,6 +360,7 @@ export function Composer({ session }: { session: Session }) {
           </div>
         </div>
       </div>
+      {project ? <GitBar project={project} session={session} /> : null}
       {blocker || error ? (
         <p className={cx('composer__note', error && 'is-error')} role={error ? 'alert' : 'status'}>{error ?? blocker}{!error && provider && !provider.available ? <> <button type="button" className="link-btn" onClick={() => useRelay.getState().openDialog({ kind: 'settings' })}>Open Settings</button></> : null}</p>
       ) : null}

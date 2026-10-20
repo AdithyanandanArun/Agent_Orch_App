@@ -9,6 +9,7 @@ import { Button, EmptyState, PROVIDER_NAME } from './ui';
 import { Composer } from './Composer';
 import { RunActivity } from './RunActivity';
 import { RunChanges } from './RunChanges';
+import { GitBar } from './git/GitBar';
 
 interface DisplayMessage { id: string; role: 'user' | 'assistant' | 'system' | 'tool'; content: string; createdAt: string; kind?: string; runId?: string; live: boolean }
 const EMPTY_RUNS: SessionRun[] = [];
@@ -222,9 +223,12 @@ export function SessionPane() {
   }
   if (!session) {
     return (
-      <EmptyState title={hasSessions ? 'Select a session' : 'No sessions yet'} action={<Button variant="primary" busy={creatingSession} disabled={creatingSession} onClick={() => void useRelay.getState().createSession()}>New session</Button>}>
-        {hasSessions ? 'Choose a session from the sidebar.' : 'Start a session to work in this project.'}
-      </EmptyState>
+      <div className="chat chat--projectonly">
+        <EmptyState title={hasSessions ? 'Select a session' : 'No sessions yet'} action={<Button variant="primary" busy={creatingSession} disabled={creatingSession} onClick={() => void useRelay.getState().createSession()}>New session</Button>}>
+          {hasSessions ? 'Choose a session from the sidebar.' : 'Start a session to work in this project.'}
+        </EmptyState>
+        <div className="composer-wrap"><GitBar project={project} session={null} /></div>
+      </div>
     );
   }
 

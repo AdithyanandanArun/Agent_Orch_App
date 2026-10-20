@@ -1,0 +1,93 @@
+/* Repository controls under the composer, plus their dialogs and popovers. Neutral surfaces; blue only for focus and the primary action. */
+.gitbar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; min-height: 30px; padding: 7px 8px 0; color: var(--fg-2); font-size: 12px;
+}
+.gitbar__spacer { flex: 1 1 8px; }
+.gitbar__controls { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 4px; min-width: 0; }
+.gitbar__where, .gitbar__btn, .gitbar__stale {
+  display: inline-flex; align-items: center; gap: 6px; height: 26px; max-width: 100%; padding: 0 8px; border: 1px solid transparent; border-radius: 8px;
+  background: transparent; color: var(--fg-2); font-size: 12px; white-space: nowrap; cursor: pointer;
+}
+.gitbar__where:hover, .gitbar__btn:hover:not(:disabled), .gitbar__btn.is-open, .gitbar__stale:hover { background: var(--bg-hover); color: var(--fg-0); border-color: var(--line-soft); }
+.gitbar__where:focus-visible, .gitbar__btn:focus-visible, .gitbar__commit:focus-visible, .gitbar__caret:focus-visible, .gitbar__stale:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.gitbar__btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.gitbar__branch { color: var(--fg-1); }
+.gitbar__branch-name { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+.gitbar__pr { color: var(--fg-1); }
+.gitbar__push { color: var(--fg-1); }
+.gitbar__state { display: inline-flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--fg-2); }
+.gitbar__stale { color: var(--warn); height: 22px; font-size: 11px; }
+.gitbar__example { padding: 1px 6px; border-radius: 999px; background: var(--bg-hover); color: var(--fg-2); font-size: 10.5px; }
+.gitbar__split { display: inline-flex; align-items: stretch; height: 26px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--bg-surface); }
+.gitbar__commit, .gitbar__caret { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; color: var(--fg-0); font-size: 12px; font-weight: 500; cursor: pointer; }
+.gitbar__commit { padding: 0 9px; }
+.gitbar__caret { padding: 0 6px; border-left: 1px solid var(--line); color: var(--fg-1); }
+.gitbar__commit:hover:not(:disabled), .gitbar__caret:hover:not(:disabled), .gitbar__caret[aria-expanded='true'] { background: var(--bg-active); }
+.gitbar__commit:disabled { color: var(--fg-3); cursor: not-allowed; }
+.gitbar__count { display: inline-grid; place-items: center; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px; background: var(--bg-active); font-size: 10.5px; color: var(--fg-1); }
+.gh-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--fg-3); }
+.gh-dot--ok { background: var(--ok); } .gh-dot--err { background: var(--err); } .gh-dot--warn { background: var(--warn); }
+.gh-dot--busy { background: transparent; box-shadow: inset 0 0 0 1.5px var(--fg-3); }
+
+.popover { position: fixed; z-index: 130; padding: 6px; overflow: auto; background: var(--bg-raised); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: var(--shadow-pop); animation: fade 100ms ease-out; outline: none; }
+.branchpop { padding: 0; display: flex; flex-direction: column; }
+.branchpop__search { margin: 6px; height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg-inset); color: var(--fg-0); font-size: 12.5px; }
+.branchpop__search:focus-visible { outline: none; border-color: var(--blue-line); }
+.branchpop__list { flex: 1; min-height: 0; max-height: 240px; overflow: auto; padding: 0 5px 5px; }
+.branchpop__item { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 5px 8px; border-radius: 6px; color: var(--fg-1); font-size: 12.5px; cursor: pointer; }
+.branchpop__item.is-active { background: var(--bg-active); color: var(--fg-0); }
+.branchpop__item.is-disabled { opacity: 0.5; cursor: not-allowed; }
+.branchpop__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.branchpop__item small { color: var(--fg-3); font-size: 11px; }
+.branchpop__empty, .branchpop__error { margin: 4px 10px 8px; color: var(--fg-2); font-size: 12px; }
+.branchpop__error { color: var(--err); overflow-wrap: anywhere; }
+.branchpop__create { display: flex; align-items: center; gap: 8px; width: 100%; height: 34px; padding: 0 12px; border: 0; border-top: 1px solid var(--line-soft); background: transparent; color: var(--fg-1); font-size: 12.5px; text-align: left; cursor: pointer; }
+.branchpop__create:hover:not(:disabled), .branchpop__create:focus-visible { background: var(--bg-hover); color: var(--fg-0); outline: none; }
+.branchpop__create:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.ghpop { padding: 12px 12px 10px; display: grid; gap: 12px; }
+.ghpop__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.ghpop__head > div { display: grid; gap: 3px; min-width: 0; }
+.ghpop__head strong { font-size: 13px; overflow: hidden; text-overflow: ellipsis; }
+.ghpop__sec { display: grid; gap: 3px; }
+.ghpop__sec h4 { margin: 0 0 3px; color: var(--fg-2); font-size: 11px; font-weight: 600; }
+.ghpop__sec h4 code, .ghpop code { font-family: var(--font-mono); font-size: 11px; color: var(--fg-1); }
+.ghpop__row { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 28px; padding: 4px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--fg-1); font-size: 12px; text-align: left; cursor: pointer; }
+button.ghpop__row:hover, button.ghpop__row:focus-visible { background: var(--bg-hover); color: var(--fg-0); outline: none; }
+.ghpop__row--static { cursor: default; }
+.ghpop__main { flex: 1; min-width: 0; display: grid; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-0); }
+.ghpop__main small { color: var(--fg-3); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+.ghpop__meta { flex: none; color: var(--fg-2); font-size: 11px; }
+.ghpop__sha { flex: none; display: inline-flex; align-items: center; gap: 5px; }
+.ghpop__row--run { flex-wrap: wrap; }
+.ghpop__row--run .ghpop__meta { flex-basis: 100%; padding-left: 15px; margin-top: -2px; }
+.ghpop__note { margin: 0; padding: 0 6px; color: var(--fg-2); font-size: 11.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.ghpop__note--err { color: var(--err); }
+.ghpop__foot { padding: 8px 6px 0; border-top: 1px solid var(--line-soft); color: var(--fg-3); font-size: 11px; }
+
+.gitdlg__facts { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0; font-size: var(--text-sm); }
+.gitdlg__facts dt { color: var(--fg-2); }
+.gitdlg__facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; color: var(--fg-0); }
+.gitdlg code { font-family: var(--font-mono); font-size: 12px; }
+.gitdlg__files { min-width: 0; }
+.gitdlg__bar { padding: 2px 0 8px; }
+.gitdlg__list { margin: 0; padding: 0; list-style: none; max-height: 240px; overflow: auto; border: 1px solid var(--line-soft); border-radius: 8px; }
+.gitdlg__list li { padding: 6px 10px; }
+.gitdlg__list li + li { border-top: 1px solid var(--line-soft); }
+.gitdlg__list .check { align-items: center; }
+.gitdlg__file { flex: 1; min-width: 0; display: grid; }
+.gitdlg__file code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gitdlg__file small, .gitdlg__blocked small { color: var(--fg-3); font-size: 11px; }
+.gitdlg__blocked { margin-top: 8px; font-size: var(--text-xs); color: var(--fg-2); }
+.gitdlg__blocked summary { cursor: pointer; }
+.gitdlg__blocked ul { margin: 6px 0 0; padding: 0; list-style: none; display: grid; gap: 4px; }
+.gitdlg__blocked li { display: grid; }
+.gitdlg__stale { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 8px; padding: 7px 10px; border-radius: 8px; background: var(--warn-soft); font-size: var(--text-xs); color: var(--fg-0); }
+.gitdlg__warn { margin: 0; padding: 8px 10px; border-radius: 8px; background: var(--warn-soft); color: var(--fg-0); font-size: var(--text-xs); }
+.gitdlg__preview { padding: 12px 14px; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--bg-surface); max-height: 280px; overflow: auto; }
+.gitdlg__preview h3 { margin: 0 0 8px; font-size: var(--text-lg); font-weight: 600; }
+
+@media (max-width: 899px) {
+  .gitbar { padding-inline: 2px; }
+  .gitbar__branch-name { max-width: 110px; }
+}

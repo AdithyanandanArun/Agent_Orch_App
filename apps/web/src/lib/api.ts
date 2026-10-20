@@ -1,5 +1,6 @@
 import type {
-  Approval, AppSettings, Bootstrap, BrowserAction, BrowserConnect, BrowserDiscovery, BrowserSessionState, BrowserTab, DirectoryListing, ExternalConversationDetails, ExternalConversationList, FileEntry, GitStatus, ImportConversationResult, Project, ProviderCatalog, ProviderInfo, RunChanges, Session, SessionUsage, ToolCall, Task, TaskStatus, WorkspaceEvent,
+  Approval, AppSettings, Bootstrap, BrowserAction, BrowserConnect, BrowserDiscovery, BrowserSessionState, BrowserTab, DirectoryListing, ExternalConversationDetails, ExternalConversationList, FileEntry, GitHubState, GitStatus, ImportConversationResult, Project, ProjectContext, ProviderCatalog, ProviderInfo,
+  RepositoryBranch, RepositoryCommit, RepositoryMutationResult, RepositoryPullRequest, RepositoryPush, RepositoryState, RunChanges, Session, SessionUsage, ToolCall, Task, TaskStatus, WorkspaceEvent,
 } from '@relay/contracts';
 export type { ProviderCatalog } from '@relay/contracts';
 
@@ -94,6 +95,10 @@ async function readFile(projectId: string, path: string, sessionId: string | nul
   return { content: text, path };
 }
 
+const projectBase = (projectId: string): string => `/api/projects/${encodeURIComponent(projectId)}`;
+/** Mutation bodies never carry a session id the caller left unset; the server resolves the project folder instead. */
+const withSession = <T extends object>(body: T, sessionId: string | null): T & { sessionId?: string } => (sessionId ? { ...body, sessionId } : body);
+
 const browserBase = (sessionId: string): string => `/api/sessions/${encodeURIComponent(sessionId)}/browser`;
 
 export const api = {
@@ -112,6 +117,20 @@ export const api = {
     json<unknown>(`/api/projects/${encodeURIComponent(projectId)}/file${q({ path, sessionId })}`, 'PUT', { content }),
   git: (projectId: string, sessionId: string | null) =>
     json<GitStatus>(`/api/projects/${encodeURIComponent(projectId)}/git${q({ sessionId })}`),
+  repository: (projectId: string, sessionId: string | null, signal?: AbortSignal) =>
+    json<RepositoryState>(`${projectBase(projectId)}/repository${q({ sessionId })}`, 'GET', undefined, signal),
+  github: (projectId: string, sessionId: string | null, refresh = false, signal?: AbortSignal) =>
+    json<GitHubState>(`${projectBase(projectId)}/github${q({ sessionId, refresh: refresh ? 'true' : undefined })}`, 'GET', undefined, signal),
+  repositoryCommit: (projectId: string, sessionId: string | null, input: Omit<RepositoryCommit, 'sessionId'>) =>
+    json<RepositoryMutationResult>(`${projectBase(projectId)}/repository/commit`, 'POST', withSession(input, sessionId)),
+  repositoryPush: (projectId: string, sessionId: string | null, input: Omit<RepositoryPush, 'sessionId'>) =>
+    json<RepositoryMutationResult>(`${projectBase(projectId)}/repository/push`, 'POST', withSession(input, sessionId)),
+  repositoryBranch: (projectId: string, sessionId: string | null, input: Omit<RepositoryBranch, 'sessionId'>) =>
+    json<RepositoryMutationResult>(`${projectBase(projectId)}/repository/branch`, 'POST', withSession(input, sessionId)),
+  repositoryPullRequest: (projectId: string, sessionId: string | null, input: Omit<RepositoryPullRequest, 'sessionId'>) =>
+    json<RepositoryMutationResult>(`${projectBase(projectId)}/repository/pull-request`, 'POST', withSession(input, sessionId)),
+  projectContext: (projectId: string, signal?: AbortSignal) => json<ProjectContext>(`${projectBase(projectId)}/context`, 'GET', undefined, signal),
+  refreshProjectContext: (projectId: string) => json<ProjectContext>(`${projectBase(projectId)}/context/refresh`, 'POST', {}),
   createSession: (input: NewSessionInput) => json<Session>('/api/sessions', 'POST', input),
   updateSession: (id: string, patch: SessionPatch) => json<Session>(`/api/sessions/${encodeURIComponent(id)}`, 'PATCH', patch),
   runTools: (id: string) => json<ToolCall[]>(`/api/runs/${encodeURIComponent(id)}/tools`),
