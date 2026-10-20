@@ -276,7 +276,7 @@ export function GroupConversation({ snapshot }: { snapshot: GroupSnapshot }) {
       ) : null}
       <GroupComposer key={snapshot.group.id} snapshot={snapshot} anchor={anchor} onOpenMembers={() => setMembersOpen(true)} footer={<GitBar project={project} session={anchor} />} />
       </section>
-      {!contextOpen ? <AgentPresenceRail snapshot={snapshot} members={members} sessions={sessions} runs={allRuns} approvals={approvals ?? []} connection={connection} providers={providers} /> : null}
+      <AgentPresenceRail snapshot={snapshot} members={members} sessions={sessions} runs={allRuns} approvals={approvals ?? []} connection={connection} providers={providers} hidden={contextOpen} />
       </div>
     </div>
   );
