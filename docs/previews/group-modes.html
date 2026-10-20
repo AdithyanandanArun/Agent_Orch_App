@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Relay · Group modes preview</title>
+<style>
+:root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0b0b0c;color:#e9e9eb;font-size:14px}*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;padding:48px 24px 32px}main{max-width:900px;margin:auto}.eyebrow{color:#818187;font-size:12px;letter-spacing:.03em;margin-bottom:22px}.top{display:flex;align-items:start;gap:24px;justify-content:space-between}h1{font-size:26px;letter-spacing:-.7px;font-weight:550;margin:0 0 10px}p{line-height:1.6;margin:0;color:#95959c}button,select{font:inherit;color:inherit}button{border:1px solid #303034;background:#151517;border-radius:7px;padding:7px 11px;cursor:pointer}button:hover{background:#202023}button:focus-visible,select:focus-visible{outline:2px solid #8daef0;outline-offset:4px}button:disabled{opacity:.4;cursor:default}.motion{font-size:12px;white-space:nowrap;color:#aaaab1}.mode-grid{border:0;padding:0;margin:28px 0 20px;display:grid;grid-template-columns:1fr 1fr;gap:14px;min-width:0}.sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.card{display:block;position:relative;cursor:pointer;min-width:0;border:1px solid #29292d;border-radius:13px;padding:22px 22px 17px;background:#101012;transition:border-color 160ms,background 160ms,transform 160ms}.card:hover{border-color:#505058;background:#131315}.mode-input:checked+.card{border-color:#c7c7cd;background:#151517}.mode-input:focus-visible+.card{outline:2px solid #8daef0;outline-offset:4px}.card h2{margin:0 0 5px;font-size:17px;font-weight:550;letter-spacing:-.2px}.card .tagline{font-size:13px;color:#d0d0d5}.radio{position:absolute;right:22px;top:25px;width:15px;height:15px;border:1px solid #56565e;border-radius:100%}.mode-input:checked+.card .radio{border:4px solid #ededf0}.diagram{width:100%;height:auto;display:block;margin:18px 0 8px;overflow:visible}.node{fill:#19191c;stroke:#3b3b41;stroke-width:1}.you{fill:#101012;stroke:#64646c}.wire{fill:none;stroke:#5d5d67;stroke-width:1.1}.peer-wire{stroke-dasharray:3 4;stroke:#64646b}.svg-label{fill:#dddde3;font-size:11px;font-family:inherit;text-anchor:middle}.svg-note{fill:#92929c;font-size:9px;font-family:inherit;text-anchor:middle}.packet{fill:#6494ed}.return{fill:#d7d7dc}.split{fill:#b5b5be;font-size:9px;text-anchor:middle;font-family:inherit}.card .explain{font-size:12px;min-height:58px}.flow{display:flex;gap:7px;align-items:center;color:#75757f;font-size:11px;margin-top:13px}.flow span+span:before{content:'→';margin-right:7px;color:#4b4b53}.choose-note{font-size:12px;color:#8b8b94;margin:0 0 25px}.setup{border-top:1px solid #29292e;padding-top:22px;display:none;animation:enter 180ms ease-out}.setup.visible{display:block}.setup h2{font-size:15px;font-weight:550;margin:0 0 5px}.setup .lead{font-size:12px;margin-bottom:18px}.agent-row{display:grid;grid-template-columns:1.15fr 1fr 1fr;align-items:center;gap:14px;padding:13px 0;border-bottom:1px solid #202024}.who strong{font-size:13px;font-weight:500;display:block}.who span{font-size:11px;color:#81818b}.detail{font-size:12px;color:#babac4}.detail small{display:block;font-size:11px;color:#767681;margin-top:3px}.role{display:inline-flex;font-size:10px;color:#a8a8b3;border:1px solid #36363d;border-radius:4px;padding:2px 5px;vertical-align:middle;margin-left:7px}.config-question{margin-top:20px;padding:18px 0 0}.config-question h3{font-size:13px;font-weight:500;margin:0 0 6px}.config-question p{font-size:12px;margin-bottom:12px}.choices{display:flex;gap:18px;flex-wrap:wrap;font-size:12px}.choices label{display:flex;align-items:center;gap:7px;cursor:pointer}.choices input{accent-color:#dedee5;margin:0}.edit-config{display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:12px;margin-top:16px}.control label{display:block;font-size:11px;color:#878791;margin-bottom:7px}select{width:100%;background:#17171a;border:1px solid #36363c;border-radius:6px;padding:8px 10px;font-size:12px}select:hover{border-color:#64646d}.add-config{margin-top:17px}.add-config summary{font-size:12px;color:#aaaab4;cursor:pointer;padding:4px 0}.add-config[open] summary{margin-bottom:10px}.footer{display:flex;align-items:center;justify-content:space-between;gap:16px;border-top:1px solid #29292e;padding-top:19px;margin-top:24px}.footer p{font-size:11px;max-width:570px}.primary{background:#e8e8ed;color:#111114;border-color:#e8e8ed;font-weight:500}.primary:hover{background:#fff}.review{display:none;margin-top:18px;padding:16px 18px;border:1px solid #34343b;border-radius:9px;background:#121214}.review.visible{display:block;animation:enter 180ms ease-out}.review strong{display:block;font-size:13px;font-weight:500;margin-bottom:6px}.review p{font-size:12px}.paused .packet{opacity:0}@keyframes enter{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}@media(max-width:680px){body{padding:28px 16px}h1{font-size:23px}.top{gap:10px}.motion{padding:7px}.mode-grid{grid-template-columns:1fr}.card .explain{min-height:0}.diagram{max-height:210px}.agent-row{grid-template-columns:1fr 1fr}.agent-row .who{grid-column:1/-1}.edit-config{grid-template-columns:1fr}.footer{align-items:start}.footer p{max-width:70%}}@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}.packet{display:none}}
+</style>
+</head>
+<body>
+<main>
+<div class="eyebrow">Relay · Example workspace · Interaction preview</div>
+<header class="top"><div><h1>How should your agents work together?</h1><p>Choose who coordinates this conversation.</p></div><button class="motion" id="motion" type="button" aria-pressed="false">Pause motion</button></header>
+<fieldset class="mode-grid"><legend class="sr">Conversation mode</legend>
+<input class="sr mode-input" type="radio" name="mode" value="cowork" id="cowork" aria-labelledby="cowork-title" aria-describedby="cowork-description">
+<label class="card" for="cowork"><span class="radio" aria-hidden="true"></span><h2 id="cowork-title">Cowork</h2><div class="tagline">You lead. Agents work together.</div>
+<svg class="diagram" data-mode="cowork" viewBox="0 0 360 210" aria-hidden="true" focusable="false">
+<path class="wire" d="M180 48V78M180 78H86V124M180 78H274V124"/>
+<path class="wire peer-wire" d="M151 151H209"/>
+<rect class="node you" x="147" y="18" width="66" height="30" rx="8"/><text class="svg-label" x="180" y="37">You</text>
+<rect class="node" x="21" y="124" width="130" height="54" rx="9"/><text class="svg-label" x="86" y="146">@claude1</text><text class="svg-note" x="86" y="163">Peer · current agent</text>
+<rect class="node" x="209" y="124" width="130" height="54" rx="9"/><text class="svg-label new-agent-label" x="274" y="146">@codex1</text><text class="svg-note" x="274" y="163">Peer · new agent</text>
+<text class="split" x="86" y="110">Proposes this split</text><text class="svg-note" x="180" y="199">Direct questions &amp; results</text>
+<circle class="packet" r="3"><animateMotion dur="5.5s" repeatCount="indefinite" path="M180 48V78H86V124"/></circle>
+<circle class="packet" r="3"><animateMotion dur="5.5s" repeatCount="indefinite" path="M180 48V78H274V124"/></circle>
+<circle class="packet return" r="2.5"><animateMotion dur="4s" repeatCount="indefinite" path="M151 151H209H151"/></circle>
+</svg>
+<p class="explain" id="cowork-description">Your message reaches both agents. One proposes a work split, then both do their share and communicate directly.</p><div class="flow"><span>Both receive</span><span>One splits</span><span>Both work</span></div></label>
+<input class="sr mode-input" type="radio" name="mode" value="orchestrated" id="orchestrated" aria-labelledby="orchestrated-title" aria-describedby="orchestrated-description">
+<label class="card" for="orchestrated"><span class="radio" aria-hidden="true"></span><h2 id="orchestrated-title">Orchestrated</h2><div class="tagline">An agent coordinates the work.</div>
+<svg class="diagram" data-mode="orchestrated" viewBox="0 0 360 210" aria-hidden="true" focusable="false">
+<path class="wire" d="M180 35V65M180 99V119H86V144M180 119H274V144"/>
+<rect class="node you" x="147" y="5" width="66" height="30" rx="8"/><text class="svg-label" x="180" y="24">You</text>
+<rect class="node" x="112" y="65" width="136" height="34" rx="8"/><text class="svg-label" x="180" y="86">Orchestrator</text><text class="svg-note" x="278" y="85">From Settings</text>
+<rect class="node" x="21" y="144" width="130" height="48" rx="9"/><text class="svg-label" x="86" y="164">@claude1</text><text class="svg-note" x="86" y="180">Worker · current agent</text>
+<rect class="node" x="209" y="144" width="130" height="48" rx="9"/><text class="svg-label new-agent-label" x="274" y="164">@codex1</text><text class="svg-note" x="274" y="180">Worker · new agent</text>
+<circle class="packet" r="3"><animateMotion dur="7s" repeatCount="indefinite" path="M180 35V65V99V119H86V144V119H180V99V65V35"/></circle>
+<circle class="packet return" r="2.5"><animateMotion dur="7s" repeatCount="indefinite" path="M180 99V119H274V144V119H180V99"/></circle>
+</svg>
+<p class="explain" id="orchestrated-description">Your message goes to a separate orchestrator. It splits the work between agents and brings their results together.</p><div class="flow"><span>Orchestrator receives</span><span>Delegates</span><span>Summarizes</span></div></label>
+</fieldset>
+<p class="choose-note" id="routing" aria-live="polite">Select a mode to preview its participants and configuration.</p>
+<section class="setup" id="setup" aria-labelledby="setup-title">
+<h2 id="setup-title">Participants</h2><p class="lead" id="roster-note"></p>
+<div class="agent-row" id="orchestrator-row" hidden><div class="who"><strong>@orchestrator <span class="role">Coordinator</span></strong><span>Separate conversation</span></div><div class="detail">Settings default<small>Model and effort from Settings</small></div><div class="detail">Configured permissions<small>Preview before adding</small></div></div>
+<div class="agent-row"><div class="who"><strong>@claude1 <span class="role" id="existing-role">Peer</span></strong><span>Existing conversation preserved</span></div><div class="detail" id="current-values">Current model · High<small>Current configuration</small></div><div class="detail" id="current-policy-label">Supervised<small>Example permissions</small></div></div>
+<div class="agent-row"><div class="who"><strong><span id="new-handle">@codex1</span> <span class="role" id="new-role">Peer</span></strong><span>New independent conversation</span></div><div class="detail" id="new-values">Worker model · Medium<small>Example model choice</small></div><div class="detail" id="new-policy-label">Supervised<small>Example permissions</small></div></div>
+<div class="config-question" id="question" hidden><h3>Keep the current agent’s configuration?</h3><p>It will work under the orchestrator. You can choose a lighter model or lower effort.</p><div class="choices"><label><input type="radio" name="current-config" value="keep" checked> Keep current configuration</label><label><input type="radio" name="current-config" value="change"> Change configuration</label></div>
+<div class="edit-config" id="current-edit" hidden><div class="control"><label for="current-model">Current agent’s model</label><select id="current-model"><option value="current">Current model</option><option value="lighter">Lighter model (example)</option></select></div><div class="control"><label for="current-effort">Reasoning effort</label><select id="current-effort"><option>High</option><option>Medium</option><option>Low</option></select></div><div class="control"><label for="current-policy">Permissions</label><select id="current-policy"><option>Supervised</option><option>Auto-accept edits</option><option>Full access</option></select></div></div></div>
+<details class="add-config"><summary>Configure the new agent</summary><div class="edit-config"><div class="control"><label for="new-provider">Provider</label><select id="new-provider"><option value="codex">Codex</option><option value="claude">Claude</option></select></div><div class="control"><label for="new-model">Model</label><select id="new-model"><option>Worker model (example)</option><option>Higher-capability model (example)</option></select></div><div class="control"><label for="new-effort">Reasoning effort</label><select id="new-effort"><option>Medium</option><option>Low</option><option>High</option></select></div><div class="control"><label for="new-policy">Permissions</label><select id="new-policy"><option>Supervised</option><option>Auto-accept edits</option><option>Full access</option></select></div></div></details>
+</section>
+<footer class="footer"><p>Illustrative settings and message flow. This preview runs no agents and saves no configuration.</p><button class="primary" id="review" type="button" disabled>Review setup</button></footer>
+<section class="review" id="review-panel" aria-live="polite"><strong id="review-title"></strong><p id="review-text"></p></section>
+</main>
+<script>
+'use strict';
+const byId = id => document.getElementById(id);
+const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
+let selected = null;
+let paused = reduced.matches;
+function syncMotion(){
+  document.body.classList.toggle('paused', paused || reduced.matches);
+  byId('motion').textContent = reduced.matches ? 'Reduced motion' : paused ? 'Play motion' : 'Pause motion';
+  byId('motion').disabled = reduced.matches;
+  byId('motion').setAttribute('aria-pressed', String(paused || reduced.matches));
+  for(const svg of document.querySelectorAll('svg.diagram')){
+    const play = !paused && !reduced.matches && (!selected || svg.dataset.mode === selected);
+    if(typeof svg.pauseAnimations === 'function') play ? svg.unpauseAnimations() : svg.pauseAnimations();
+  }
+}
+function changing(){ return selected === 'orchestrated' && document.querySelector('input[name="current-config"]:checked').value === 'change'; }
+function update(){
+  if(!selected) return;
+  const orch = selected === 'orchestrated';
+  byId('setup').classList.add('visible');
+  byId('review').disabled = false;
+  byId('orchestrator-row').hidden = !orch;
+  byId('question').hidden = !orch;
+  byId('current-edit').hidden = !changing();
+  byId('existing-role').textContent = orch ? 'Worker' : 'Peer';
+  byId('new-role').textContent = orch ? 'Worker' : 'Peer';
+  byId('setup-title').textContent = orch ? 'One orchestrator, two workers' : 'Two equal agents';
+  byId('roster-note').textContent = orch ? 'The separate orchestrator uses your defaults from Settings.' : 'You direct the session. Both agents keep their own conversations.';
+  byId('routing').textContent = orch ? 'No @mention → orchestrator. @claude1 or @codex1 → that agent directly.' : 'No @mention → both peers. @claude1 or @codex1 → that peer directly.';
+  const currentModel = changing() && byId('current-model').value === 'lighter' ? 'Lighter model' : 'Current model';
+  const effort = changing() ? byId('current-effort').value : 'High';
+  byId('current-values').replaceChildren(document.createTextNode(currentModel + ' · ' + effort));
+  const note = document.createElement('small'); note.textContent = changing() ? 'Example configuration change' : 'Current configuration retained'; byId('current-values').append(note);
+  byId('current-policy-label').firstChild.textContent = changing() ? byId('current-policy').value : 'Supervised';
+  byId('new-handle').textContent = byId('new-provider').value === 'codex' ? '@codex1' : '@claude2';
+  document.querySelectorAll('.new-agent-label').forEach(label => { label.textContent = byId('new-handle').textContent; });
+  byId('routing').textContent = orch ? 'No @mention → orchestrator. @claude1 or ' + byId('new-handle').textContent + ' → that agent directly.' : 'No @mention → both peers. @claude1 or ' + byId('new-handle').textContent + ' → that peer directly.';
+  byId('new-values').firstChild.textContent = byId('new-model').value.replace(' (example)','') + ' · ' + byId('new-effort').value;
+  byId('new-policy-label').firstChild.textContent = byId('new-policy').value;
+  byId('review-panel').classList.remove('visible');
+  syncMotion();
+}
+document.querySelectorAll('input[name="mode"]').forEach(input => input.addEventListener('change', () => {selected = input.value; update();}));
+document.querySelectorAll('select,input[name="current-config"]').forEach(input => input.addEventListener('change', update));
+byId('motion').addEventListener('click', () => { paused = !paused; syncMotion(); });
+reduced.addEventListener('change', syncMotion);
+byId('review').addEventListener('click', () => {
+  const orch = selected === 'orchestrated';
+  byId('review-title').textContent = orch ? 'Orchestrated · 3 participants' : 'Cowork · 2 participants';
+  byId('review-text').textContent = orch ? 'A separate orchestrator coordinates @claude1 and ' + byId('new-handle').textContent + '. The current agent ' + (changing() ? 'uses the configuration you selected.' : 'keeps its current configuration.') : 'You coordinate @claude1 and ' + byId('new-handle').textContent + '. One peer proposes a split for each request; both do their share. The current agent keeps its configuration.';
+  byId('review-panel').classList.add('visible');
+});
+syncMotion();
+</script>
+</body>
+</html>
