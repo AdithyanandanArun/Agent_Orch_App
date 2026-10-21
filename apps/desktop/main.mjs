@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, shell, safeStorage } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell, safeStorage } from 'electron';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, rmSync } from 'node:fs';
 import { randomBytes, createHash } from 'node:crypto';
@@ -32,6 +32,113 @@ if (process.platform === 'linux') {
 let backend;
 let quitting = false;
 let shutdownPending = false;
+let mainWindow;
+let workspaceUrl;
+const browserWindows = new Map();
+const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,80}$/;
+
+function isLiveWindow(window) { return Boolean(window && !window.isDestroyed()); }
+
+function openExternalWebTarget(target, origin) {
+  try {
+    const parsed = new URL(target);
+    if ((parsed.protocol === 'http:' || parsed.protocol === 'https:') && parsed.origin !== origin) void shell.openExternal(parsed.href);
+  } catch { /* invalid targets are blocked */ }
+}
+
+function configureWorkspaceWindow(window, origin) {
+  window.webContents.setWindowOpenHandler(({ url: target }) => {
+    openExternalWebTarget(target, origin);
+    return { action: 'deny' };
+  });
+  window.webContents.on('will-navigate', (event, target) => {
+    let sameOrigin = false;
+    try { sameOrigin = new URL(target).origin === origin; } catch { /* invalid targets are blocked */ }
+    if (!sameOrigin) {
+      event.preventDefault();
+      if (/^https?:\/\//i.test(target)) void shell.openExternal(target);
+    }
+  });
+}
+
+function notifyBrowserPopoutClosed(sessionId) {
+  if (isLiveWindow(mainWindow) && !mainWindow.webContents.isDestroyed()) {
+    mainWindow.webContents.send('mingle.browser.popout.closed', sessionId);
+  }
+}
+
+function focusMainWindow() {
+  if (!isLiveWindow(mainWindow)) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+ipcMain.handle('mingle.browser.open-popout', async (event, sessionId) => {
+  if (!isLiveWindow(mainWindow) || event.sender !== mainWindow.webContents || typeof sessionId !== 'string' || !SESSION_ID_PATTERN.test(sessionId)) return false;
+  const existing = browserWindows.get(sessionId);
+  if (isLiveWindow(existing)) {
+    if (existing.isMinimized()) existing.restore();
+    existing.show();
+    existing.focus();
+    return true;
+  }
+  const origin = new URL(workspaceUrl).origin;
+  const window = new BrowserWindow({
+    parent: mainWindow, title: 'Mingle Browser', width: 1120, height: 780, minWidth: 560, minHeight: 420,
+    backgroundColor: '#111111', autoHideMenuBar: true,
+    webPreferences: {
+      preload: join(dirname(fileURLToPath(import.meta.url)), 'browser-preload.cjs'),
+      nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true,
+    },
+  });
+  browserWindows.set(sessionId, window);
+  window.once('closed', () => {
+    if (browserWindows.get(sessionId) === window) browserWindows.delete(sessionId);
+    notifyBrowserPopoutClosed(sessionId);
+  });
+  configureWorkspaceWindow(window, origin);
+  try {
+    await window.loadURL(`${workspaceUrl}/?browserPopout=${encodeURIComponent(sessionId)}`);
+    if (!isLiveWindow(window)) return false;
+    window.show();
+    window.focus();
+    return true;
+  } catch {
+    if (isLiveWindow(window)) window.destroy();
+    return false;
+  }
+});
+
+ipcMain.handle('mingle.browser.is-popout-open', (event, sessionId) => {
+  if (!isLiveWindow(mainWindow) || event.sender !== mainWindow.webContents || typeof sessionId !== 'string' || !SESSION_ID_PATTERN.test(sessionId)) return false;
+  return isLiveWindow(browserWindows.get(sessionId));
+});
+
+ipcMain.handle('mingle.browser.focus-popout', (event, sessionId) => {
+  if (!isLiveWindow(mainWindow) || event.sender !== mainWindow.webContents || typeof sessionId !== 'string' || !SESSION_ID_PATTERN.test(sessionId)) return false;
+  const window = browserWindows.get(sessionId);
+  if (!isLiveWindow(window)) return false;
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
+  return true;
+});
+
+ipcMain.handle('mingle.browser.dock-popout', (event, sessionId) => {
+  let target = null;
+  if (isLiveWindow(mainWindow) && event.sender === mainWindow.webContents) {
+    if (typeof sessionId !== 'string' || !SESSION_ID_PATTERN.test(sessionId)) return false;
+    target = browserWindows.get(sessionId);
+  } else {
+    if (sessionId !== undefined) return false;
+    for (const window of browserWindows.values()) if (window.webContents === event.sender) { target = window; break; }
+  }
+  if (!isLiveWindow(target)) return false;
+  target.close();
+  focusMainWindow();
+  return true;
+});
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -63,6 +170,7 @@ async function openWorkspace() {
   }
   const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
+  workspaceUrl = url;
   mkdirSync(userData, { recursive: true, mode: 0o700 });
   const dataOverride = process.env.MINGLE_DATA_DIR !== undefined ? process.env.MINGLE_DATA_DIR : process.env.RELAY_DATA_DIR;
   const workspaceDataDir = dataOverride?.trim() || join(userData, 'workspace');
@@ -130,18 +238,13 @@ async function openWorkspace() {
     title: 'Mingle', icon: app.isPackaged ? join(root, 'apps/web/dist/mingle-icon.png') : join(root, 'apps/web/public/mingle-icon.png'),
     width: 1540, height: 1000, minWidth: 900, minHeight: 620,
     backgroundColor: '#0a0a0a', autoHideMenuBar: true,
-    webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true },
+    webPreferences: {
+      preload: join(dirname(fileURLToPath(import.meta.url)), 'browser-preload.cjs'),
+      nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true,
+    },
   });
-  window.webContents.setWindowOpenHandler(({ url: target }) => {
-    if (/^https?:\/\//i.test(target)) void shell.openExternal(target);
-    return { action: 'deny' };
-  });
-  window.webContents.on('will-navigate', (event, target) => {
-    if (new URL(target).origin !== url) {
-      event.preventDefault();
-      if (/^https?:\/\//i.test(target)) void shell.openExternal(target);
-    }
-  });
+  mainWindow = window;
+  configureWorkspaceWindow(window, new URL(url).origin);
   await window.loadURL(url);
 }
 

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { ArrowLeft, ArrowRight, Globe, Maximize2, Minimize2, Plus, RefreshCw, Scan, Unplug, X } from 'lucide-react';
-import type { BrowserAction, BrowserSessionState, BrowserTab, Session } from '@mingle/contracts';
+import { ArrowDownToLine, ArrowLeft, ArrowRight, ExternalLink, Globe, Maximize2, Minimize2, Plus, RefreshCw, Scan, Unplug, X } from 'lucide-react';
+import type { BrowserAction, BrowserSessionState, BrowserStreamProfile, BrowserTab, Session } from '@mingle/contracts';
 import { api, errorMessage } from '../../lib/api';
 import { cx } from '../../lib/format';
 import { usePresence, useRetainedPresence } from '../../lib/motion';
@@ -10,6 +10,7 @@ import { Button, EmptyState, IconButton, InlineError, Spinner } from '../ui';
 import { BrowserConnect } from './BrowserConnect';
 import { BrowserHost } from './BrowserHost';
 import { BrowserSurface } from './BrowserSurface';
+import { canOpenBrowserPopout, dockBrowserPopout, focusBrowserPopout, isBrowserPopoutOpen, onBrowserPopoutClosed, openBrowserPopout } from './desktopBridge';
 import { useBrowserState, usePageVisible } from './useBrowserState';
 import { useBrowserStream } from './useBrowserStream';
 
@@ -40,17 +41,28 @@ function controlLabel(tab: BrowserTab, clientId: string | null): string {
   return 'Another viewer is in control of this tab.';
 }
 
-export function BrowserPane({ session, active }: { session: Session; active: boolean }) {
+export function BrowserPane({ session, active, popout = false }: { session: Session; active: boolean; popout?: boolean }) {
   const [expanded, setExpanded] = useState(false);
-  const visible = active || expanded;
+  const [floating, setFloating] = useState(false);
+  const [detached, setDetached] = useState(false);
+  const [profile, setProfile] = useState<BrowserStreamProfile>('balanced');
+  const visible = active || expanded || floating;
   const { state, error: stateError, apply, refresh } = useBrowserState(session.id, visible);
   const selectedId = useBrowserStore((s) => s.selected[session.id]);
   const current = resolveTab(state, selectedId);
   const pageVisible = usePageVisible();
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const stream = useBrowserStream(session.id, current?.id, visible && pageVisible && Boolean(current), canvasRef);
+  const stream = useBrowserStream(session.id, current?.id, visible && pageVisible && Boolean(current) && !detached, canvasRef, profile);
   const tab = current && stream.tab && stream.tab.id === current.id ? stream.tab : current;
   const canInput = Boolean(tab && stream.status === 'live' && stream.clientId && tab.controlOwner === stream.clientId);
+
+  useEffect(() => {
+    if (popout || !canOpenBrowserPopout()) return;
+    let alive = true;
+    void isBrowserPopoutOpen(session.id).then((open) => { if (alive) setDetached(open); });
+    const unsubscribe = onBrowserPopoutClosed((sessionId) => { if (alive && sessionId === session.id) setDetached(false); });
+    return () => { alive = false; unsubscribe(); };
+  }, [popout, session.id]);
 
   // Follow the agent to a tab it just activated, unless the user is driving the one they are on.
   const lastActive = useRef<string | null | undefined>(undefined);
@@ -103,9 +115,27 @@ export function BrowserPane({ session, active }: { session: Session; active: boo
   });
   const disconnect = () => run('disconnect', async () => {
     setExpanded(false);
+    setFloating(false);
     apply(await api.browserDisconnect(session.id));
     useBrowserStore.getState().select(session.id, null);
   });
+  const openDesktopWindow = async () => {
+    setActionError(null);
+    try {
+      const opened = await openBrowserPopout(session.id);
+      if (!opened) throw new Error('The desktop browser window could not be opened.');
+      setExpanded(false);
+      setFloating(false);
+      setDetached(true);
+    } catch (cause) { setActionError(errorMessage(cause)); }
+  };
+  const dockDesktopWindow = async () => {
+    setActionError(null);
+    try {
+      const docked = await dockBrowserPopout(session.id);
+      if (!docked) throw new Error('The desktop browser window is no longer available.');
+    } catch (cause) { setActionError(errorMessage(cause)); }
+  };
   const act = (action: BrowserAction) => {
     if (!canInput) { toast('info', 'Take control of this tab first.'); return; }
     if (!stream.sendInput(action)) setActionError('The browser stream is not connected. Reconnect and try again.');
@@ -138,6 +168,14 @@ export function BrowserPane({ session, active }: { session: Session; active: boo
   };
 
   const content = (() => {
+    if (detached && !popout) return (
+      <div className="browser-detached" role="status">
+        <Globe size={20} aria-hidden="true" />
+        <strong>Browser is open in its own window</strong>
+        <span>The same session and tabs are active there.</span>
+        <div><Button size="sm" onClick={() => void focusBrowserPopout(session.id)}>Focus browser window</Button><Button size="sm" variant="primary" onClick={() => void dockDesktopWindow()}><ArrowDownToLine size={13} /> Dock back</Button></div>
+      </div>
+    );
     if (!state) return stateError ? <div className="pane-pad"><InlineError onRetry={refresh}>{stateError}</InlineError></div> : <div className="browser-center"><Spinner label="Loading browser" /></div>;
     if (state.status === 'connecting') return <ConnectingView state={state} />;
     if (state.status !== 'connected') return <BrowserConnect sessionId={session.id} state={state} onState={apply} />;
@@ -176,7 +214,10 @@ export function BrowserPane({ session, active }: { session: Session; active: boo
                 title={canInput ? undefined : 'Take control to change the address'} aria-invalid={addressError ? true : undefined}
                 onFocus={(e) => { setDraft(tab.url); e.currentTarget.select(); }} onBlur={() => { setDraft(null); setAddressError(null); }} onChange={(e) => setDraft(e.target.value)}
               />
-              {expanded && canInput ? <IconButton label="Fit browser to this window" onClick={fitViewport}><Scan size={14} /></IconButton> : null}
+              {canInput ? <IconButton label="Fit page viewport to this window" onClick={fitViewport}><Scan size={14} /></IconButton> : null}
+              {!popout && !floating ? <Button size="sm" variant="ghost" className="browser-pip-trigger" onClick={() => setFloating(true)}>Float</Button> : null}
+              {!popout && canOpenBrowserPopout() ? <IconButton label="Open browser in a separate desktop window" onClick={() => void openDesktopWindow()}><ExternalLink size={14} /></IconButton> : null}
+              {popout ? <IconButton label="Dock browser back to Mingle" onClick={() => void dockBrowserPopout()}><ArrowDownToLine size={14} /></IconButton> : null}
               <IconButton label={expanded ? 'Exit full view' : 'Open full view'} onClick={() => setExpanded((v) => !v)}>{expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}</IconButton>
               <IconButton label="Disconnect browser" title={state.mode === 'existing' ? 'Disconnect (your browser stays open)' : 'Disconnect and close the Mingle browser'} disabled={busy === 'disconnect'} onClick={() => void disconnect()}><Unplug size={14} /></IconButton>
             </form>
@@ -185,6 +226,16 @@ export function BrowserPane({ session, active }: { session: Session; active: boo
             <div className="browser-viewport"><BrowserSurface stream={stream} tab={tab} canvasRef={canvasRef} canInput={canInput} /></div>
             <div className="browser-status">
               <span className={cx('browser-status__who', canInput && 'is-you')} role="status">{stream.status === 'live' ? controlLabel(tab, stream.clientId) : stream.status === 'closed' ? 'Stream disconnected.' : 'Connecting…'}</span>
+              <label className="browser-profile">
+                <span className="sr-only">Browser stream quality and performance</span>
+                <select className="input browser-profile__select" aria-label="Browser stream quality and performance" value={profile} onChange={(event) => setProfile(event.target.value as BrowserStreamProfile)}>
+                  <option value="saver">Saver · up to 5 fps</option>
+                  <option value="balanced">Balanced · up to 10 fps</option>
+                  <option value="sharp">Sharp · up to 8 fps</option>
+                  <option value="smooth">Smooth · up to 15 fps</option>
+                </select>
+              </label>
+              {stream.frameSize ? <span className="browser-status__size" title="Last decoded frame size">{stream.frameSize.width} × {stream.frameSize.height}</span> : null}
               {stream.status === 'closed' ? <Button size="sm" onClick={stream.reconnect}>Reconnect</Button>
                 : canInput ? <Button size="sm" data-browser-focus-exit onClick={() => stream.setControl('agent')}>Release to agent</Button>
                   : <Button size="sm" variant="primary" disabled={stream.status !== 'live'} why="Waiting for the stream" onClick={() => stream.setControl('human')}>Take control</Button>}
@@ -208,7 +259,7 @@ export function BrowserPane({ session, active }: { session: Session; active: boo
   })();
 
   return (
-    <BrowserHost expanded={expanded} onDismiss={() => setExpanded(false)}>
+    <BrowserHost expanded={expanded} floating={floating && !detached} onDismiss={() => setExpanded(false)} onDock={() => setFloating(false)} onPopout={canOpenBrowserPopout() ? () => void openDesktopWindow() : undefined}>
       <div
         className={cx('browser__inner', expanded && 'is-expanded')}
         onKeyDown={(e) => { if (expanded && e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); e.stopPropagation(); setExpanded(false); } }}

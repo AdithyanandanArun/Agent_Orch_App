@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
-import type { BrowserAction, BrowserServerMessage, BrowserTab } from '@mingle/contracts';
+import type { BrowserAction, BrowserServerMessage, BrowserStreamProfile, BrowserTab } from '@mingle/contracts';
 
 export type StreamStatus = 'idle' | 'connecting' | 'live' | 'closed';
 export interface FrameSize { width: number; height: number }
@@ -13,8 +13,8 @@ const isServerMessage = (value: unknown): value is BrowserServerMessage => {
   return typeof v === 'object' && v !== null && (v.type === 'hello' || v.type === 'state' || v.type === 'frame' || v.type === 'error');
 };
 
-const streamUrl = (sessionId: string, tabId: string): string => {
-  const params = new URLSearchParams({ sessionId, tabId });
+const streamUrl = (sessionId: string, tabId: string, profile: BrowserStreamProfile): string => {
+  const params = new URLSearchParams({ sessionId, tabId, profile });
   return `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/browser?${params}`;
 };
 
@@ -37,7 +37,7 @@ export interface BrowserStream {
  * One viewer socket per (session, tab). Frames arrive as a JSON header then a JPEG blob; at most one image is
  * decoding at a time and its acknowledgement is sent only after it loads, which paces the server's screencast.
  */
-export function useBrowserStream(sessionId: string | undefined, tabId: string | undefined, enabled: boolean, canvasRef: RefObject<HTMLCanvasElement | null>): BrowserStream {
+export function useBrowserStream(sessionId: string | undefined, tabId: string | undefined, enabled: boolean, canvasRef: RefObject<HTMLCanvasElement | null>, profile: BrowserStreamProfile = 'balanced'): BrowserStream {
   const [status, setStatus] = useState<StreamStatus>('idle');
   const [clientId, setClientId] = useState<string | null>(null);
   const [tab, setTab] = useState<BrowserTab | null>(null);
@@ -70,39 +70,42 @@ export function useBrowserStream(sessionId: string | undefined, tabId: string | 
     let ws: WebSocket | null = null;
     // Per-connection frame pipeline.
     let header: { sequence: number; width: number; height: number } | null = null;
-    let decoding: { image: HTMLImageElement; url: string } | null = null;
+    let decoding: { sequence: number } | null = null;
     let waiting: { blob: Blob; sequence: number } | null = null;
 
     const ack = (socket: WebSocket, sequence: number) => {
       if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'ack', sequence }));
     };
-    const finish = (socket: WebSocket) => {
-      if (decoding) { decoding.image.onload = null; decoding.image.onerror = null; URL.revokeObjectURL(decoding.url); decoding = null; }
+    const finish = (socket: WebSocket, sequence: number) => {
+      if (decoding?.sequence === sequence) decoding = null;
+      ack(socket, sequence);
       const next = waiting;
       waiting = null;
-      if (next && !disposed) show(socket, next.blob, next.sequence);
+      if (next && !disposed) void show(socket, next.blob, next.sequence);
     };
-    const show = (socket: WebSocket, blob: Blob, sequence: number) => {
-      const image = new Image();
-      const url = URL.createObjectURL(blob);
-      decoding = { image, url };
-      image.onload = () => {
-        if (disposed || socketRef.current !== socket) { finish(socket); return; }
+    const show = async (socket: WebSocket, blob: Blob, sequence: number) => {
+      const frame = { sequence };
+      decoding = frame;
+      let bitmap: ImageBitmap | null = null;
+      try {
+        bitmap = await createImageBitmap(blob);
+        if (disposed || socketRef.current !== socket) return;
         const target = canvasRef.current;
         if (target) {
-          if (target.width !== image.naturalWidth || target.height !== image.naturalHeight) { target.width = image.naturalWidth; target.height = image.naturalHeight; }
-          target.getContext('2d')?.drawImage(image, 0, 0);
+          if (target.width !== bitmap.width || target.height !== bitmap.height) { target.width = bitmap.width; target.height = bitmap.height; }
+          target.getContext('2d')?.drawImage(bitmap, 0, 0);
         }
-        setFrameSize((previous) => (previous && previous.width === image.naturalWidth && previous.height === image.naturalHeight ? previous : { width: image.naturalWidth, height: image.naturalHeight }));
-        finish(socket);
-        ack(socket, sequence);
-      };
-      image.onerror = () => { finish(socket); ack(socket, sequence); };
-      image.src = url;
+        setFrameSize((previous) => (previous && previous.width === bitmap!.width && previous.height === bitmap!.height ? previous : { width: bitmap!.width, height: bitmap!.height }));
+      } catch {
+        if (!disposed && socketRef.current === socket) showError('A browser frame could not be decoded.');
+      } finally {
+        bitmap?.close();
+        if (decoding === frame) finish(socket, sequence);
+      }
     };
 
     const open = () => {
-      const socket = new WebSocket(streamUrl(sessionId, tabId));
+      const socket = new WebSocket(streamUrl(sessionId, tabId, profile));
       socket.binaryType = 'blob';
       ws = socket;
       socketRef.current = socket;
@@ -121,8 +124,12 @@ export function useBrowserStream(sessionId: string | undefined, tabId: string | 
           const current = header;
           header = null;
           if (!current) return;
-          if (decoding) { waiting = { blob: event.data, sequence: current.sequence }; return; }
-          show(socket, event.data, current.sequence);
+          if (decoding) {
+            if (waiting) ack(socket, waiting.sequence);
+            waiting = { blob: event.data, sequence: current.sequence };
+            return;
+          }
+          void show(socket, event.data, current.sequence);
         }
       };
       socket.onclose = () => {
@@ -130,7 +137,7 @@ export function useBrowserStream(sessionId: string | undefined, tabId: string | 
         socketRef.current = null;
         header = null;
         waiting = null;
-        if (decoding) { decoding.image.onload = null; decoding.image.onerror = null; URL.revokeObjectURL(decoding.url); decoding = null; }
+        decoding = null;
         const delay = RETRY_DELAYS_MS[retries];
         if (delay === undefined) {
           setStatus('closed');
@@ -147,13 +154,13 @@ export function useBrowserStream(sessionId: string | undefined, tabId: string | 
     return () => {
       disposed = true;
       window.clearTimeout(retryTimer);
-      if (decoding) { decoding.image.onload = null; decoding.image.onerror = null; URL.revokeObjectURL(decoding.url); decoding = null; }
+      decoding = null;
       waiting = null;
       if (ws) { ws.onmessage = null; ws.onclose = null; ws.close(); }
       if (socketRef.current === ws) socketRef.current = null;
     };
     // canvasRef is a stable ref object; the effect must restart only when the target or reconnect counter changes.
-  }, [sessionId, tabId, enabled, attempt, canvasRef, showError]);
+  }, [sessionId, tabId, enabled, attempt, canvasRef, profile, showError]);
 
   const sendJson = useCallback((payload: unknown): boolean => {
     const socket = socketRef.current;

@@ -15,6 +15,7 @@ import { cx } from './lib/format';
 import { useRetainedPresence } from './lib/motion';
 import { AddAgentDialog } from './components/group/AddAgentDialog';
 import { GroupModeDialog, MemberSettingsDialog } from './components/group/GroupDialogs';
+import { BrowserPopout } from './components/browser/BrowserPopout';
 
 const AgentMap = lazy(() => import('./views/AgentMap'));
 
@@ -83,6 +84,9 @@ export function App() {
   }, []);
 
   if (!boot) return <StartupScreen />;
+
+  const browserPopoutId = new URLSearchParams(window.location.search).get('browserPopout');
+  if (browserPopoutId) return <BrowserPopout sessionId={browserPopoutId} />;
 
   return (
     <div className={cx('app', `view-${view}`)}>

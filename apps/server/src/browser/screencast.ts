@@ -1,8 +1,9 @@
 import { withTimeout } from './errors.ts';
 import { refreshViewport } from './actions.ts';
-import { MAX_SCREENSHOT_WIDTH, STREAM_ACK_TIMEOUT_MS, STREAM_JPEG_QUALITY, STREAM_MIN_FRAME_INTERVAL_MS } from './limits.ts';
+import { STREAM_ACK_TIMEOUT_MS, STREAM_PROFILES } from './limits.ts';
 import type { CDPSession } from './playwright.ts';
 import type { TabEntry } from './tab.ts';
+import type { BrowserStreamProfile } from '@mingle/contracts';
 
 export interface FrameHeader { sequence: number; width: number; height: number }
 
@@ -16,7 +17,7 @@ const FALLBACK_FRAME_DELAY_MS = 700;
 /**
  * One screencast per viewer, on its own CDP session. Chromium only produces the next frame after the previous one
  * is acknowledged, so the viewer's acks pace the stream: at most one frame is in flight, only the newest frame waits
- * behind it, and frames are sent at most every STREAM_MIN_FRAME_INTERVAL_MS. Chromium is always acknowledged
+ * behind it, and each viewer profile sets a bounded minimum frame interval. Chromium is always acknowledged
  * eventually (on viewer ack, on drop, or on timeout) so it never stalls.
  */
 export class ScreencastViewer {
@@ -29,7 +30,12 @@ export class ScreencastViewer {
   private fallbackTimer: NodeJS.Timeout | null = null;
   private stopped = false;
 
-  constructor(private readonly entry: TabEntry, private readonly sink: FrameSink, private readonly onViewport: () => void) {}
+  constructor(
+    private readonly entry: TabEntry,
+    private readonly sink: FrameSink,
+    private readonly onViewport: () => void,
+    private readonly profile: BrowserStreamProfile,
+  ) {}
 
   async start(): Promise<void> {
     const pending = this.entry.page.context().newCDPSession(this.entry.page);
@@ -46,7 +52,11 @@ export class ScreencastViewer {
     this.cdp = cdp;
     cdp.on('Page.screencastFrame', (frame) => this.onFrame({ data: frame.data, chromeSession: frame.sessionId, width: frame.metadata.deviceWidth, height: frame.metadata.deviceHeight }));
     try {
-      await cdp.send('Page.startScreencast', { format: 'jpeg', quality: STREAM_JPEG_QUALITY, everyNthFrame: 1, maxWidth: MAX_SCREENSHOT_WIDTH, maxHeight: 1600 });
+      const settings = STREAM_PROFILES[this.profile];
+      await cdp.send('Page.startScreencast', {
+        format: 'jpeg', quality: settings.jpegQuality, everyNthFrame: 1,
+        maxWidth: settings.maxWidth, maxHeight: settings.maxHeight, maxFramesInFlight: 1,
+      });
     } catch (error) {
       // stop() may have detached the session while this was in flight; that failure is expected, not an error to report.
       const wasStopped = this.stopped;
@@ -106,7 +116,7 @@ export class ScreencastViewer {
 
   private flush(): void {
     if (this.stopped || this.inflight || !this.pending) return;
-    const wait = this.lastSentAt + STREAM_MIN_FRAME_INTERVAL_MS - Date.now();
+    const wait = this.lastSentAt + STREAM_PROFILES[this.profile].minFrameIntervalMs - performance.now();
     if (wait > 0) {
       this.flushTimer ??= setTimeout(() => { this.flushTimer = null; this.flush(); }, wait);
       return;
@@ -114,7 +124,7 @@ export class ScreencastViewer {
     const frame = this.pending;
     this.pending = null;
     const sequence = ++this.sequence;
-    this.lastSentAt = Date.now();
+    this.lastSentAt = performance.now();
     // If the viewer never acknowledges (hidden tab, stalled consumer) release Chromium and carry on.
     const timer = setTimeout(() => { if (this.inflight?.sequence === sequence) this.settle(); }, STREAM_ACK_TIMEOUT_MS);
     this.inflight = { sequence, chromeSession: frame.chromeSession, timer };
@@ -130,8 +140,12 @@ export class ScreencastViewer {
     await refreshViewport(this.entry);
     if (this.stopped || !this.cdp) return;
     const { width, height } = this.entry.viewport;
-    const scale = Math.min(1, MAX_SCREENSHOT_WIDTH / width, 1600 / height);
-    const shot = await withTimeout(this.cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: STREAM_JPEG_QUALITY, clip: { x: 0, y: 0, width, height, scale }, captureBeyondViewport: false }), 5000, 'screenshot timed out').catch(() => null);
+    const settings = STREAM_PROFILES[this.profile];
+    const scale = Math.min(1, settings.maxWidth / width, settings.maxHeight / height);
+    const shot = await withTimeout(this.cdp.send('Page.captureScreenshot', {
+      format: 'jpeg', quality: settings.jpegQuality, clip: { x: 0, y: 0, width, height, scale }, captureBeyondViewport: false,
+      optimizeForSpeed: this.profile === 'smooth',
+    }), 5000, 'screenshot timed out').catch(() => null);
     if (!shot || this.stopped || this.sequence > 0) return;
     this.onFrame({ data: shot.data, chromeSession: null, width: this.entry.viewport.width, height: this.entry.viewport.height });
   }

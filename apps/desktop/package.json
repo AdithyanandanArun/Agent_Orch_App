@@ -4,6 +4,6 @@
   "private": true,
   "type": "module",
   "main": "main.mjs",
-  "scripts": { "start": "node start.mjs", "typecheck": "node --check main.mjs && node --check start.mjs" },
+  "scripts": { "start": "node start.mjs", "typecheck": "node --check main.mjs && node --check browser-preload.cjs && node --check start.mjs" },
   "devDependencies": { "electron": "^44.9.0" }
 }

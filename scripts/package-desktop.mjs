@@ -67,6 +67,7 @@ await rm(join(stage, 'resources/default_app.asar'), { force: true });
 const appDir = join(stage, 'resources/app');
 await mkdir(appDir, { recursive: true });
 await copyFile(join(root, 'apps/desktop/main.mjs'), join(appDir, 'main.mjs'));
+await copyFile(join(root, 'apps/desktop/browser-preload.cjs'), join(appDir, 'browser-preload.cjs'));
 await writeFile(join(appDir, 'package.json'), JSON.stringify({
   name: 'mingle', productName: 'Mingle', version: pkg.version, type: 'module', main: 'main.mjs',
 }, null, 2) + '\n');
