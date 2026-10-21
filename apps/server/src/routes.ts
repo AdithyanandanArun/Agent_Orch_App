@@ -116,7 +116,8 @@ export function buildRouter(s: Services) {
     if (!s.store.getSession(id)) throw notFound('Session not found');
     return id;
   };
-  const compactBody = z.object({}).strict();
+  const compactBody = z.object({ operationId: z.string().trim().min(1).max(100).optional() }).strict();
+  const compactInterruptBody = z.object({ operationId: z.string().trim().min(1).max(100) }).strict();
   const checkpointBody = z.object({ reason: z.string().trim().min(1).max(200), runId: z.string().min(1).max(100).optional() }).strict();
   const emptyBrowserBody = z.object({}).strict();
   add('GET', '/api/account', () => s.account.snapshot());
@@ -315,8 +316,13 @@ export function buildRouter(s: Services) {
   });
   add('POST', '/api/sessions/:id/compact', async (ctx) => {
     const id = recoverySession(ctx);
-    await ctx.body(compactBody);
-    return s.runtime.compact(id);
+    const body = await ctx.body(compactBody);
+    return s.runtime.compact(id, body.operationId);
+  });
+  add('POST', '/api/sessions/:id/compact/interrupt', async (ctx) => {
+    const id = recoverySession(ctx);
+    const body = await ctx.body(compactInterruptBody);
+    return { interrupted: s.runtime.interruptCompaction(id, body.operationId) };
   });
   add('PATCH', '/api/projects/:id', async (ctx) => s.workspace.renameProject(param(ctx, 'id'), (await ctx.body(UpdateProjectSchema)).name));
   add('DELETE', '/api/projects/:id', async (ctx) => {

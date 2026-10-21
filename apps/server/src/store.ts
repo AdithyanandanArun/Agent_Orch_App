@@ -316,6 +316,9 @@ export class Store {
         id: row.id as string, path: row.path as string, revision: row.commit_id as string, taskId: (row.task_id as string | null) ?? null,
       }));
   }
+  activeRunSessionIds(): string[] {
+    return this.all("SELECT DISTINCT session_id FROM session_runs WHERE status = 'running'").map((row) => row.session_id as string);
+  }
   recoverRuns(): void {
     const at = nowIso();
     for (const row of this.all("SELECT id FROM session_runs WHERE status = 'running'")) {

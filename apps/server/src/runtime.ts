@@ -1,7 +1,7 @@
-import { ProviderTaskPlanSchema } from '@mingle/contracts';
+import { ContextCompactionResultSchema, ProviderTaskPlanSchema } from '@mingle/contracts';
 import type { ProjectIntelligenceService } from './project-intelligence/service.ts';
 import { existsSync, statSync } from 'node:fs';
-import type { ProviderTaskPlan, AdapterEvent, Approval, Message, ProviderSkill, RunChanges, Session, ToolActivity, ToolCall } from '@mingle/contracts';
+import type { ProviderTaskPlan, AdapterEvent, Approval, ContextCompactionResult, Message, ProviderFailure, ProviderSkill, RunChanges, RunOptions, Session, ToolActivity, ToolCall } from '@mingle/contracts';
 import type { Hub } from './hub.ts';
 import type { Store } from './store.ts';
 import type { TaskService } from './tasks.ts';
@@ -13,6 +13,9 @@ import type { TeamMcpBridge } from './team-mcp.ts';
 import type { BrowserMcpBridge } from './browser-mcp.ts';
 import type { AttachmentService } from './attachments/service.ts';
 import type { NativeInvocation, RunAttachment } from '@mingle/contracts';
+import type { RecoveryService } from './recovery/service.ts';
+import { providerFailure } from './providers/failure.ts';
+import type { DispatchAwareOptions, DispatchState } from './providers/common.ts';
 
 export interface RuntimeOptions {
   /** Milliseconds to wait after an abort before declaring an unresponsive adapter interrupted. */
@@ -25,6 +28,7 @@ interface ToolBuffer { call: ToolCall; output: string; dirty: boolean; tick: num
 interface ActiveRun {
   id: string;
   startedAt: string;
+  provider: Session['provider'];
   tick: number;
   tools: Map<string, ToolBuffer>;
   activityTimer: NodeJS.Timeout | null;
@@ -38,6 +42,7 @@ interface ActiveRun {
   flushTimer: NodeJS.Timeout | null;
   consumedHandoffs: string[];
   firstEvent: boolean;
+  capabilityTokens: string[];
   baseInput: number;
   baseOutput: number;
   baseCost: number | null;
@@ -48,16 +53,59 @@ interface ActiveRun {
   attachmentOwnerKind?: 'message' | 'group_message';
   attachmentOwnerId?: string;
   changeBaseline: RunTreeSnapshot | null;
+  dispatchState: DispatchState;
+  failureCause?: unknown;
   promise: Promise<void>;
+}
+
+interface ActiveCompaction {
+  controller: AbortController;
+  operationId: string;
+  cleanupPending: boolean;
+  startedAt: string;
+  previousStatus: Session['status'];
+  previousError: string | null;
+  promise: Promise<ContextCompactionResult>;
 }
 
 export interface StartOptions { groupDeliveryId?: string; taskId?: string; userMessage?: { content: string; kind?: string }; skills?: ProviderSkill[]; attachmentIds?: string[]; attachmentOwnerKind?: 'message' | 'group_message'; attachmentOwnerId?: string; invocation?: NativeInvocation }
 
 const MAX_TOOL_CHARS = 20_000;
 const MAX_APPROVAL_INPUT_CHARS = 20_000;
+const FAILURE_SCALAR_FIELDS = new Set([
+  'message', 'code', 'providerCode', 'provider_code', 'errorCode', 'error_code', 'type', 'subtype',
+  'status', 'statusCode', 'status_code', 'httpStatus', 'httpStatusCode', 'retryAt', 'retry_at',
+  'retryAfterMs', 'retry_after_ms', 'retryAfter', 'retry_after', 'outcomeKnown', 'continuationSafety',
+]);
+const FAILURE_NESTED_FIELDS = new Set(['cause', 'data', 'error', 'response', 'body', 'codexErrorInfo', 'details', 'errors']);
+
+function sanitizeProviderFailureInput(error: unknown, scrub: (value: string) => string, depth = 0, codexInfo = false): unknown {
+  if (typeof error === 'string') return scrub(error).slice(0, 1000);
+  if (typeof error === 'number' || typeof error === 'boolean' || error === null) return error;
+  if (Array.isArray(error)) return error.slice(0, 8).map((entry) => sanitizeProviderFailureInput(entry, scrub, depth + 1));
+  if (typeof error !== 'object' || depth > 4) return undefined;
+  const source = error as Record<string, unknown>;
+  const clean: Record<string, unknown> = {};
+  if (error instanceof Error) {
+    clean.message = scrub(error.message).slice(0, 1000);
+    if (error.cause !== undefined) clean.cause = sanitizeProviderFailureInput(error.cause, scrub, depth + 1);
+  }
+  for (const [key, value] of Object.entries(source).slice(0, 32)) {
+    if (FAILURE_SCALAR_FIELDS.has(key)) {
+      if (typeof value === 'string') clean[key] = scrub(value).slice(0, 1000);
+      else if (typeof value === 'number' || typeof value === 'boolean' || value === null) clean[key] = value;
+    } else if (FAILURE_NESTED_FIELDS.has(key)) {
+      clean[key] = sanitizeProviderFailureInput(value, scrub, depth + 1, key === 'codexErrorInfo');
+    } else if (codexInfo && key.length <= 100 && /^(?:[A-Za-z][A-Za-z0-9_-]*)$/.test(key)) {
+      if (typeof value === 'number' || typeof value === 'boolean' || value === null) clean[key] = value;
+    }
+  }
+  return clean;
+}
 
 export class SessionRuntime {
   private readonly active = new Map<string, ActiveRun>();
+  private readonly compactions = new Map<string, ActiveCompaction>();
   private groups?: GroupService;
   private teamMcp?: TeamMcpBridge;
   private attachmentService?: AttachmentService;
@@ -67,6 +115,7 @@ export class SessionRuntime {
   constructor(
     private readonly store: Store, private readonly hub: Hub, private readonly providers: ProviderRuntime, private readonly tasks: TaskService,
     private readonly log: Logger, options: RuntimeOptions = {}, private readonly validateSession?: (session: Session) => void, private readonly browserMcp?: BrowserMcpBridge, private readonly intelligence?: ProjectIntelligenceService,
+    private readonly recovery?: RecoveryService,
   ) {
     // Covers the supported adapters' interrupt grace and escalating process shutdown.
     this.abortGraceMs = options.abortGraceMs ?? 30_000;
@@ -80,10 +129,10 @@ export class SessionRuntime {
   setAttachments(service: AttachmentService): void { this.attachmentService = service; }
 
   activeCount(): number {
-    return this.active.size;
+    return this.active.size + this.compactions.size;
   }
   isActive(sessionId: string): boolean {
-    return this.active.has(sessionId);
+    return this.active.has(sessionId) || this.compactions.has(sessionId);
   }
   /** A cleanup lock can outlive provider execution; it must not keep tool authority alive. */
   isRunLive(sessionId: string, runId: string): boolean {
@@ -99,7 +148,7 @@ export class SessionRuntime {
     const session = this.store.getSession(sessionId);
     if (!session) throw notFound('Session not found');
     if (this.groups?.forSession(sessionId) && !options.groupDeliveryId) throw conflict('Start grouped work through its recorded group delivery.');
-    if (this.active.has(sessionId) || session.status === 'running' || session.status === 'waiting') throw conflict('Session already has an active run or provider cleanup is still in progress');
+    if (this.isActive(sessionId) || session.status === 'running' || session.status === 'waiting') throw conflict('Session already has active work or provider cleanup is still in progress');
     if (!existsSync(session.worktreePath) || !statSync(session.worktreePath).isDirectory()) throw conflict('The session worktree no longer exists on disk');
     this.validateSession?.(session);
 
@@ -108,9 +157,9 @@ export class SessionRuntime {
     const invocation = options.invocation;
     const prompt = invocation ? content : this.composePrompt(handoffs, content);
     const run: ActiveRun = {
-      id: runId, startedAt: nowIso(), tick: performance.now(), tools: new Map(), activityTimer: null,
-      sessionId, controller: new AbortController(), closed: false, cleanupPending: false, acceptingTools: false, approvals: new Map(), stream: null, flushTimer: null, consumedHandoffs: handoffs.map((h) => h.id), firstEvent: false,
-      baseInput: session.inputTokens, baseOutput: session.outputTokens, baseCost: session.costUsd, taskId: options.taskId ?? null, skills: options.skills ?? [], invocation, context: invocation && handoffs.length ? this.composePrompt(handoffs, '') : undefined, attachmentOwnerKind: options.attachmentOwnerKind ?? 'message', attachmentOwnerId: options.attachmentOwnerId, changeBaseline: null, promise: Promise.resolve(),
+      id: runId, startedAt: nowIso(), provider: session.provider, tick: performance.now(), tools: new Map(), activityTimer: null,
+      sessionId, controller: new AbortController(), closed: false, cleanupPending: false, acceptingTools: false, approvals: new Map(), stream: null, flushTimer: null, consumedHandoffs: handoffs.map((h) => h.id), firstEvent: false, capabilityTokens: [],
+      baseInput: session.inputTokens, baseOutput: session.outputTokens, baseCost: session.costUsd, taskId: options.taskId ?? null, skills: options.skills ?? [], invocation, context: invocation && handoffs.length ? this.composePrompt(handoffs, '') : undefined, attachmentOwnerKind: options.attachmentOwnerKind ?? 'message', attachmentOwnerId: options.attachmentOwnerId, changeBaseline: null, dispatchState: 'unknown', promise: Promise.resolve(),
     };
     this.store.tx(() => {
       const userMessage = this.store.insertMessage({ sessionId, role: 'user', content: options.userMessage?.content ?? content, kind: options.userMessage?.kind ?? null, runId: run.id });
@@ -142,12 +191,13 @@ export class SessionRuntime {
   private async execute(run: ActiveRun, startSession: Session, prompt: string): Promise<void> {
     let outcome: 'completed' | 'failed' | 'interrupted' = 'completed';
     let failure: string | null = null;
-    const capabilityTokens: string[] = [];
+    const capabilityTokens = run.capabilityTokens;
     const scrubCapabilities = (value: string): string => capabilityTokens.reduce((text, token) => text.split(token).join('[redacted]'), value);
     try {
+      await this.captureCheckpoint(run.sessionId, 'Run started', run.id);
       run.changeBaseline = await captureRunTree(startSession.worktreePath);
       if (run.controller.signal.aborted) {
-        this.finish(run, 'interrupted', null, unavailableRunChanges('The run was interrupted before work started.'));
+        await this.finish(run, 'interrupted', null, unavailableRunChanges('The run was interrupted before work started.'));
         return;
       }
       const adapter = this.providers.createAdapter(startSession.provider);
@@ -156,7 +206,7 @@ export class SessionRuntime {
       // A queue pause can arrive while the initial Git snapshot is being captured. Do not start inference after that pause.
       if (this.groups?.forSession(session.id)?.group.paused) {
         run.controller.abort();
-        this.finish(run, 'interrupted', null, unavailableRunChanges('Group scheduling was paused before the provider started.'));
+        await this.finish(run, 'interrupted', null, unavailableRunChanges('Group scheduling was paused before the provider started.'));
         return;
       }
       run.acceptingTools = true;
@@ -173,11 +223,13 @@ export class SessionRuntime {
         ? await this.attachmentService.stage(run.id, run.attachmentOwnerKind ?? 'message', run.attachmentOwnerId)
         : [];
       if (run.controller.signal.aborted) throw conflict('The run was interrupted before the provider started.');
-      const adapterRun = Promise.resolve().then(() => adapter.run({
+      const runOptions: RunOptions & DispatchAwareOptions = {
         session, prompt: effectivePrompt, ...(explicit ? { invocation: explicit, context: run.context } : {}), attachments: stagedAttachments, teamMcp, providerTaskState: this.nativeTaskState(session), skills: run.skills, browserMcp, signal: run.controller.signal, settings,
         onEvent: (event) => this.handleEvent(run, capabilityTokens.length ? JSON.parse(scrubCapabilities(JSON.stringify(event))) as AdapterEvent : event),
         requestApproval: (request) => this.requestApproval(run, JSON.parse(scrubCapabilities(JSON.stringify(request)))),
-      }));
+        onDispatchState: (state) => { run.dispatchState = state; },
+      };
+      const adapterRun = Promise.resolve().then(() => adapter.run(runOptions));
       const grace = new Promise<'grace'>((resolve) => {
         const onAbort = () => setTimeout(() => resolve('grace'), this.abortGraceMs).unref();
         if (run.controller.signal.aborted) onAbort();
@@ -196,6 +248,7 @@ export class SessionRuntime {
       if (run.controller.signal.aborted) outcome = 'interrupted';
       else {
         outcome = 'failed';
+        run.failureCause = error;
         const detail = redactSecrets(errorMessage(error));
         failure = truncate(scrubCapabilities(detail), 4000);
       }
@@ -217,7 +270,43 @@ export class SessionRuntime {
     } catch {
       changes = unavailableRunChanges('Workspace changes could not be captured for this run.');
     }
-    this.finish(run, outcome, failure, changes);
+    await this.finish(run, outcome, failure, changes);
+  }
+
+  private async captureCheckpoint(sessionId: string, reason: string, runId?: string): Promise<string | null> {
+    if (!this.recovery) return null;
+    try {
+      return (await this.recovery.capture(sessionId, reason, runId)).id;
+    } catch (error) {
+      const detail = redactSecrets(errorMessage(error)).slice(0, 500);
+      this.log('warn', `Recovery checkpoint capture failed for ${sessionId}: ${detail}`);
+      return null;
+    }
+  }
+
+  private failureActor(sessionId: string, runId: string): ProviderFailure['actor'] {
+    const group = this.groups?.forSession(sessionId);
+    if (!group) return 'session';
+    const member = group.members.find((candidate) => candidate.sessionId === sessionId && !candidate.removedAt);
+    const delivery = group.deliveries.find((candidate) => candidate.runId === runId);
+    const request = delivery && group.requests.find((candidate) => candidate.id === delivery.requestId);
+    if (member && request?.plannerMemberId === member.id) return 'lead';
+    return member && (member.id === group.group.orchestratorMemberId || member.role === 'orchestrator') ? 'lead' : 'worker';
+  }
+
+  private makeProviderFailure(run: ActiveRun, failure: string, scrubCapabilities: (value: string) => string): ProviderFailure {
+    const scrub = (value: string) => redactSecrets(scrubCapabilities(value)).slice(0, 1000);
+    const safeError = sanitizeProviderFailureInput(run.failureCause, scrub);
+    const cleanText = sanitizeProviderFailureInput(failure, scrub);
+    // The provider module owns classification and retry-safety semantics. Runtime supplies only
+    // the dispatch boundary and public identity after removing any run-scoped capability literals.
+    const providerError = safeError && typeof safeError === 'object'
+      ? { ...(safeError as Record<string, unknown>), message: typeof cleanText === 'string' ? cleanText : 'Provider operation failed.' }
+      : cleanText;
+    return providerFailure(providerError, {
+      provider: run.provider, sessionId: run.sessionId, runId: run.id,
+      actor: this.failureActor(run.sessionId, run.id), dispatchState: run.dispatchState,
+    });
   }
 
   /** Rehydrate only genuine root Claude task IDs; this metadata is never replayed as prompt text. */
@@ -228,11 +317,16 @@ export class SessionRuntime {
     return tasks.map(task => ({ id: task.source!.providerId!, title: task.title.slice(0, 200), description: task.description.slice(0, 4000), status: task.source!.reportedStatus ?? 'pending', dependsOn: task.dependsOn.map(id => byId.get(id)).filter((id): id is string => Boolean(id)) }));
   }
 
-  private releaseAfterCleanup(run: ActiveRun): void {
-    if (run.attachmentOwnerId) void this.attachmentService?.release(run.id);
+  private async releaseAfterCleanup(run: ActiveRun): Promise<void> {
+    if (run.attachmentOwnerId) {
+      try { await this.attachmentService?.release(run.id); }
+      catch (error) { this.log('warn', `Attachment cleanup failed for ${run.id}: ${redactSecrets(errorMessage(error)).slice(0, 500)}`); }
+    }
+    await this.captureCheckpoint(run.sessionId, 'Provider cleanup released', run.id);
     run.cleanupPending = false;
     if (run.closed && this.active.get(run.sessionId) === run) {
       this.active.delete(run.sessionId);
+      run.capabilityTokens.length = 0;
       try { this.groups?.onRuntimeIdle(run.sessionId); }
       catch (error) { this.log('error', `Failed to resume group queue after provider cleanup for ${run.sessionId}`, error); }
     }
@@ -256,7 +350,10 @@ export class SessionRuntime {
           break;
         }
         case 'session':
-          if (event.providerSessionId) this.store.updateSession(run.sessionId, { providerSessionId: event.providerSessionId });
+          if (event.providerSessionId) {
+            this.store.updateSession(run.sessionId, { providerSessionId: event.providerSessionId });
+            void this.captureCheckpoint(run.sessionId, 'Provider conversation identity recorded', run.id);
+          }
           break;
         case 'text':
           if (!event.text) return;
@@ -413,6 +510,7 @@ export class SessionRuntime {
       this.store.recordEvent({ projectId: session.projectId, sessionId: run.sessionId, type: 'approval.requested', summary: `Approval requested: ${created.tool}`, payload: { approvalId: created.id, tool: created.tool } });
       return created;
     });
+    void this.captureCheckpoint(run.sessionId, 'Provider requested host approval', run.id);
     return new Promise<boolean>((resolve) => run.approvals.set(approval.id, resolve));
   }
 
@@ -457,16 +555,205 @@ export class SessionRuntime {
     for (const [, resolve] of entries) resolve(false);
   }
 
-  /** Cancels the active run, if any. Idempotent. */
+  /** Cancels active provider work, including manual native compaction. Idempotent. */
   interrupt(sessionId: string): boolean {
     const run = this.active.get(sessionId);
-    if (!run || run.closed) return false;
-    run.controller.abort();
-    this.denyApprovals(run, 'interrupted');
+    if (run && !run.closed) {
+      run.controller.abort();
+      this.denyApprovals(run, 'interrupted');
+      return true;
+    }
+    const compaction = this.compactions.get(sessionId);
+    if (!compaction || compaction.controller.signal.aborted) return false;
+    compaction.controller.abort();
     return true;
   }
 
-  private finish(run: ActiveRun, outcome: 'completed' | 'failed' | 'interrupted', failure: string | null, changes: RunChanges, durationMs = Math.max(0, Math.round(performance.now() - run.tick)), finishedAt = nowIso()): void {
+  /** Cancels only the compaction operation named by the caller; stale Stop requests cannot hit later work. */
+  interruptCompaction(sessionId: string, operationId: string): boolean {
+    const compaction = this.compactions.get(sessionId);
+    if (!compaction || compaction.operationId !== operationId || compaction.controller.signal.aborted) return false;
+    compaction.controller.abort();
+    return true;
+  }
+
+  /** Manually compacts exactly one native conversation under the normal per-session active lock. */
+  compact(sessionId: string, operationId = newId('cmp')): Promise<ContextCompactionResult> {
+    const session = this.store.getSession(sessionId);
+    if (!session) throw notFound('Session not found');
+    const compactOperationId = operationId.trim();
+    if (!compactOperationId || compactOperationId.length > 100) throw conflict('A valid compaction operation ID is required.');
+    if (this.isActive(sessionId) || session.status === 'running' || session.status === 'waiting') {
+      throw conflict('This session is busy; wait for its run or provider cleanup to finish before compacting.');
+    }
+    this.validateSession?.(session);
+    const startedAt = nowIso();
+    const lock: ActiveCompaction = {
+      controller: new AbortController(), operationId: compactOperationId, cleanupPending: false, startedAt, previousStatus: session.status, previousError: session.error,
+      promise: Promise.resolve(null as unknown as ContextCompactionResult),
+    };
+    this.compactions.set(sessionId, lock);
+    try {
+      this.store.tx(() => {
+        // Other windows read session status from bootstrap. Keep that view busy until native cleanup is done.
+        this.store.updateSession(sessionId, { status: 'running' });
+        this.store.recordEvent({ projectId: session.projectId, sessionId, type: 'session.compaction.started', summary: `Context compaction started: ${session.name}`, payload: { provider: session.provider, startedAt } });
+      });
+    } catch (error) {
+      this.compactions.delete(sessionId);
+      throw error;
+    }
+    lock.promise = this.executeCompaction(session, lock);
+    return lock.promise;
+  }
+
+  private async executeCompaction(session: Session, lock: ActiveCompaction): Promise<ContextCompactionResult> {
+    const startedAt = lock.startedAt;
+    let checkpointId: string | null = null;
+    let result: ContextCompactionResult;
+    let native: Promise<ContextCompactionResult> | null = null;
+    try {
+      if (session.provider === 'antigravity') {
+        result = this.compactionResult(session, 'unsupported', startedAt, null, 'Antigravity does not expose a client-requested native context compaction operation.', 'Native compaction is unsupported for Antigravity.');
+      } else if (!session.providerSessionId) {
+        result = this.compactionResult(session, 'unsupported', startedAt, null, 'This session has no confirmed native conversation history to compact.', 'No native conversation ID is available.');
+      } else {
+        const initialAdapter = this.providers.createAdapter(session.provider);
+        if (!initialAdapter.compact) {
+          const reason = `${session.provider} does not expose native manual context compaction.`;
+          result = this.compactionResult(session, 'unsupported', startedAt, null, reason, reason);
+        } else if (lock.controller.signal.aborted) {
+          result = this.compactionResult(session, 'failed', startedAt, null, 'Compaction was interrupted before native work began.', 'Interrupted before native compaction started.');
+        } else {
+          checkpointId = await this.captureCheckpoint(session.id, 'Before manual context compaction') ?? null;
+          if (!checkpointId) {
+            result = this.compactionResult(session, 'failed', startedAt, null,
+              'A durable pre-compaction checkpoint could not be saved. Native history was left untouched; resolve the storage/recovery issue and try again.',
+              'The required pre-compaction recovery checkpoint was not persisted.');
+          } else {
+            const currentSession = this.store.getSession(session.id);
+            if (!currentSession || !this.store.getProject(session.projectId)) {
+              throw new Error('The selected session or project is no longer visible; native compaction was not started.');
+            }
+            if (currentSession.status !== 'running' || currentSession.provider !== session.provider || currentSession.providerSessionId !== session.providerSessionId) {
+              throw new Error('The session configuration or native conversation changed during checkpoint capture; native compaction was not started.');
+            }
+            // Provider availability, policy, model, and permissions may have changed while Git/checkpoint capture awaited.
+            this.validateSession?.(currentSession);
+            if (lock.controller.signal.aborted) {
+              result = this.compactionResult(session, 'failed', startedAt, checkpointId, 'Compaction was interrupted before native work began.', 'Interrupted before native compaction started.');
+            } else {
+              const adapter = this.providers.createAdapter(currentSession.provider);
+              if (!adapter.compact) {
+                const reason = `${currentSession.provider} no longer exposes native manual context compaction.`;
+                result = this.compactionResult(session, 'unsupported', startedAt, checkpointId, reason, reason);
+              } else {
+                if (lock.controller.signal.aborted) throw new Error('Compaction was interrupted before native work began.');
+                native = Promise.resolve(adapter.compact({ session: currentSession, settings: this.store.getSettings(), signal: lock.controller.signal }));
+                native.catch(() => undefined);
+                const outcome = await this.waitForCompaction(native, lock.controller.signal);
+                if (outcome.kind === 'grace') {
+                  lock.cleanupPending = true;
+                  void native.then(
+                    () => { void this.releaseCompaction(session, lock); },
+                    () => { void this.releaseCompaction(session, lock); },
+                  );
+                  result = this.compactionResult(session, 'failed', startedAt, checkpointId,
+                    'Compaction was interrupted; native cleanup is still in progress and this session remains locked.',
+                    'Native compaction did not settle after interruption.');
+                } else if (outcome.kind === 'error') {
+                  const detail = redactSecrets(errorMessage(outcome.error)).slice(0, 1000);
+                  result = this.compactionResult(session, 'failed', startedAt, checkpointId, 'The provider could not compact this conversation.', detail);
+                } else {
+                  const providerResult = ContextCompactionResultSchema.parse(outcome.result);
+                  if (providerResult.sessionId !== session.id || providerResult.provider !== session.provider) {
+                    throw new Error('Provider compaction result did not match the selected native session.');
+                  }
+                  result = {
+                    ...providerResult,
+                    checkpointId: checkpointId ?? providerResult.checkpointId,
+                    message: redactSecrets(providerResult.message).slice(0, 1000),
+                    error: providerResult.error === null ? null : redactSecrets(providerResult.error).slice(0, 1000),
+                  };
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (error) {
+      const detail = redactSecrets(errorMessage(error)).slice(0, 1000);
+      result = this.compactionResult(session, 'failed', startedAt, checkpointId, 'The provider could not compact this conversation.', detail);
+    }
+
+    if (!lock.cleanupPending) await this.captureCheckpoint(session.id, `After manual context compaction (${result.status})`);
+    const finishedAt = result.finishedAt;
+    try {
+      this.store.recordEvent({
+        projectId: session.projectId, sessionId: session.id, type: `session.compaction.${result.status}`,
+        summary: result.status === 'completed' ? `Context compaction completed: ${session.name}` : result.status === 'unsupported' ? `Context compaction unavailable: ${session.name}` : `Context compaction failed: ${session.name}`,
+        payload: { provider: session.provider, startedAt: result.startedAt, finishedAt, checkpointId: result.checkpointId, message: result.message, error: result.error },
+      });
+    } catch (error) {
+      this.log('warn', `Could not persist compaction outcome for ${session.id}: ${redactSecrets(errorMessage(error)).slice(0, 500)}`);
+    }
+    if (!lock.cleanupPending) this.releaseCompactionNow(session.id, lock, true);
+    return result;
+  }
+
+  private compactionResult(session: Session, status: ContextCompactionResult['status'], startedAt: string, checkpointId: string | null, message: string, error: string | null): ContextCompactionResult {
+    return {
+      sessionId: session.id, provider: session.provider, status, startedAt, finishedAt: nowIso(), checkpointId,
+      message: redactSecrets(message).slice(0, 1000), error: error === null ? null : redactSecrets(error).slice(0, 1000),
+    };
+  }
+
+  private waitForCompaction(native: Promise<ContextCompactionResult>, signal: AbortSignal): Promise<{ kind: 'result'; result: ContextCompactionResult } | { kind: 'error'; error: unknown } | { kind: 'grace' }> {
+    const settled = native.then((result) => ({ kind: 'result' as const, result }), (error: unknown) => ({ kind: 'error' as const, error }));
+    const grace = new Promise<{ kind: 'grace' }>((resolve) => {
+      let timer: NodeJS.Timeout | null = null;
+      const onAbort = () => {
+        if (timer) return;
+        timer = setTimeout(() => resolve({ kind: 'grace' }), this.abortGraceMs);
+        timer.unref();
+      };
+      if (signal.aborted) onAbort();
+      else signal.addEventListener('abort', onAbort, { once: true });
+      void settled.then(() => {
+        if (timer) clearTimeout(timer);
+        signal.removeEventListener('abort', onAbort);
+      });
+    });
+    return Promise.race([settled, grace]);
+  }
+
+  private async releaseCompaction(session: Session, lock: ActiveCompaction): Promise<void> {
+    if (this.compactions.get(session.id) !== lock) return;
+    await this.captureCheckpoint(session.id, 'Manual compaction provider cleanup released');
+    this.releaseCompactionNow(session.id, lock, true);
+  }
+
+  private releaseCompactionNow(sessionId: string, lock: ActiveCompaction, notifyIdle: boolean): void {
+    if (this.compactions.get(sessionId) !== lock) return;
+    lock.cleanupPending = false;
+    let session: Session | undefined;
+    try { session = this.store.getSession(sessionId, true); }
+    catch (error) { this.log('warn', `Could not read session after compaction for ${sessionId}: ${redactSecrets(errorMessage(error)).slice(0, 500)}`); }
+    if (session) {
+      try {
+        this.store.updateSession(sessionId, { status: lock.previousStatus, error: lock.previousError });
+      } catch (error) {
+        this.log('warn', `Could not restore session status after compaction for ${sessionId}: ${redactSecrets(errorMessage(error)).slice(0, 500)}`);
+      }
+    }
+    this.compactions.delete(sessionId);
+    if (notifyIdle) {
+      try { this.groups?.onRuntimeIdle(sessionId); }
+      catch (error) { this.log('error', `Failed to resume group queue after compaction for ${sessionId}`, error); }
+    }
+  }
+
+  private async finish(run: ActiveRun, outcome: 'completed' | 'failed' | 'interrupted', failure: string | null, changes: RunChanges, durationMs = Math.max(0, Math.round(performance.now() - run.tick)), finishedAt = nowIso()): Promise<void> {
     run.closed = true;
     run.acceptingTools = false;
     this.denyApprovals(run, outcome === 'completed' ? 'run finished' : outcome);
@@ -498,19 +785,36 @@ export class SessionRuntime {
         });
       });
     } catch (error) {
-      this.log('error', `Failed to finalise run for ${run.sessionId}`, error);
-    } finally {
-      if (!run.cleanupPending) this.active.delete(run.sessionId);
-      try { this.groups?.onRunFinished(run.sessionId, run.id, outcome); }
-      catch (error) { this.log('error', `Failed to record group delivery outcome for ${run.sessionId}`, error); }
+      this.log('error', `Failed to finalise run for ${run.sessionId}: ${redactSecrets(errorMessage(error)).slice(0, 500)}`);
     }
+    if (outcome === 'failed' && failure) {
+      try {
+        const scrubCapabilities = (value: string) => run.capabilityTokens.reduce((text, token) => text.split(token).join('[redacted]'), value);
+        this.recovery?.recordFailure(run.sessionId, run.id, this.makeProviderFailure(run, failure, scrubCapabilities));
+      } catch (error) {
+        this.log('error', `Failed to persist provider failure for run ${run.id}: ${redactSecrets(errorMessage(error)).slice(0, 500)}`);
+      }
+    } else if (outcome === 'completed') {
+      try { this.recovery?.clearFailure(run.sessionId); }
+      catch (error) { this.log('warn', `Could not resolve prior provider failure for ${run.sessionId}: ${redactSecrets(errorMessage(error)).slice(0, 500)}`); }
+    }
+    await this.captureCheckpoint(run.sessionId, `Run ${outcome}`, run.id);
+    if (!run.cleanupPending) {
+      this.active.delete(run.sessionId);
+      run.capabilityTokens.length = 0;
+    }
+    try { this.groups?.onRunFinished(run.sessionId, run.id, outcome); }
+    catch (error) { this.log('error', `Failed to record group delivery outcome for ${run.sessionId}`, error); }
   }
 
-  /** Aborts every run and waits (bounded) for adapters to settle. */
+  /** Aborts all native provider work and waits (bounded) for provider cleanup. */
   async shutdown(): Promise<void> {
     const runs = [...this.active.values()];
+    const compactions = [...this.compactions.entries()];
     for (const run of runs) this.interrupt(run.sessionId);
-    await Promise.race([Promise.allSettled(runs.map((r) => r.promise)), new Promise((resolve) => setTimeout(resolve, this.abortGraceMs + 1000).unref())]);
+    for (const [sessionId] of compactions) this.interrupt(sessionId);
+    const pending = [...runs.map((run) => run.promise), ...compactions.map(([, lock]) => lock.promise)];
+    await Promise.race([Promise.allSettled(pending), new Promise((resolve) => setTimeout(resolve, this.abortGraceMs + 1000).unref())]);
   }
 }
 

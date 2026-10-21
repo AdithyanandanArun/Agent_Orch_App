@@ -82,8 +82,10 @@ const defaultLogger: Logger = (level, message, detail) => {
 export function recoverInterruptedState(store: Store, log: Logger, recovery?: RecoveryService): { sessions: number; approvals: number; tasks: number; messages: number } {
   let interruptedSessions: ReturnType<Store['sessionsInStatus']> = [];
   const result = store.tx(() => {
+    const sessionsWithActiveRuns = new Set(store.activeRunSessionIds());
     store.recoverRuns();
     const approvals = store.pendingApprovals();
+    const sessionsWithPendingApprovals = new Set(approvals.map((approval) => approval.sessionId));
     for (const approval of approvals) {
       const session = store.getSession(approval.sessionId, true);
       store.resolveApproval(approval.id, 'denied', 'expired: server restarted');
@@ -92,9 +94,18 @@ export function recoverInterruptedState(store: Store, log: Logger, recovery?: Re
     const sessions = store.sessionsInStatus(['running', 'waiting']);
     interruptedSessions = sessions;
     for (const session of sessions) {
-      store.updateSession(session.id, { status: 'interrupted', error: 'The server restarted while this run was active.' });
-      store.insertMessage({ sessionId: session.id, role: 'system', kind: 'info', content: 'The Mingle server restarted while this run was active. The run was interrupted; partial output above (if any) was kept.' });
-      store.recordEvent({ projectId: session.projectId, sessionId: session.id, type: 'session.run.interrupted', summary: `Run interrupted by restart: ${session.name}`, payload: { reason: 'server restarted' } });
+      if (sessionsWithActiveRuns.has(session.id) || sessionsWithPendingApprovals.has(session.id)) {
+        store.updateSession(session.id, { status: 'interrupted', error: 'The server restarted while this run was active.' });
+        store.insertMessage({ sessionId: session.id, role: 'system', kind: 'info', content: 'The Mingle server restarted while this run was active. The run was interrupted; partial output above (if any) was kept.' });
+        store.recordEvent({ projectId: session.projectId, sessionId: session.id, type: 'session.run.interrupted', summary: `Run interrupted by restart: ${session.name}`, payload: { reason: 'server restarted' } });
+      } else {
+        store.updateSession(session.id, {
+          status: 'interrupted',
+          error: session.error ?? 'The server restarted during native context compaction; its outcome may be uncertain.',
+        });
+        store.insertMessage({ sessionId: session.id, role: 'system', kind: 'info', content: 'The Mingle server restarted during native context compaction or another untracked provider operation. Its outcome is uncertain; inspect the native conversation before continuing.' });
+        store.recordEvent({ projectId: session.projectId, sessionId: session.id, type: 'session.compaction.interrupted', summary: `Native context compaction interrupted by restart: ${session.name}`, payload: { reason: 'server restarted', outcome: 'unknown' } });
+      }
     }
     const messages = store.finalizeStreamingMessages('partial');
     const tasks = store.tasksInStatus('running');
@@ -102,7 +113,7 @@ export function recoverInterruptedState(store: Store, log: Logger, recovery?: Re
       store.updateTask(task.id, { status: 'ready' });
       store.recordEvent({ projectId: task.projectId, sessionId: task.sessionId, type: 'task.run.stopped', summary: `Task run interrupted by restart: ${task.title}`, payload: { taskId: task.id, outcome: 'interrupted' } });
     }
-    if (approvals.length || sessions.length || tasks.length) log('warn', `Recovered from an unclean stop: ${sessions.length} runs, ${approvals.length} approvals, ${tasks.length} tasks`);
+    if (approvals.length || sessions.length || tasks.length) log('warn', `Recovered from an unclean stop: ${sessions.length} active sessions, ${approvals.length} approvals, ${tasks.length} tasks`);
     return { sessions: sessions.length, approvals: approvals.length, tasks: tasks.length, messages };
   });
   for (const session of interruptedSessions) {
@@ -142,7 +153,11 @@ export function createApplication(options: ApplicationOptions): MingleApplicatio
   const handoffs = new HandoffService(store);
   const attachments = new AttachmentService(store, config.dataDir, log);
   runtime.setAttachments(attachments);
-  const groups = new GroupService({ store, workspace, tasks, handoffs, runtime, log, attachments, providers: () => providers.cached() ?? [], catalog: (session, refresh) => providers.catalog(session, refresh) });
+  const groupOptions = {
+    store, workspace, tasks, handoffs, runtime, log, attachments, providers: () => providers.cached() ?? [],
+    catalog: (session, refresh) => providers.catalog(session, refresh), recovery,
+  } satisfies ConstructorParameters<typeof GroupService>[0] & { recovery: RecoveryService };
+  const groups = new GroupService(groupOptions);
   const teamMcp = new TeamMcpBridge(groups, store, () => boundPort, () => config.host);
   runtime.setGroupServices(groups, teamMcp);
   groups.recover();

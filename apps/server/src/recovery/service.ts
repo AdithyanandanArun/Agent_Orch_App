@@ -42,7 +42,6 @@ export class RecoveryService {
       if (!run || run.sessionId !== sessionId) throw badRequest('Run does not belong to this session');
     }
 
-    const [gitState] = await Promise.all([this.gitSnapshot(session.worktreePath)]);
     const latestObjective = this.store.recoveryLatestUserMessage(sessionId)?.trim();
     const tasks = this.store.recoveryTasksForSession(sessionId).map((task) => ({
         id: safeText(task.id, 100), title: safeText(task.title, 300), description: safeText(task.description, 1000),
@@ -64,6 +63,7 @@ export class RecoveryService {
       id: safeText(artifact.id, 100), path: safeText(artifact.path, 4096), revision: safeText(artifact.revision, 100),
       taskId: artifact.taskId ? safeText(artifact.taskId, 100) : null,
     }));
+    const gitState = await this.gitSnapshot(session.worktreePath);
     const checkpoint = RecoveryCheckpointSchema.parse({
       id: shortId('chk'), version: 1, sessionId, ...(runId ? { runId } : {}), reason: safeText(reason.trim(), 200), capturedAt: nowIso(),
       objective: latestObjective ? safeText(latestObjective, 1000) : null, tasks,
