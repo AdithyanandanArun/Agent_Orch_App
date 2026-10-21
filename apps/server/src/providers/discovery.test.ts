@@ -119,10 +119,10 @@ echo "2.1.292 (Claude Code)"`);
     expect(info.reason).toContain('did not respond');
   });
 
-  it('detectProviders returns both providers in a stable order', async () => {
+  it('detectProviders returns all four providers in a stable order', async () => {
     const codex = await box.fakeCodex();
     const claude = await box.script('bin/claude', 'echo "2.1.292 (Claude Code)"');
     const result = await detectProviders({ ...settings, codexExecutable: codex, claudeExecutable: claude }, { env: { PATH: '' } });
-    expect(result.map((p) => p.id)).toEqual(['codex', 'claude']);
+    expect(result.map((p) => p.id)).toEqual(['codex', 'claude', 'antigravity', 'opencode']);
   });
 });

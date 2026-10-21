@@ -74,6 +74,7 @@ describe('task DAG API', () => {
     t.fake.script = async (_o, emit) => { emit({ type: 'text', text: 'done it' }); await gate.promise; };
     expect((await t.api('POST', '/api/tasks/tsk_example_contract/run')).status).toBe(202);
     await waitFor(async () => (await byId(t, 'tsk_example_contract')).status === 'running');
+    await waitFor(() => t.fake.runs.length === 1);
     expect(t.fake.runs[0]!.prompt).toContain('Review and tighten the users API v1 contract');
     expect(t.fake.runs[0]!.prompt).toContain('Acceptance criteria');
     expect((await t.api('POST', '/api/tasks/tsk_example_contract/run')).status).toBe(409);

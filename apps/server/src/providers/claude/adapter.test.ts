@@ -33,7 +33,7 @@ function adapterFor(messages: Msg[] | ((params: { prompt: string; options: Optio
 
 describe('claude adapter', () => {
   it('streams text once, maps tools and usage, and passes model, effort, policy and credentials explicitly', async () => {
-    const run = makeRun({ session: { provider: 'claude', model: 'claude-opus-5-5', effort: 'low', policy: 'balanced', providerSessionId: 'sess-0', worktreePath: '/work/tree' }, prompt: 'Refactor' });
+    const run = makeRun({ session: { provider: 'claude', model: 'claude-opus-5-5', effort: 'low', policy: 'balanced', providerSessionId: 'sess-1', worktreePath: '/work/tree' }, prompt: 'Refactor' });
     const { adapter, calls, closes } = adapterFor([
       init(),
       ...streamText('Hel', 'lo'),
@@ -48,7 +48,7 @@ describe('claude adapter', () => {
     const { prompt, options } = calls[0]!;
     expect(prompt).toBe('Refactor');
     expect(options).toMatchObject({
-      cwd: '/work/tree', model: 'claude-opus-5-5', effort: 'low', permissionMode: 'acceptEdits', resume: 'sess-0',
+      cwd: '/work/tree', model: 'claude-opus-5-5', effort: 'low', permissionMode: 'acceptEdits', resume: 'sess-1',
       includePartialMessages: true, pathToClaudeCodeExecutable: '/fake/claude', settingSources: ['project'], settings: { disableAllHooks: true },
     });
     expect(options.fallbackModel).toBeUndefined();
@@ -149,6 +149,15 @@ describe('claude adapter', () => {
     expect(calls[0]!.options.env?.HOME).toBe('/home/x');
     expect(calls[0]!.options.env?.ANTHROPIC_API_KEY).toBeUndefined();
     expect(text(run.events)).toBe('Hello');
+  });
+
+  it('rejects a resumed session that initializes as a different native conversation', async () => {
+    const run = makeRun({ session: { provider: 'claude', providerSessionId: 'selected-session' } });
+    const { adapter, closes } = adapterFor([init({ session_id: 'other-session' }), success()]);
+
+    await expect(adapter.run(run.options)).rejects.toMatchObject({ code: 'resume_failed', message: expect.stringContaining('different conversation') });
+    expect(closes).toHaveBeenCalled();
+    expect(run.events.some((event) => event.type === 'session')).toBe(false);
   });
 
   it('turns error results into errors with the SDK detail', async () => {

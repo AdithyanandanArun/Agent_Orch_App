@@ -55,6 +55,8 @@ it('retains handed-off context after the provider creates a conversation but fai
   };
   await t.api('POST', `/api/sessions/${EXAMPLE_CLIENT_SESSION_ID}/messages`, { content: 'first try' });
   await waitFor(() => t.app.store.getSession(EXAMPLE_CLIENT_SESSION_ID)?.status === 'error');
+  // Visible status settles before the runtime releases its lock; retry only after cleanup/checkpoint capture ends.
+  await waitFor(() => t.app.runtime.activeCount() === 0);
   t.fake.script = async () => undefined;
   await t.api('POST', `/api/sessions/${EXAMPLE_CLIENT_SESSION_ID}/messages`, { content: 'retry' });
   await waitFor(() => t.fake.runs.length === 2);

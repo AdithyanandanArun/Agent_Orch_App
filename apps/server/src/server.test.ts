@@ -178,7 +178,7 @@ describe('settings and providers', () => {
     const updated = await t.api('PATCH', '/api/settings', { codexExecutable: '/opt/codex', defaultPolicy: 'balanced' });
     expect(updated.json).toMatchObject({ codexExecutable: '/opt/codex', defaultPolicy: 'balanced' });
     const providers = (await t.api('GET', '/api/providers')).json;
-    expect(providers.map((p: any) => p.id)).toEqual(['codex', 'claude']);
+    expect(providers.map((p: any) => p.id)).toEqual(['codex', 'claude', 'antigravity', 'opencode']);
     const before = t.fake.detections;
     await t.api('POST', '/api/providers/refresh');
     expect(t.fake.detections).toBeGreaterThan(before);

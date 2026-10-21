@@ -56,7 +56,7 @@ describe('git status and diff', () => {
     const s = (await t.api('GET', '/api/bootstrap')).json.sessions.find((x: any) => x.id === EXAMPLE_CONTRACT_SESSION_ID);
     const base = `/api/projects/${EXAMPLE_PROJECT_ID}/git`;
     const clean = (await t.api('GET', `${base}?sessionId=${s.id}`)).json;
-    expect(clean).toMatchObject({ isRepo: true, files: [], diff: '', branch: 'relay/example-contract-author' });
+    expect(clean).toMatchObject({ isRepo: true, files: [], diff: '', branch: 'mingle/example-contract-author' });
 
     writeFileSync(path.join(s.worktreePath, 'README.md'), '# changed staged\n');
     runGit(s.worktreePath, 'add', 'README.md');

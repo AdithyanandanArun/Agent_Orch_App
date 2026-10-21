@@ -79,6 +79,7 @@ describe('provider runs', () => {
     const results = await Promise.all(Array.from({ length: 6 }, (_, i) => t.api('POST', url, { content: `msg ${i}` })));
     expect(results.filter((r) => r.status === 202)).toHaveLength(1);
     expect(results.filter((r) => r.status === 409)).toHaveLength(5);
+    await waitFor(() => t.fake.runs.length === 1);
     expect(t.fake.runs).toHaveLength(1);
     gate.resolve();
     await waitFor(async () => (await session(t)).status === 'idle');
@@ -93,7 +94,7 @@ describe('provider runs', () => {
       await new Promise<void>((_, reject) => o.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true }));
     };
     await t.api('POST', `/api/sessions/${EXAMPLE_CONTRACT_SESSION_ID}/messages`, { content: 'go' });
-    await waitFor(async () => (await session(t)).status === 'running');
+    await waitFor(async () => (await messages(t)).some((message) => message.role === 'assistant' && message.content === 'working…'));
     expect((await t.api('POST', `/api/sessions/${EXAMPLE_CONTRACT_SESSION_ID}/interrupt`)).json).toEqual({ ok: true });
     await waitFor(async () => (await session(t)).status === 'interrupted');
     const partial = (await messages(t)).find((m) => m.role === 'assistant');
@@ -107,6 +108,7 @@ describe('provider runs', () => {
     const cleanup = deferred();
     t.fake.script = async () => { await cleanup.promise; };
     await t.api('POST', `/api/sessions/${EXAMPLE_CONTRACT_SESSION_ID}/messages`, { content: 'go' });
+    await waitFor(() => t.fake.runs.length === 1);
     await t.api('POST', `/api/sessions/${EXAMPLE_CONTRACT_SESSION_ID}/interrupt`);
     await waitFor(async () => (await session(t)).status === 'interrupted', 3000);
     expect(t.app.runtime.activeCount()).toBe(1);
@@ -115,6 +117,15 @@ describe('provider runs', () => {
     await waitFor(() => t.app.runtime.activeCount() === 0);
     t.fake.script = async () => undefined;
     expect((await t.api('POST', `/api/sessions/${EXAMPLE_CONTRACT_SESSION_ID}/messages`, { content: 'after cleanup' })).status).toBe(202);
+  });
+
+  it('cancels before provider dispatch when interrupted during run setup', async () => {
+    const t = await boot();
+    t.app.runtime.start(EXAMPLE_CONTRACT_SESSION_ID, 'cancel during setup');
+    expect(t.app.runtime.interrupt(EXAMPLE_CONTRACT_SESSION_ID)).toBe(true);
+    await waitFor(async () => (await session(t)).status === 'interrupted');
+    expect(t.fake.runs).toHaveLength(0);
+    expect(t.app.runtime.activeCount()).toBe(0);
   });
 
   it('records adapter failures (sync and async) with redacted errors and lets the session run again', async () => {
