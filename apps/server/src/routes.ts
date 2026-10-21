@@ -2,8 +2,9 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { z } from 'zod';
 import {
   CreateGroupSchema, AddGroupAgentSchema, UpdateGroupSchema, SendGroupMessageSchema, RepositoryCommitSchema, RepositoryPushSchema, RepositoryBranchSchema, RepositoryPullRequestSchema, BrowserConnectSchema, BrowserActionSchema, ApprovalDecisionSchema, ConversationIdSchema, ImportConversationSchema, ProviderSchema, CloneProjectSchema, NewProjectSchema, CreateProjectSchema, CreateSessionSchema, CreateTaskSchema, HandoffSchema, SendMessageSchema, UpdateProjectSchema, UpdateSessionSchema, UpdateSettingsSchema, UpdateTaskSchema,
+  RecoveryActionRequestSchema,
 } from '@mingle/contracts';
-import type { Bootstrap, SessionUsage } from '@mingle/contracts';
+import type { Bootstrap, RecoveryActionRequest, RecoveryActionResult, SessionUsage } from '@mingle/contracts';
 import { gitStatus } from './git.ts';
 import type { Hub } from './hub.ts';
 import { listDirectory, readTextFile, writeTextFile } from './paths.ts';
@@ -29,6 +30,7 @@ import { antigravityInstallState, startAntigravityInstall } from './antigravity-
 import { antigravityAuthState, cancelAntigravityAuth, startAntigravityAuth } from './antigravity-auth.ts';
 import type { AttachmentService } from './attachments/service.ts';
 import type { AccountService } from './account/service.ts';
+import type { RecoveryService } from './recovery/service.ts';
 import { AccountConnectionSchema, SaveAccountPreferencesSchema } from '@mingle/contracts';
 import { ATTACHMENT_LIMITS, NativeActionCatalogQuerySchema, nativeActionCommands, nativeActionSkills, unsupportedActionNotes } from '@mingle/contracts';
 
@@ -36,7 +38,7 @@ export interface Services {
   account: AccountService;
   setupSignal: AbortSignal;
   config: ServerConfig; store: Store; hub: Hub; workspace: WorkspaceService; runtime: SessionRuntime; tasks: TaskService; handoffs: HandoffService;
-  groups: GroupService; attachments: AttachmentService; intelligence: ProjectIntelligenceService; repository: RepositoryService; browser: BrowserService; providers: ProviderService; imports: ImportService; directories: DirectoryService; projectSources: ProjectSources; terminals: TerminalManager; startedAt: number; getPort: () => number;
+  groups: GroupService; attachments: AttachmentService; recovery: RecoveryService; intelligence: ProjectIntelligenceService; repository: RepositoryService; browser: BrowserService; providers: ProviderService; imports: ImportService; directories: DirectoryService; projectSources: ProjectSources; terminals: TerminalManager; startedAt: number; getPort: () => number;
 }
 
 export class Reply {
@@ -109,6 +111,13 @@ export function buildRouter(s: Services) {
     if (!s.store.getSession(id)) throw notFound('Session not found');
     return id;
   };
+  const recoverySession = (ctx: Ctx) => {
+    const id = param(ctx, 'id');
+    if (!s.store.getSession(id)) throw notFound('Session not found');
+    return id;
+  };
+  const compactBody = z.object({}).strict();
+  const checkpointBody = z.object({ reason: z.string().trim().min(1).max(200), runId: z.string().min(1).max(100).optional() }).strict();
   const emptyBrowserBody = z.object({}).strict();
   add('GET', '/api/account', () => s.account.snapshot());
   add('PUT', '/api/account/connection', async (ctx) => s.account.configure(await ctx.body(AccountConnectionSchema)));
@@ -287,8 +296,28 @@ export function buildRouter(s: Services) {
   add('POST', '/api/groups/:id/resume', async (ctx) => { await ctx.body(emptyGroupBody); return s.groups.resume(param(ctx, 'id')); });
   add('POST', '/api/groups/:id/members/:memberId/resume', async (ctx) => { await ctx.body(emptyGroupBody); return s.groups.resumeMember(param(ctx, 'id'), param(ctx, 'memberId')); });
   add('POST', '/api/groups/:id/members/:memberId/interrupt', async (ctx) => { await ctx.body(emptyGroupBody); return s.groups.stopMember(param(ctx, 'id'), param(ctx, 'memberId')); });
+  add('POST', '/api/groups/:id/recovery', async (ctx) => {
+    const groupId = param(ctx, 'id');
+    const action = await ctx.body(RecoveryActionRequestSchema) as RecoveryActionRequest;
+    const groups = s.groups as GroupService & { recoverAction(id: string, request: RecoveryActionRequest): Promise<RecoveryActionResult> };
+    return groups.recoverAction(groupId, action);
+  });
 
   add('POST', '/api/sessions', async (ctx) => new Reply(201, await s.workspace.createSession(await ctx.body(CreateSessionSchema))));
+  add('GET', '/api/sessions/:id/recovery', (ctx) => {
+    const id = recoverySession(ctx);
+    return { checkpoint: s.recovery.latest(id), failure: s.recovery.failure(id) };
+  });
+  add('POST', '/api/sessions/:id/checkpoints', async (ctx) => {
+    const id = recoverySession(ctx);
+    const body = await ctx.body(checkpointBody);
+    return new Reply(201, await s.recovery.capture(id, body.reason, body.runId));
+  });
+  add('POST', '/api/sessions/:id/compact', async (ctx) => {
+    const id = recoverySession(ctx);
+    await ctx.body(compactBody);
+    return s.runtime.compact(id);
+  });
   add('PATCH', '/api/projects/:id', async (ctx) => s.workspace.renameProject(param(ctx, 'id'), (await ctx.body(UpdateProjectSchema)).name));
   add('DELETE', '/api/projects/:id', async (ctx) => {
     const id = param(ctx, 'id');

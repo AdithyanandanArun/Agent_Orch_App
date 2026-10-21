@@ -34,6 +34,7 @@ import { closeAntigravityAuth } from './antigravity-auth.ts';
 import { AttachmentService } from './attachments/service.ts';
 import { handleAttachmentRequest } from './attachments/router.ts';
 import { AccountService } from './account/service.ts';
+import { RecoveryService } from './recovery/service.ts';
 
 export interface ApplicationOptions extends ConfigOptions {
   /** Provider adapters and detection. Inject a fake in tests; the CLI entry passes ./providers/index.ts. */
@@ -61,6 +62,7 @@ export interface MingleApplication {
   readonly intelligence: ProjectIntelligenceService;
   readonly repository: RepositoryService;
   readonly attachments: AttachmentService;
+  readonly recovery: RecoveryService;
   /** Runs recovery-independent async setup (example workspace). Called by listen(); safe to call repeatedly. */
   initialize(): Promise<void>;
   listen(): Promise<{ host: string; port: number; url: string }>;
@@ -77,8 +79,9 @@ const defaultLogger: Logger = (level, message, detail) => {
 };
 
 /** Recovery for state left behind by a process that died or was stopped mid-run. */
-export function recoverInterruptedState(store: Store, log: Logger): { sessions: number; approvals: number; tasks: number; messages: number } {
-  return store.tx(() => {
+export function recoverInterruptedState(store: Store, log: Logger, recovery?: RecoveryService): { sessions: number; approvals: number; tasks: number; messages: number } {
+  let interruptedSessions: ReturnType<Store['sessionsInStatus']> = [];
+  const result = store.tx(() => {
     store.recoverRuns();
     const approvals = store.pendingApprovals();
     for (const approval of approvals) {
@@ -87,6 +90,7 @@ export function recoverInterruptedState(store: Store, log: Logger): { sessions: 
       store.recordEvent({ projectId: session?.projectId ?? null, sessionId: approval.sessionId, type: 'approval.expired', summary: `Approval expired after restart: ${approval.tool}`, payload: { approvalId: approval.id, reason: 'server restarted' } });
     }
     const sessions = store.sessionsInStatus(['running', 'waiting']);
+    interruptedSessions = sessions;
     for (const session of sessions) {
       store.updateSession(session.id, { status: 'interrupted', error: 'The server restarted while this run was active.' });
       store.insertMessage({ sessionId: session.id, role: 'system', kind: 'info', content: 'The Mingle server restarted while this run was active. The run was interrupted; partial output above (if any) was kept.' });
@@ -101,6 +105,10 @@ export function recoverInterruptedState(store: Store, log: Logger): { sessions: 
     if (approvals.length || sessions.length || tasks.length) log('warn', `Recovered from an unclean stop: ${sessions.length} runs, ${approvals.length} approvals, ${tasks.length} tasks`);
     return { sessions: sessions.length, approvals: approvals.length, tasks: tasks.length, messages };
   });
+  for (const session of interruptedSessions) {
+    void recovery?.capture(session.id, 'Server restarted while this session was active').catch((error) => log('warn', `Restart recovery checkpoint failed for ${session.id}`, error));
+  }
+  return result;
 }
 
 /**
@@ -111,9 +119,10 @@ export function createApplication(options: ApplicationOptions): MingleApplicatio
   const log = options.log ?? defaultLogger;
   const config = resolveConfig(options, options.env);
   const store = new Store(openDatabase(path.join(config.dataDir, 'relay.sqlite')));
+  const recovery = new RecoveryService(store);
   const account = new AccountService(config.dataDir, options.env ?? process.env, () => store.touch());
   const setupLifecycle = new AbortController();
-  recoverInterruptedState(store, log);
+  recoverInterruptedState(store, log, recovery);
 
   let boundPort = config.port;
   const security = new Security({ getPort: () => boundPort, webDevPort: config.webDevPort, extraOrigins: config.allowedOrigins });
@@ -126,7 +135,7 @@ export function createApplication(options: ApplicationOptions): MingleApplicatio
   const runtime = new SessionRuntime(store, hub, options.providers, tasks, log, options.runtime, (session) => {
     repository.assertSessionAvailable(session);
     resolveRunConfig(providers.cached()?.find((row) => row.id === session.provider), session, { effort: true, policy: true, serviceTier: true });
-  }, browserMcp, intelligence);
+  }, browserMcp, intelligence, recovery);
   const terminals = new TerminalManager(store, hub, log, options.terminal);
   const workspace = new WorkspaceService(store, config.dataDir, runtime, () => providers.cached());
   const repository = new RepositoryService({ store, workspace, runtime, log });
@@ -138,7 +147,7 @@ export function createApplication(options: ApplicationOptions): MingleApplicatio
   runtime.setGroupServices(groups, teamMcp);
   groups.recover();
   const services: Services = {
-    config, store, hub, runtime, tasks, terminals, providers, browser, intelligence, repository, groups, handoffs, workspace, attachments, account, setupSignal: setupLifecycle.signal,
+    config, store, hub, runtime, tasks, terminals, providers, browser, intelligence, repository, groups, handoffs, workspace, attachments, account, recovery, setupSignal: setupLifecycle.signal,
     imports: new ImportService(store, options.providers, providers, runtime), directories: new DirectoryService(), projectSources: new ProjectSources(workspace), startedAt: Date.now(), getPort: () => boundPort,
   };
   hub.bind({ onMessage: (socket, raw) => terminals.handleMessage(socket, raw), onClose: (socket) => terminals.releaseSocket(socket) });
@@ -209,7 +218,7 @@ export function createApplication(options: ApplicationOptions): MingleApplicatio
   const address = () => ({ host: config.host, port: boundPort, url: `http://${config.host.includes(':') ? `[${config.host}]` : config.host}:${boundPort}` });
 
   const app: MingleApplication = {
-    config, store, server, runtime, groups, terminals, hub, providers, browser, intelligence, repository, attachments,
+    config, store, server, runtime, groups, terminals, hub, providers, browser, intelligence, repository, attachments, recovery,
     initialize() {
       initialized ??= (async () => {
         if (options.exampleWorkspace !== false) await seedExampleWorkspace(store, config.dataDir, log);
@@ -241,6 +250,7 @@ export function createApplication(options: ApplicationOptions): MingleApplicatio
         await Promise.all([closeAntigravityInstall(config.dataDir), closeAntigravityAuth(config.dataDir)]);
         groups.close();
         await runtime.shutdown();
+        await recovery.drain();
         await attachments.close();
         await options.providers.close?.().catch((error) => log('warn', 'Provider helper cleanup failed', error));
         teamMcp.close();

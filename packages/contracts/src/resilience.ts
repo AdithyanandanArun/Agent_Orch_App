@@ -43,13 +43,13 @@ export const ProviderFailureSchema = z.object({
   outcomeUnknown: z.boolean().optional(), dispatchState: z.enum(['not-dispatched', 'dispatched', 'unknown']),
   continuationSafety: z.enum(['safe', 'unsafe', 'unknown']), quotaPool: z.string().max(100).optional(),
   retryAt: z.string().datetime({ offset: true }).nullable().optional(),
-  message: z.string().max(1000), occurredAt: z.string().max(40),
+  message: z.string().max(1000), occurredAt: z.string().datetime({ offset: true }),
 }).strict();
 export type ProviderFailure = z.infer<typeof ProviderFailureSchema>;
 
 export const RecoveryCheckpointSchema = z.object({
   id: z.string().min(1).max(100), version: z.literal(1), sessionId: z.string().min(1).max(100), runId: z.string().min(1).max(100).optional(),
-  reason: z.string().min(1).max(200), capturedAt: z.string().max(40), objective: z.string().max(1000).nullable(),
+  reason: z.string().min(1).max(200), capturedAt: z.string().datetime({ offset: true }), objective: z.string().max(1000).nullable(),
   tasks: z.array(z.object({ id: z.string().max(100), title: z.string().max(300), description: z.string().max(1000), acceptanceCriteria: z.string().max(1000), status: z.enum(['backlog', 'ready', 'running', 'blocked', 'review', 'done']) }).strict()).max(100),
   worktree: z.object({ path: z.string().max(4096), branch: z.string().max(1000).nullable(), head: z.string().max(100).nullable(), dirtyPaths: z.array(z.string().max(4096)).max(500), dirtyPathsTruncated: z.boolean(), isRepository: z.boolean(), statusKnown: z.boolean() }).strict(),
   artifacts: z.array(z.object({ id: z.string().max(100), path: z.string().max(4096), revision: z.string().max(100), taskId: z.string().max(100).nullable() }).strict()).max(100),
@@ -86,7 +86,7 @@ export type GroupMilestone = z.infer<typeof GroupMilestoneSchema>;
 
 export const ContextCompactionResultSchema = z.object({
   sessionId: z.string().min(1).max(100), provider: ProviderSchema, status: z.enum(['completed', 'failed', 'unsupported']),
-  startedAt: z.string().max(40), finishedAt: z.string().max(40), checkpointId: z.string().max(100).nullable(),
+  startedAt: z.string().datetime({ offset: true }), finishedAt: z.string().datetime({ offset: true }), checkpointId: z.string().max(100).nullable(),
   message: z.string().max(1000), error: z.string().max(1000).nullable(),
 }).strict();
 export type ContextCompactionResult = z.infer<typeof ContextCompactionResultSchema>;

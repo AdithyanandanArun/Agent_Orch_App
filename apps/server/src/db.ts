@@ -175,23 +175,28 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
    ALTER TABLE group_deliveries ADD COLUMN coordinator_epoch INTEGER NOT NULL DEFAULT 1;
    CREATE TABLE session_checkpoints (
      id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), run_id TEXT REFERENCES session_runs(id),
-     version INTEGER NOT NULL, reason TEXT NOT NULL, checkpoint_json TEXT NOT NULL, created_at TEXT NOT NULL
+     version INTEGER NOT NULL, reason TEXT NOT NULL CHECK (length(reason) <= 200),
+     checkpoint_json TEXT NOT NULL CHECK (length(checkpoint_json) <= 65536), created_at TEXT NOT NULL
    );
    CREATE INDEX session_checkpoints_latest ON session_checkpoints(session_id, created_at DESC);
-   CREATE TABLE session_failures (
+    CREATE TABLE session_failures (
      id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), run_id TEXT NOT NULL REFERENCES session_runs(id),
-     failure_json TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(session_id, run_id)
-   );
-   CREATE INDEX session_failures_latest ON session_failures(session_id, updated_at DESC);
+     failure_json TEXT NOT NULL CHECK (length(failure_json) <= 8192), updated_at TEXT NOT NULL, resolved_at TEXT,
+     UNIQUE(session_id, run_id)
+    );
+    CREATE INDEX session_failures_latest ON session_failures(session_id, updated_at DESC);
+    CREATE INDEX session_failures_run ON session_failures(run_id);
    CREATE TABLE group_recovery_actions (
-     id TEXT PRIMARY KEY, group_id TEXT NOT NULL REFERENCES conversation_groups(id), idempotency_key TEXT NOT NULL,
-     action TEXT NOT NULL, result_json TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(group_id, idempotency_key)
+     id TEXT PRIMARY KEY, group_id TEXT NOT NULL REFERENCES conversation_groups(id), idempotency_key TEXT NOT NULL CHECK (length(idempotency_key) <= 100),
+     action TEXT NOT NULL CHECK (length(action) <= 80), result_json TEXT NOT NULL CHECK (length(result_json) <= 8192), created_at TEXT NOT NULL,
+     UNIQUE(group_id, idempotency_key)
    );
     CREATE INDEX group_recovery_actions_recent ON group_recovery_actions(group_id, created_at DESC);
     CREATE TABLE group_recovery_checkpoints (
       id TEXT PRIMARY KEY, group_id TEXT NOT NULL REFERENCES conversation_groups(id), request_id TEXT REFERENCES group_requests(id),
       batch_id TEXT, kind TEXT NOT NULL, state TEXT NOT NULL CHECK (state IN ('pending', 'acknowledged', 'dismissed')),
-      reason TEXT NOT NULL, payload_json TEXT NOT NULL, idempotency_key TEXT NOT NULL,
+      reason TEXT NOT NULL CHECK (length(reason) <= 1000), payload_json TEXT NOT NULL CHECK (length(payload_json) <= 65536),
+      idempotency_key TEXT NOT NULL CHECK (length(idempotency_key) <= 100),
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL, acknowledged_at TEXT,
       UNIQUE(group_id, idempotency_key)
     );
@@ -199,17 +204,18 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
     CREATE TABLE group_assignment_milestones (
       id TEXT PRIMARY KEY, group_id TEXT NOT NULL REFERENCES conversation_groups(id), assignment_id TEXT NOT NULL REFERENCES group_assignments(id),
       task_id TEXT NOT NULL REFERENCES tasks(id), label TEXT NOT NULL, acceptance_source TEXT NOT NULL CHECK (acceptance_source IN ('explicit', 'derived')),
-      state TEXT NOT NULL CHECK (state IN ('pending', 'completed', 'blocked')), evidence_ref TEXT,
+      state TEXT NOT NULL CHECK (state IN ('pending', 'completed', 'blocked')), evidence_ref TEXT CHECK (evidence_ref IS NULL OR length(evidence_ref) <= 4096),
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     );
     CREATE INDEX group_assignment_milestones_assignment ON group_assignment_milestones(assignment_id, created_at);
     CREATE TABLE group_stall_evidence (
       id TEXT PRIMARY KEY, group_id TEXT NOT NULL REFERENCES conversation_groups(id), member_id TEXT, request_id TEXT, delivery_id TEXT,
-      assignment_id TEXT, fingerprint TEXT NOT NULL, signal_class TEXT NOT NULL, consecutive_count INTEGER NOT NULL,
-      reason TEXT NOT NULL, source_run_id TEXT, source_tool_id TEXT, source_task_id TEXT, source_artifact_id TEXT,
-      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(group_id, member_id, request_id, fingerprint)
+      assignment_id TEXT, fingerprint TEXT NOT NULL CHECK (length(fingerprint) <= 128), signal_class TEXT NOT NULL CHECK (length(signal_class) <= 80), consecutive_count INTEGER NOT NULL,
+      reason TEXT NOT NULL CHECK (length(reason) <= 1000), source_run_id TEXT, source_tool_id TEXT, source_task_id TEXT, source_artifact_id TEXT,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     );
-    CREATE INDEX group_stall_evidence_recent ON group_stall_evidence(group_id, updated_at DESC);`,
+    CREATE INDEX group_stall_evidence_recent ON group_stall_evidence(group_id, updated_at DESC);
+    CREATE UNIQUE INDEX group_stall_evidence_fingerprint ON group_stall_evidence(group_id, COALESCE(member_id, ''), COALESCE(request_id, ''), fingerprint);`,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

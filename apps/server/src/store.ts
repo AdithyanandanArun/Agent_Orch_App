@@ -1,5 +1,5 @@
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
-import type { TaskSource, ProjectContext, AppSettings, Approval, Message, Policy, Project, Provider, RunChanges, RunChangesSummary, Session, SessionStatus, SessionRun, ToolCall, ToolCategory, RunStatus, Task, TaskStatus, WorkspaceEvent } from '@mingle/contracts';
+import type { TaskSource, ProjectContext, AppSettings, Approval, Message, Policy, Project, Provider, ProviderFailure, RecoveryCheckpoint, RunChanges, RunChangesSummary, Session, SessionStatus, SessionRun, ToolCall, ToolCategory, RunStatus, Task, TaskStatus, WorkspaceEvent } from '@mingle/contracts';
 import { SCHEMA_VERSION } from './db.ts';
 import { newId, nowIso } from './util.ts';
 import { AttachmentRepo } from './attachments/repo.ts';
@@ -12,7 +12,7 @@ const VISIBLE_SESSIONS = `SELECT id FROM sessions WHERE archived_at IS NULL AND 
 export const DEFAULT_SETTINGS: AppSettings = {
   defaultProvider: 'codex', defaultCodexModel: 'gpt-6.1-sol', defaultClaudeModel: 'claude-sonnet-5-5', defaultAntigravityModel: 'default', defaultOpencodeModel: 'default', defaultEffort: 'high', defaultIsolated: true,
   defaultPolicy: 'supervised', defaultServiceTier: 'standard', theme: 'dark', claudeExecutable: '', codexExecutable: '', antigravityExecutable: '', opencodeExecutable: '',
-  groupDefaults: { maxParallel: 2, maxTurns: 16, maxHops: 6 },
+  groupDefaults: { maxParallel: 2, maxTurns: 80, maxHops: 6, autonomy: { mode: 'balanced' } },
   autoCompactPercent: null, browserAgentEnabled: true, browserExecutable: '', browserDefaultMode: 'managed', browserExistingSourceId: '', browserCdpEndpoint: '',
 };
 
@@ -237,6 +237,84 @@ export class Store {
       WHERE t.run_id IN (${runIds.map(() => '?').join(',')}) ORDER BY (r.status = 'running') DESC, t.rowid DESC LIMIT ?`, ...runIds, limit);
     // Full bounded output is loaded on demand when a tool disclosure opens.
     return rows.reverse().map((row) => { const call = JSON.parse(row.data as string) as ToolCall; return { ...call, input: call.input.slice(0, 4000), output: call.output.slice(-2000), outputTruncated: Boolean(call.outputTruncated || call.output.length > 2000) }; });
+  }
+
+  // Bounded recovery metadata. Callers persist only redacted public summaries/references.
+  insertRecoveryCheckpoint(checkpoint: RecoveryCheckpoint): void {
+    const json = JSON.stringify(checkpoint);
+    if (Buffer.byteLength(json) > 64 * 1024) throw new Error('Recovery checkpoint exceeds the durable size bound');
+    this.run('INSERT INTO session_checkpoints(id, session_id, run_id, version, reason, checkpoint_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      checkpoint.id, checkpoint.sessionId, checkpoint.runId ?? null, checkpoint.version, checkpoint.reason, json, checkpoint.capturedAt);
+    this.run(`DELETE FROM session_checkpoints WHERE session_id = ? AND id NOT IN (
+      SELECT id FROM session_checkpoints WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 20
+    )`, checkpoint.sessionId, checkpoint.sessionId);
+    this.touch();
+  }
+  latestRecoveryCheckpoint(sessionId: string): RecoveryCheckpoint | null {
+    const row = this.get('SELECT checkpoint_json FROM session_checkpoints WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1', sessionId);
+    return row ? JSON.parse(row.checkpoint_json as string) as RecoveryCheckpoint : null;
+  }
+  insertProviderFailure(sessionId: string, runId: string, failure: ProviderFailure, updatedAt: string): void {
+    const json = JSON.stringify(failure);
+    if (Buffer.byteLength(json) > 8 * 1024) throw new Error('Provider failure record exceeds the durable size bound');
+    this.run(`INSERT INTO session_failures(id, session_id, run_id, failure_json, updated_at, resolved_at) VALUES (?, ?, ?, ?, ?, NULL)
+      ON CONFLICT(session_id, run_id) DO UPDATE SET failure_json = excluded.failure_json, updated_at = excluded.updated_at, resolved_at = NULL`,
+      failure.id, sessionId, runId, json, updatedAt);
+    this.run(`DELETE FROM session_failures WHERE session_id = ? AND id NOT IN (
+      SELECT id FROM session_failures WHERE session_id = ? ORDER BY updated_at DESC, rowid DESC LIMIT 20
+    )`, sessionId, sessionId);
+    this.touch();
+  }
+  latestProviderFailure(sessionId: string): ProviderFailure | null {
+    const row = this.get('SELECT failure_json FROM session_failures WHERE session_id = ? AND resolved_at IS NULL ORDER BY updated_at DESC, rowid DESC LIMIT 1', sessionId);
+    return row ? JSON.parse(row.failure_json as string) as ProviderFailure : null;
+  }
+  providerFailureForRun(runId: string): ProviderFailure | null {
+    const row = this.get('SELECT failure_json FROM session_failures WHERE run_id = ?', runId);
+    return row ? JSON.parse(row.failure_json as string) as ProviderFailure : null;
+  }
+  clearProviderFailures(sessionId: string): void {
+    this.run('UPDATE session_failures SET resolved_at = ? WHERE session_id = ? AND resolved_at IS NULL', nowIso(), sessionId);
+    this.touch();
+  }
+  recoveryToolSummaries(sessionId: string, limit = 100): Array<{ id: string; name: string; status: ToolCall['status']; summary: string }> {
+    return this.all(`SELECT json_extract(t.data, '$.id') AS id, json_extract(t.data, '$.name') AS name,
+        json_extract(t.data, '$.status') AS status, json_extract(t.data, '$.summary') AS summary
+      FROM tool_calls t JOIN session_runs r ON r.id = t.run_id
+      WHERE r.session_id = ? AND json_extract(t.data, '$.status') IN ('running', 'interrupted')
+      ORDER BY t.rowid DESC LIMIT ?`, sessionId, Math.min(Math.max(limit, 1), 100)).map((row) => ({
+        id: row.id as string, name: row.name as string, status: row.status as ToolCall['status'], summary: row.summary as string,
+      }));
+  }
+  recoveryErrorMessages(sessionId: string, limit = 20): Array<{ id: string; runId: string | null; content: string }> {
+    return this.all(`SELECT id, run_id, substr(content, 1, 1000) AS content FROM messages WHERE session_id = ? AND role = 'system' AND kind = 'error'
+      ORDER BY seq DESC LIMIT ?`, sessionId, Math.min(Math.max(limit, 1), 100)).map((row) => ({
+        id: row.id as string, runId: (row.run_id as string | null) ?? null, content: row.content as string,
+    }));
+  }
+  recoveryLatestUserMessage(sessionId: string): string | null {
+    const row = this.get("SELECT substr(content, 1, 2000) AS content FROM messages WHERE session_id = ? AND role = 'user' ORDER BY seq DESC LIMIT 1", sessionId);
+    return row ? row.content as string : null;
+  }
+  recoveryTasksForSession(sessionId: string): Array<{ id: string; title: string; description: string; acceptanceCriteria: string; status: TaskStatus }> {
+    return this.all(`SELECT id, substr(title, 1, 300) AS title, substr(description, 1, 1000) AS description,
+        substr(acceptance_criteria, 1, 1000) AS acceptance_criteria, status FROM tasks
+      WHERE session_id = ? ORDER BY updated_at DESC, created_at DESC, rowid DESC LIMIT 100`, sessionId).map((row) => ({
+        id: row.id as string, title: row.title as string, description: row.description as string,
+        acceptanceCriteria: row.acceptance_criteria as string, status: row.status as TaskStatus,
+      }));
+  }
+  recoveryPendingApprovals(sessionId: string): Array<{ id: string; tool: string; description: string }> {
+    return this.all("SELECT id, tool, substr(description, 1, 1000) AS description FROM approvals WHERE session_id = ? AND status = 'pending' ORDER BY created_at DESC, rowid DESC LIMIT 100", sessionId).map((row) => ({
+      id: row.id as string, tool: row.tool as string, description: row.description as string,
+    }));
+  }
+  recoveryArtifactReferences(sessionId: string, limit = 100): Array<{ id: string; path: string; revision: string; taskId: string | null }> {
+    return this.all(`SELECT a.id, a.path, a.commit_id, a.task_id FROM group_artifacts a
+      JOIN group_members m ON m.group_id = a.group_id WHERE m.session_id = ?
+      ORDER BY a.created_at DESC, a.rowid DESC LIMIT ?`, sessionId, Math.min(Math.max(limit, 1), 100)).map((row) => ({
+        id: row.id as string, path: row.path as string, revision: row.commit_id as string, taskId: (row.task_id as string | null) ?? null,
+      }));
   }
   recoverRuns(): void {
     const at = nowIso();
