@@ -4,6 +4,7 @@ import { AttachmentIdsSchema } from './attachments';
 
 import { ProviderSchema, PolicySchema, EffortSchema, ServiceTierSchema } from './provider-config';
 import type { Provider, Policy, Effort } from './provider-config';
+import type { ContextCompactionResult } from './resilience';
 export * from './provider-config';
 export type SessionStatus = 'idle' | 'running' | 'waiting' | 'interrupted' | 'error';
 export type TaskStatus = 'backlog' | 'ready' | 'running' | 'blocked' | 'review' | 'done';
@@ -220,7 +221,11 @@ export type AdapterEvent =
   | { type: 'tool.output'; id: string; delta: string }
   | { type: 'usage'; inputTokens: number; outputTokens: number; costUsd: number | null }
   | { type: 'info'; content: string };
-export interface AgentAdapter { run(options: RunOptions): Promise<void> }
+export interface AgentAdapter {
+  run(options: RunOptions): Promise<void>;
+  /** Explicit native context compaction, when supported; unsupported runtimes leave history untouched. */
+  compact?(options: { session: Session; settings: AppSettings; signal: AbortSignal }): Promise<ContextCompactionResult>;
+}
 
 /**
  * Merge a text chunk at its absolute offset. A bootstrap snapshot may already contain some or all of it.
@@ -233,6 +238,7 @@ export * from './repository';
 export * from './project-context';
 
 export * from './groups';
+export * from './resilience';
 export * from './attachments';
 export * from './native-actions';
 export * from './account';

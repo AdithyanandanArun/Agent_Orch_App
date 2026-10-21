@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { ProviderSchema, PolicySchema, EffortSchema, ServiceTierSchema } from './provider-config';
 import { AttachmentIdsSchema, NativeInvocationInputSchema } from './attachments';
 import type { AttachmentRef, GroupInvocation } from './attachments';
+import { AutonomyConfigSchema, GroupRecoveryPolicySchema } from './resilience';
 
 export const GroupModeSchema = z.enum(['cowork', 'orchestrated', 'current-leads']);
 export type GroupMode = z.infer<typeof GroupModeSchema>;
@@ -12,8 +13,8 @@ export const AgentConfigurationSchema = z.object({
 export type AgentConfiguration = z.infer<typeof AgentConfigurationSchema>;
 export const GroupDefaultsSchema = z.object({
   orchestrator: AgentConfigurationSchema.optional(), worker: AgentConfigurationSchema.optional(),
-  maxParallel: z.number().int().min(1).max(6).default(2), maxTurns: z.number().int().min(2).max(80).default(16),
-  maxHops: z.number().int().min(1).max(12).default(6),
+  maxParallel: z.number().int().min(1).max(6).default(2), maxTurns: z.number().int().min(2).max(10_000).default(80),
+  maxHops: z.number().int().min(1).max(12).default(6), autonomy: AutonomyConfigSchema.optional(),
 }).strict();
 export type GroupDefaults = z.infer<typeof GroupDefaultsSchema>;
 export const AgentHandleSchema = z.string().trim().toLowerCase().min(2).max(32).regex(/^[a-z][a-z0-9_-]*$/, 'Use letters, numbers, underscores or hyphens; start with a letter');
@@ -30,9 +31,10 @@ export const CreateGroupSchema = z.object({
 export type CreateGroup = z.infer<typeof CreateGroupSchema>;
 export const UpdateGroupSchema = z.object({
   mode: GroupModeSchema.optional(), orchestratorMemberId: z.string().min(1).max(100).optional(),
-  maxParallel: z.number().int().min(1).max(6).optional(), maxTurns: z.number().int().min(2).max(80).optional(),
-  maxHops: z.number().int().min(1).max(12).optional(),
+  maxParallel: z.number().int().min(1).max(6).optional(), maxTurns: z.number().int().min(2).max(10_000).optional(),
+  maxHops: z.number().int().min(1).max(12).optional(), autonomy: AutonomyConfigSchema.optional(), recoveryPolicy: GroupRecoveryPolicySchema.optional(),
 }).strict().refine((patch) => Object.keys(patch).length > 0, 'Supply a group setting to update');
+export type UpdateGroup = z.infer<typeof UpdateGroupSchema>;
 export const SendGroupMessageSchema = z.object({
   content: z.string().trim().max(100_000).default(''), recipients: z.array(z.string().min(1).max(100)).min(1).max(8).optional(),
   clientMessageId: z.string().min(1).max(100).optional(),
@@ -45,10 +47,12 @@ export interface ConversationGroup {
   id: string; projectId: string; title: string; anchorSessionId: string; mode: GroupMode;
   orchestratorMemberId: string | null; paused: boolean; pauseReason: string | null;
   maxParallel: number; maxTurns: number; maxHops: number; createdAt: string; updatedAt: string;
+  autonomy?: import('./resilience').AutonomyConfig; recoveryPolicy?: import('./resilience').GroupRecoveryPolicy;
+  recoveryState?: import('./resilience').GroupRecoveryState; coordinatorEpoch?: number;
 }
 export interface GroupMember {
   id: string; groupId: string; sessionId: string; handle: string; role: 'peer' | 'orchestrator' | 'worker';
-  joinedAt: string; removedAt: string | null; held?: boolean;
+  joinedAt: string; removedAt: string | null; held?: boolean; failure?: import('./resilience').ProviderFailure;
 }
 export interface GroupMessage {
   id: string; seq: number; groupId: string; senderMemberId: string | null; recipientMemberIds: string[];
@@ -68,12 +72,16 @@ export interface GroupDelivery {
   id: string; groupId: string; requestId: string; messageId: string; memberId: string;
   /** Durable dispatch purpose; optional for older snapshots. Completion is a turn outcome, not task acceptance. */
   kind?: 'request' | 'assignment' | 'message' | 'result';
+  /** Coordinator authority generation captured when this delivery was claimed. */
+  coordinatorEpoch?: number;
+  failure?: import('./resilience').ProviderFailure;
   status: 'queued' | 'running' | 'completed' | 'failed' | 'interrupted' | 'cancelled';
   runId: string | null; hop: number; error: string | null; createdAt: string; updatedAt: string;
 }
 export interface GroupAssignment {
   id: string; groupId: string; requestId: string; fromMemberId: string; toMemberId: string;
   taskId: string; deliveryId: string; scope: string[]; createdAt: string;
+  acceptanceProvenance?: 'explicit' | 'derived'; milestones?: import('./resilience').GroupMilestone[];
 }
 export interface GroupSnapshot {
   group: ConversationGroup; members: GroupMember[]; messages: GroupMessage[];

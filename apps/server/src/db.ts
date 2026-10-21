@@ -166,7 +166,50 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
      owner_id TEXT NOT NULL, position INTEGER NOT NULL, PRIMARY KEY (owner_kind, owner_id, attachment_id)
    );
    CREATE INDEX attachment_links_owner ON attachment_links(owner_kind, owner_id, position);
-   ALTER TABLE group_messages ADD COLUMN invocation TEXT;`,
+    ALTER TABLE group_messages ADD COLUMN invocation TEXT;`,
+  // Durable bounded recovery metadata. Existing coordinator budgets and native sessions are untouched.
+   `ALTER TABLE conversation_groups ADD COLUMN autonomy_policy TEXT NOT NULL DEFAULT '{"mode":"balanced"}';
+    ALTER TABLE conversation_groups ADD COLUMN recovery_policy TEXT NOT NULL DEFAULT '{"automaticFallback":false}';
+    ALTER TABLE conversation_groups ADD COLUMN recovery_state TEXT NOT NULL DEFAULT '{"status":"healthy"}';
+   ALTER TABLE conversation_groups ADD COLUMN coordinator_epoch INTEGER NOT NULL DEFAULT 1;
+   ALTER TABLE group_deliveries ADD COLUMN coordinator_epoch INTEGER NOT NULL DEFAULT 1;
+   CREATE TABLE session_checkpoints (
+     id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), run_id TEXT REFERENCES session_runs(id),
+     version INTEGER NOT NULL, reason TEXT NOT NULL, checkpoint_json TEXT NOT NULL, created_at TEXT NOT NULL
+   );
+   CREATE INDEX session_checkpoints_latest ON session_checkpoints(session_id, created_at DESC);
+   CREATE TABLE session_failures (
+     id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), run_id TEXT NOT NULL REFERENCES session_runs(id),
+     failure_json TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(session_id, run_id)
+   );
+   CREATE INDEX session_failures_latest ON session_failures(session_id, updated_at DESC);
+   CREATE TABLE group_recovery_actions (
+     id TEXT PRIMARY KEY, group_id TEXT NOT NULL REFERENCES conversation_groups(id), idempotency_key TEXT NOT NULL,
+     action TEXT NOT NULL, result_json TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(group_id, idempotency_key)
+   );
+    CREATE INDEX group_recovery_actions_recent ON group_recovery_actions(group_id, created_at DESC);
+    CREATE TABLE group_recovery_checkpoints (
+      id TEXT PRIMARY KEY, group_id TEXT NOT NULL REFERENCES conversation_groups(id), request_id TEXT REFERENCES group_requests(id),
+      batch_id TEXT, kind TEXT NOT NULL, state TEXT NOT NULL CHECK (state IN ('pending', 'acknowledged', 'dismissed')),
+      reason TEXT NOT NULL, payload_json TEXT NOT NULL, idempotency_key TEXT NOT NULL,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, acknowledged_at TEXT,
+      UNIQUE(group_id, idempotency_key)
+    );
+    CREATE INDEX group_recovery_checkpoints_open ON group_recovery_checkpoints(group_id, state, created_at);
+    CREATE TABLE group_assignment_milestones (
+      id TEXT PRIMARY KEY, group_id TEXT NOT NULL REFERENCES conversation_groups(id), assignment_id TEXT NOT NULL REFERENCES group_assignments(id),
+      task_id TEXT NOT NULL REFERENCES tasks(id), label TEXT NOT NULL, acceptance_source TEXT NOT NULL CHECK (acceptance_source IN ('explicit', 'derived')),
+      state TEXT NOT NULL CHECK (state IN ('pending', 'completed', 'blocked')), evidence_ref TEXT,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE INDEX group_assignment_milestones_assignment ON group_assignment_milestones(assignment_id, created_at);
+    CREATE TABLE group_stall_evidence (
+      id TEXT PRIMARY KEY, group_id TEXT NOT NULL REFERENCES conversation_groups(id), member_id TEXT, request_id TEXT, delivery_id TEXT,
+      assignment_id TEXT, fingerprint TEXT NOT NULL, signal_class TEXT NOT NULL, consecutive_count INTEGER NOT NULL,
+      reason TEXT NOT NULL, source_run_id TEXT, source_tool_id TEXT, source_task_id TEXT, source_artifact_id TEXT,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(group_id, member_id, request_id, fingerprint)
+    );
+    CREATE INDEX group_stall_evidence_recent ON group_stall_evidence(group_id, updated_at DESC);`,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
