@@ -101,6 +101,7 @@ describe('provider runs', () => {
     const partial = (await messages(t)).find((m) => m.role === 'assistant');
     expect(partial).toMatchObject({ content: 'working…', kind: 'partial' });
     expect((await t.api('POST', `/api/sessions/${EXAMPLE_CONTRACT_SESSION_ID}/interrupt`)).json).toEqual({ ok: true }); // idempotent
+    await waitFor(() => t.app.runtime.activeCount() === 0);
     expect((await t.api('POST', `/api/sessions/${EXAMPLE_CONTRACT_SESSION_ID}/messages`, { content: 'retry' })).status).toBe(202);
   });
 
