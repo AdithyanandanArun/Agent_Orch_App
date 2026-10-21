@@ -15,7 +15,7 @@ import { usePresence } from '../lib/motion';
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const hasSkillMarker = (text: string, name: string) => new RegExp(`(?:^|\\s)\\$${escapeRegExp(name)}(?=\\s|$)`).test(text);
 const removeSkillMarker = (text: string, name: string) => text.replace(new RegExp(`(^|\\s)\\$${escapeRegExp(name)}(?=\\s|$)`, 'g'), '$1').replace(/[ \t]{2,}/g, ' ');
-const localCommandNames = ['new', 'stop', 'settings', 'model', 'effort', 'permissions', 'tier', 'skills', 'usage', 'import', 'status', 'diff', 'help'];
+const localCommandNames = ['new', 'stop', 'settings', 'model', 'effort', 'permissions', 'tier', 'skills', 'usage', 'import', 'status', 'diff', 'compact', 'help'];
 const reservedCommands = new Set(localCommandNames);
 
 export function Composer({ session }: { session: Session }) {
@@ -25,7 +25,9 @@ export function Composer({ session }: { session: Session }) {
   const providers = useMingle((s) => s.boot?.providers);
   const project = useMingle((s) => s.boot?.projects.find((p) => p.id === session.projectId));
   const ref = useRef<HTMLTextAreaElement>(null);
+  const compactController = useRef<AbortController | null>(null);
   const [sending, setSending] = useState(false);
+  const [compactStatus, setCompactStatus] = useState<{ status: 'running' | 'completed' | 'unsupported' | 'failed'; message?: string } | null>(null);
   const [updating, setUpdating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [catalog, setCatalog] = useState<ProviderCatalog | null>(null);
@@ -73,7 +75,7 @@ export function Composer({ session }: { session: Session }) {
     el.style.height = '0px';
     el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
   }, [draft, session.id]);
-  useEffect(() => { setError(null); }, [session.id]);
+  useEffect(() => { setError(null); setCompactStatus(null); }, [session.id]);
   useEffect(() => { setUsageOpen(false); }, [session.id, session.provider, session.model]);
   const closeUsage = useCallback(() => {
     setUsageOpen(false);
@@ -100,10 +102,17 @@ export function Composer({ session }: { session: Session }) {
         : provider && !provider.available ? `${PROVIDER_NAME[session.provider]} needs setup before you can send a message.`
           : null;
   const empty = draft.trim().length === 0 && attachments.length === 0 && attachmentDraft.uploads.length === 0;
-  const localDraftCommand = attachments.length || attachmentDraft.uploads.length ? null : /^\/(new|stop|settings|model|effort|permissions|tier|skills|usage|import|status|diff|help)(?:\s.*)?$/i.exec(draft.trim());
+  const compactDraftCommand = /^\/(compact)(?:\s.*)?$/i.exec(draft.trim());
+  const localDraftCommand = compactDraftCommand ?? (attachments.length || attachmentDraft.uploads.length ? null : /^\/(new|stop|settings|model|effort|permissions|tier|skills|usage|import|status|diff|compact|help)(?:\s.*)?$/i.exec(draft.trim()));
+  const compactIntent = localDraftCommand?.[1]?.toLowerCase() === 'compact';
 
   const submit = async () => {
-    const local = attachments.length || attachmentDraft.uploads.length ? null : /^\/(new|stop|settings|model|effort|permissions|tier|skills|usage|import|status|diff|help)(?:\s.*)?$/i.exec(draft.trim());
+    const compactCommand = /^\/(compact)(?:\s.*)?$/i.exec(draft.trim());
+    const local = compactCommand ?? (attachments.length || attachmentDraft.uploads.length ? null : /^\/(new|stop|settings|model|effort|permissions|tier|skills|usage|import|status|diff|compact|help)(?:\s.*)?$/i.exec(draft.trim()));
+    if (local?.[1]?.toLowerCase() === 'compact' && attachmentDraft.isBusy()) {
+      setError('Wait for the attachment upload to finish, then remove or send the attachments before compacting. They remain in your draft.');
+      return;
+    }
     if (attachmentDraft.isBusy()) return;
     if (attachmentDraft.uploads.length) { setError('Retry or remove each failed attachment before sending.'); return; }
     if ((blocker && !local) || empty || sending || updating) return;
@@ -113,6 +122,36 @@ export function Composer({ session }: { session: Session }) {
     try {
       if (local) {
         const action = local[1]!.toLowerCase();
+        if (action === 'compact') {
+          if (draft.trim().toLowerCase() !== '/compact') throw new Error('/compact does not take arguments in a single session.');
+          if (attachments.length || attachmentDraft.uploads.length) throw new Error('Remove or send the attachments before compacting. They remain in your draft.');
+          if (connection !== 'online') throw new Error('Reconnect to Mingle before compacting this session.');
+          if (running) throw new Error('This session is busy. Wait for its run to finish before compacting.');
+          setCompactStatus({ status: 'running' });
+          const controller = new AbortController();
+          compactController.current = controller;
+          try {
+            const result = await api.compactSession(session.id, controller.signal);
+            if (result.status === 'completed') {
+              setCompactStatus({ status: 'completed', message: result.message || 'Context compacted.' });
+              if (useMingle.getState().drafts[session.id] === draft) useMingle.getState().setDraft(session.id, '');
+              await useMingle.getState().refreshNow();
+            } else if (result.status === 'unsupported') {
+              setCompactStatus({ status: 'unsupported', message: result.error || result.message || `${PROVIDER_NAME[session.provider]} does not support manual compaction.` });
+            } else {
+              const message = result.error || result.message || 'The provider could not compact this conversation.';
+              setCompactStatus({ status: 'failed', message });
+            }
+          } catch (cause) {
+            if (!controller.signal.aborted) {
+              setCompactStatus(null);
+              throw cause;
+            }
+          } finally {
+            if (compactController.current === controller) compactController.current = null;
+          }
+          return;
+        }
         if (action === 'new') await useMingle.getState().createSession();
         if (action === 'stop') await api.interrupt(session.id);
         if (action === 'settings') useMingle.getState().openSettings();
@@ -135,7 +174,7 @@ export function Composer({ session }: { session: Session }) {
           const providerCommands = Array.from(new Set((catalog?.commands ?? []).filter((item) => !reservedCommands.has(item.name.toLowerCase())).map((item) => `/${item.name}`)));
           const preview = providerCommands.slice(0, 5).join(', ');
           const remainder = providerCommands.length > 5 ? `, … ${providerCommands.length - 5} more` : '';
-          useMingle.getState().toast('info', `Mingle commands: /new, /stop, /settings, /model, /effort, /permissions, /tier, /skills, /usage, /import, /status, /diff, /help${preview ? `. Other commands: ${preview}${remainder}. Type / to browse all.` : '.'}`);
+          useMingle.getState().toast('info', `Mingle commands: /new, /stop, /settings, /model, /effort, /permissions, /tier, /skills, /usage, /import, /status, /diff, /compact, /help${preview ? `. Other commands: ${preview}${remainder}. Type / to browse all.` : '.'}`);
         }
         if (action !== 'skills') useMingle.getState().setDraft(session.id, '');
         setSelectedSkills([]);
@@ -178,6 +217,18 @@ export function Composer({ session }: { session: Session }) {
     } catch (e) {
       setError(errorMessage(e));
     }
+  };
+
+  const stopCompaction = () => {
+    const controller = compactController.current;
+    if (!controller) return;
+    controller.abort();
+    compactController.current = null;
+    setSending(false);
+    const message = 'Stopped waiting for compaction and requested a session interrupt. The provider outcome may be unknown; refresh the session before retrying.';
+    setCompactStatus({ status: 'failed', message });
+    setError(null);
+    void api.interrupt(session.id).catch((cause) => setCompactStatus({ status: 'failed', message: `Interrupt could not be confirmed: ${errorMessage(cause)}. The provider outcome may be unknown.` })).finally(() => { void useMingle.getState().refreshNow(); });
   };
 
   const configure = async (patch: SessionPatch) => {
@@ -270,6 +321,7 @@ export function Composer({ session }: { session: Session }) {
         { name: 'import', description: 'Import a local supported provider conversation', kind: 'local' as const, group: 'Mingle' },
         { name: 'status', description: 'Show current provider and settings', kind: 'local' as const, group: 'Mingle' },
         { name: 'diff', description: 'Open the Changes pane', kind: 'local' as const, group: 'Mingle' },
+        { name: 'compact', description: 'Compact this conversation using the provider’s local API', kind: 'local' as const, group: 'Mingle' },
         { name: 'help', description: 'List Mingle commands', kind: 'local' as const, group: 'Mingle' },
       ].filter((item) => item.name.startsWith(trigger.slice(1).toLowerCase())),
       ...(catalog?.commands ?? []).filter((item) => !reservedCommands.has(item.name.toLowerCase()) && item.name.toLowerCase().startsWith(trigger.slice(1).toLowerCase())).map((item) => ({ id: item.id, name: item.name, description: item.description, group: item.source[0]!.toUpperCase() + item.source.slice(1), kind: 'provider' as const, argumentHint: item.argumentHint })),
@@ -339,6 +391,7 @@ export function Composer({ session }: { session: Session }) {
             const nextDraft = e.target.value;
             caret.current = e.target.selectionStart ?? nextDraft.length;
             setCaretPosition(caret.current);
+            if (compactStatus?.status !== 'running') setCompactStatus(null);
             useMingle.getState().setDraft(session.id, nextDraft);
             setSelectedSkills((current) => current.filter((id) => {
               const skill = catalog?.skills.find((item) => item.id === id);
@@ -386,10 +439,12 @@ export function Composer({ session }: { session: Session }) {
           </div>
           <div className="composer__send">
             <AttachmentDrafts scope={{ kind: 'session', id: session.id }} busy={attachmentDraft.busy} onFiles={attachmentDraft.addFiles} disabled={sending || updating || Boolean(blocker)} />
-            {running && !['usage', 'import'].includes(localDraftCommand?.[1]?.toLowerCase() ?? '') ? (
+            {compactStatus?.status === 'running' ? (
+              <button type="button" className="sendbtn sendbtn--stop" onClick={stopCompaction} aria-label="Stop waiting and interrupt compaction" title="Stop waiting and request a session interrupt"><Square size={12} fill="currentColor" /></button>
+            ) : running && !['usage', 'import'].includes(localDraftCommand?.[1]?.toLowerCase() ?? '') ? (
               <button type="button" className="sendbtn sendbtn--stop" onClick={stop} aria-label="Interrupt run" title="Interrupt run"><Square size={12} fill="currentColor" /></button>
             ) : (
-              <button type="button" className="sendbtn" onClick={() => void submit()} disabled={Boolean(blocker && !localDraftCommand) || empty || sending || updating || attachmentDraft.busy} aria-label={['usage', 'import'].includes(localDraftCommand?.[1]?.toLowerCase() ?? '') ? (localDraftCommand?.[1]?.toLowerCase() === 'import' ? 'Import conversation' : 'Open usage') : 'Send message'} title={['usage', 'import'].includes(localDraftCommand?.[1]?.toLowerCase() ?? '') ? (localDraftCommand?.[1]?.toLowerCase() === 'import' ? 'Import conversation' : 'Open usage') : blocker ?? (empty ? 'Write a message first' : `Send (${MOD}+Enter or Enter)`)}>
+              <button type="button" className="sendbtn" onClick={() => void submit()} disabled={Boolean(blocker && !localDraftCommand) || empty || sending || updating || (attachmentDraft.busy && !compactIntent)} aria-label={compactIntent ? 'Compact conversation' : ['usage', 'import'].includes(localDraftCommand?.[1]?.toLowerCase() ?? '') ? (localDraftCommand?.[1]?.toLowerCase() === 'import' ? 'Import conversation' : 'Open usage') : 'Send message'} title={compactIntent ? blocker ?? 'Compact conversation' : ['usage', 'import'].includes(localDraftCommand?.[1]?.toLowerCase() ?? '') ? (localDraftCommand?.[1]?.toLowerCase() === 'import' ? 'Import conversation' : 'Open usage') : blocker ?? (empty ? 'Write a message first' : `Send (${MOD}+Enter or Enter)`)}>
                 <ArrowUp size={15} />
               </button>
             )}
@@ -400,6 +455,7 @@ export function Composer({ session }: { session: Session }) {
       {blocker || error ? (
         <p className={cx('composer__note', error && 'is-error')} role={error ? 'alert' : 'status'}>{error ?? blocker}{!error && provider && !provider.available ? <> <button type="button" className="link-btn" onClick={() => useMingle.getState().openDialog({ kind: 'settings' })}>Open Settings</button></> : null}</p>
       ) : null}
+      {compactStatus ? <p className={cx('composer__note', compactStatus.status === 'failed' && 'is-error')} role={compactStatus.status === 'failed' ? 'alert' : 'status'} aria-live="polite" aria-busy={compactStatus.status === 'running'}>{compactStatus.status === 'running' ? 'Compacting conversation…' : compactStatus.status === 'completed' ? compactStatus.message : compactStatus.status === 'unsupported' ? `Manual compaction unavailable: ${compactStatus.message}` : compactStatus.message}</p> : null}
       {catalogError && (trigger.startsWith('/') || trigger.startsWith('$')) ? <p className="composer__note" role="status">Command and skill suggestions unavailable: {catalogError} <button type="button" className="link-btn" onClick={() => setCatalogRevision((value) => value + 1)}>Retry</button></p> : null}
       {catalog?.warnings.length && (suggestion || trigger.startsWith('/') || trigger.startsWith('$')) ? <details className="composer__catalog-note"><summary>Command and skill details · {catalog.warnings.length} notice{catalog.warnings.length === 1 ? '' : 's'}</summary><ul>{catalog.warnings.map((warning, index) => <li key={`${index}:${warning}`}>{warning}</li>)}</ul><button type="button" className="link-btn" onClick={() => setCatalogRevision((value) => value + 1)}>Refresh</button></details> : null}
       <UsagePanel session={usageOpen ? session : null} onClose={closeUsage} />

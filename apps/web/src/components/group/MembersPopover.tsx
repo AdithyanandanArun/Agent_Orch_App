@@ -5,7 +5,7 @@ import { useMingle } from '../../store/store';
 import { shortPath } from '../../lib/format';
 import { interruptMember, removeMember, resumeMember } from '../../lib/groupActions';
 import {
-  MODE_LABEL, ROLE_LABEL, activeMembers, configSummary, isActiveDelivery, isBusy, memberHasActiveWork, providerAvailability, providerName,
+  MODE_LABEL, ROLE_LABEL, activeMembers, configSummary, effectiveTurnCeiling, isActiveDelivery, isBusy, memberHasActiveWork, providerAvailability, providerName,
 } from '../../lib/groups';
 import { Button, IconButton, StatusDot } from '../ui';
 import { Popover } from '../git/Popover';
@@ -24,6 +24,7 @@ function removalBlock(snapshot: GroupSnapshot, member: GroupMember, session: Ses
 /** Compact participant list: live status, per-member stop/settings/remove, and the group's queue and bounds. */
 export function MembersPopover({ snapshot, anchor, open, onClose }: { snapshot: GroupSnapshot; anchor: RefObject<HTMLElement | null>; open: boolean; onClose: () => void }) {
   const sessions = useMingle((s) => s.boot?.sessions);
+  const runs = useMingle((s) => s.boot?.runs ?? []);
   const providers = useMingle((s) => s.boot?.providers);
   const connection = useMingle((s) => s.connection);
   const project = useMingle((s) => s.boot?.projects.find((item) => item.id === snapshot.group.projectId));
@@ -40,7 +41,19 @@ export function MembersPopover({ snapshot, anchor, open, onClose }: { snapshot: 
   const { group } = snapshot;
   const queued = snapshot.deliveries.filter((delivery) => delivery.status === 'queued');
   const running = snapshot.deliveries.filter((delivery) => delivery.status === 'running');
+  const runIds = new Set(snapshot.deliveries.flatMap((delivery) => delivery.runId ? [delivery.runId] : []));
+  const recordedRuns = runs.filter((run) => runIds.has(run.id));
+  const knownDurationRuns = recordedRuns.filter((run) => run.durationMs !== null);
+  const knownElapsed = knownDurationRuns.reduce((sum, run) => sum + (run.durationMs ?? 0), 0);
+  const activeRunCount = recordedRuns.filter((run) => run.status === 'running').length;
+  const unknownElapsedCount = Math.max(0, runIds.size - recordedRuns.filter((run) => run.durationMs !== null).length - activeRunCount);
   const request = [...snapshot.requests].reverse().find((item) => item.status === 'active' || item.status === 'paused');
+  const requestDeliveries = request ? snapshot.deliveries.filter((delivery) => delivery.requestId === request.id) : [];
+  const requestRunIds = new Set(requestDeliveries.flatMap((delivery) => delivery.runId ? [delivery.runId] : []));
+  const requestRuns = runs.filter((run) => requestRunIds.has(run.id));
+  const requestElapsedMs = request ? Date.now() - Date.parse(request.createdAt) : NaN;
+  const requestElapsed = Number.isFinite(requestElapsedMs) ? formatDuration(requestElapsedMs) : 'not recorded';
+  const turnCeiling = effectiveTurnCeiling(group.maxTurns, group.autonomy?.emergencyTurnLimit);
   const handleOf = (memberId: string) => snapshot.members.find((member) => member.id === memberId)?.handle ?? 'unknown';
 
   useEffect(() => { if (!open) setConfirming(null); }, [open]);
@@ -107,9 +120,10 @@ export function MembersPopover({ snapshot, anchor, open, onClose }: { snapshot: 
       </ul>
       <div className="members__coord" aria-label="Coordination">
         <div className="members__limits">
-          <span>Parallel runs ≤ {group.maxParallel}</span><span>Turns ≤ {group.maxTurns}</span><span>Message hops ≤ {group.maxHops}</span>
-          {request ? <span>Current request {request.turnsUsed}/{group.maxTurns} turns</span> : null}
+          <span>Parallel runs ≤ {group.maxParallel}</span><span>Turns {turnCeiling === null ? 'uncapped' : `≤ ${turnCeiling}`}</span><span>Message hops ≤ {group.maxHops}</span>
+          {request ? <span>Current request {request.turnsUsed}/{turnCeiling ?? 'uncapped'} turns</span> : null}
         </div>
+        {request ? <p className="field__hint">Current request: {request.turnsUsed} durable turns · {requestRunIds.size ? `${requestRunIds.size} delivery-linked run IDs, ${requestRuns.length} run records${requestRuns.length < requestRunIds.size ? ' (partial records)' : ''}` : 'no run IDs linked yet'} · {requestElapsed} elapsed since start, including queued and waiting time.</p> : null}
         {group.paused ? <p className="members__paused" role="status"><strong>Paused.</strong> {group.pauseReason ?? 'New work is not starting. Resume to continue queued work.'}</p> : null}
         {queued.length || running.length ? (
           <ul className="members__queue" aria-label="Deliveries">
@@ -120,10 +134,24 @@ export function MembersPopover({ snapshot, anchor, open, onClose }: { snapshot: 
             })}
           </ul>
         ) : <p className="field__hint">No queued deliveries.</p>}
+        <details className="members__usage">
+          <summary>Recorded run usage</summary>
+          <p>{runIds.size} actual run ID{runIds.size === 1 ? '' : 's'} appear in retained group deliveries.</p>
+          <p>Known elapsed time: {knownDurationRuns.length ? formatDuration(knownElapsed) : 'not recorded'} summed from {knownDurationRuns.length} run record{knownDurationRuns.length === 1 ? '' : 's'} with a final duration{activeRunCount ? ` · ${activeRunCount} active` : ''}{unknownElapsedCount ? ` · elapsed unavailable for ${unknownElapsedCount}` : ''}.</p>
+          <p>Group cost is unknown; member/session totals are not a group cost.</p>
+        </details>
       </div>
       <div className="members__foot">
         <Button size="sm" variant="ghost" disabled={!online} why="Reconnect to the server first." onClick={dialog(() => useMingle.getState().openDialog({ kind: 'group-mode', groupId: group.id }))}>Group settings…</Button>
       </div>
     </Popover>
   );
+}
+
+function formatDuration(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainder = seconds % 60;
+  return hours ? `${hours}h ${minutes}m` : minutes ? `${minutes}m ${remainder}s` : `${remainder}s`;
 }

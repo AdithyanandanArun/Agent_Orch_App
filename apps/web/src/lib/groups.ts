@@ -39,6 +39,10 @@ export const tierLabel = (id: string, name?: string): string => (id === 'standar
 export const policyLabel = (policy: string): string => POLICY_LABEL[policy as Policy] ?? policy;
 export const providerName = (provider: Provider): string => PROVIDER_NAMES[provider];
 
+/** Effective turn ceiling: legacy maxTurns when unset, no ceiling when null, explicit value otherwise. */
+export const effectiveTurnCeiling = (maxTurns: number, emergencyTurnLimit?: number | null): number | null =>
+  emergencyTurnLimit === undefined ? maxTurns : emergencyTurnLimit;
+
 /* ——— Membership ——— */
 export const activeMembers = (snapshot: GroupSnapshot): GroupMember[] => snapshot.members.filter((member) => !member.removedAt);
 export const retiredHandles = (snapshot: GroupSnapshot): string[] => snapshot.members.filter((member) => member.removedAt).map((member) => member.handle);

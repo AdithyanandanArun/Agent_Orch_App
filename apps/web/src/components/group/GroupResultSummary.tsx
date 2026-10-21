@@ -6,6 +6,7 @@ import {
 } from '../../lib/groupResults';
 import { Markdown } from '../Markdown';
 import { AgentIdentity } from './AgentIdentity';
+import { RecoveryPanel } from './RecoveryPanel';
 import '../../styles/group-results.css';
 
 const TONE: Record<GroupResultStatus, string> = {
@@ -126,6 +127,7 @@ export function GroupResultSummary({ snapshot, sessions, messages, runs, tasks }
         </div>
         {!compact && meta.length ? <p className="group-result__meta">{meta.join(' · ')}</p> : null}
       </header>
+      <RecoveryPanel snapshot={snapshot} sessions={sessions} runs={runs} tasks={tasks} />
       {!compact && model.lead ? <LeadReport lead={model.lead} /> : null}
       {!compact && model.agents.length ? (
         <ul className="group-result__agents" aria-label="Participating agents">

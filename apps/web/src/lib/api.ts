@@ -1,9 +1,16 @@
 import type {
-  AddGroupAgent, AntigravityAuthState, AntigravityInstallState, Approval, AppSettings, Bootstrap, BrowserAction, BrowserConnect, BrowserDiscovery, BrowserSessionState, BrowserTab, CreateGroup, DirectoryListing, ExternalConversationDetails, ExternalConversationList, FileEntry, GitHubState, GitStatus, GroupMode, GroupSnapshot, ImportConversationResult, Project, ProjectContext, ProviderCatalog, ProviderInfo,
+  AddGroupAgent, AntigravityAuthState, AntigravityInstallState, Approval, AppSettings, Bootstrap, BrowserAction, BrowserConnect, BrowserDiscovery, BrowserSessionState, BrowserTab, CreateGroup, DirectoryListing, ExternalConversationDetails, ExternalConversationList, FileEntry, GitHubState, GitStatus, GroupSnapshot, ImportConversationResult, Project, ProjectContext, ProviderCatalog, ProviderInfo,
   RepositoryBranch, RepositoryCommit, RepositoryMutationResult, RepositoryPullRequest, RepositoryPush, RepositoryState, RunChanges, SendGroupMessage, Session, SessionUsage, ToolCall, Task, TaskStatus, WorkspaceEvent,
 } from '@mingle/contracts';
 import type { AccountState, AccountConnection, AccountPreferences, SavedAccountPreferences, AttachmentRef, NativeActionCatalog } from '@mingle/contracts';
+import type {
+  ContextCompactionResult as ContractContextCompactionResult,
+  ProviderFailure as ContractProviderFailure,
+  RecoveryActionRequest as ContractRecoveryActionRequest, RecoveryActionResult as ContractRecoveryActionResult,
+  RecoveryCheckpoint, UpdateGroup,
+} from '@mingle/contracts';
 export type { ProviderCatalog } from '@mingle/contracts';
+export type { AutonomyConfig, AutonomyMode, GroupRecoveryPolicy } from '@mingle/contracts';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -67,8 +74,11 @@ export interface NewSessionInput {
   effort?: Session['effort']; policy?: Session['policy']; serviceTier?: string; isolated?: boolean;
 }
 export type SessionPatch = Partial<Pick<Session, 'name' | 'provider' | 'model' | 'effort' | 'policy' | 'serviceTier' | 'pinned' | 'unread'>>;
-/** Matches UpdateGroupSchema; the web package does not depend on zod directly. */
-export interface GroupPatch { mode?: GroupMode; orchestratorMemberId?: string; maxParallel?: number; maxTurns?: number; maxHops?: number }
+export type GroupPatch = UpdateGroup;
+export type ApiProviderFailure = ContractProviderFailure;
+export type ApiRecoveryCheckpoint = RecoveryCheckpoint;
+export type ApiRecoveryActionRequest = ContractRecoveryActionRequest;
+export type ApiRecoveryActionResult = ContractRecoveryActionResult;
 export interface NewTaskInput {
   projectId: string; title: string; description: string; acceptanceCriteria: string; sessionId: string | null; dependsOn: string[];
 }
@@ -78,6 +88,7 @@ export interface TaskPatch {
 export interface HandoffInput {
   fromSessionId: string; toSessionId: string; taskId?: string; path: string; revision: string; note: string;
 }
+export type ContextCompactionResult = ContractContextCompactionResult;
 
 export interface FileDoc { path: string; content: string }
 /** The file endpoint is documented as `{content, path}`, but tolerate a raw text body as well. */
@@ -148,6 +159,7 @@ export const api = {
   createGroup: (input: CreateGroup) => json<GroupSnapshot>('/api/groups', 'POST', input),
   group: (id: string, signal?: AbortSignal) => json<GroupSnapshot>(groupBase(id), 'GET', undefined, signal),
   updateGroup: (id: string, patch: GroupPatch) => json<GroupSnapshot>(groupBase(id), 'PATCH', patch),
+  recoverGroup: (id: string, action: ApiRecoveryActionRequest) => json<ApiRecoveryActionResult>(`${groupBase(id)}/recovery`, 'POST', action),
   addGroupAgent: (id: string, input: AddGroupAgent) => json<GroupSnapshot>(`${groupBase(id)}/agents`, 'POST', input),
   removeGroupMember: (id: string, memberId: string) => json<GroupSnapshot>(`${groupBase(id)}/members/${encodeURIComponent(memberId)}`, 'DELETE'),
   sendGroupMessage: (id: string, input: SendGroupMessage) => json<GroupSnapshot>(`${groupBase(id)}/messages`, 'POST', input),
@@ -163,6 +175,9 @@ export const api = {
   renameSession: (id: string, name: string) => json<Session>(`/api/sessions/${encodeURIComponent(id)}`, 'PATCH', { name }),
   archiveSession: (id: string) => json<unknown>(`/api/sessions/${encodeURIComponent(id)}`, 'DELETE'),
   sendMessage: (id: string, content: string, skills?: string[], attachmentIds?: string[]) => json<{ accepted: boolean }>(`/api/sessions/${encodeURIComponent(id)}/messages`, 'POST', { content, ...(skills?.length ? { skills } : {}), ...(attachmentIds?.length ? { attachmentIds } : {}) }),
+  compactSession: (id: string, signal?: AbortSignal) => json<ContextCompactionResult>(`/api/sessions/${encodeURIComponent(id)}/compact`, 'POST', {}, signal),
+  sessionRecovery: (id: string, signal?: AbortSignal) => json<{ checkpoint: ApiRecoveryCheckpoint | null; failure: ApiProviderFailure | null }>(`/api/sessions/${encodeURIComponent(id)}/recovery`, 'GET', undefined, signal),
+  createCheckpoint: (id: string, reason: string, runId?: string) => json<ApiRecoveryCheckpoint>(`/api/sessions/${encodeURIComponent(id)}/checkpoints`, 'POST', { reason, ...(runId ? { runId } : {}) }),
   attachmentDrafts: (scope: { kind: 'session' | 'group'; id: string }, signal?: AbortSignal) => json<AttachmentRef[]>(`/api/${scope.kind === 'session' ? 'sessions' : 'groups'}/${encodeURIComponent(scope.id)}/attachments`, 'GET', undefined, signal),
   uploadAttachment: async (scope: { kind: 'session' | 'group'; id: string }, file: File, signal?: AbortSignal): Promise<AttachmentRef> => {
     const url = `/api/${scope.kind === 'session' ? 'sessions' : 'groups'}/${encodeURIComponent(scope.id)}/attachments?name=${encodeURIComponent(file.name)}`;

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ArrowUp, AtSign, X } from 'lucide-react';
+import { ArrowUp, AtSign, Square, X } from 'lucide-react';
 import type { AttachmentRef, GroupSnapshot, NativeActionCatalog, Provider, Session } from '@mingle/contracts';
 import { useMingle } from '../../store/store';
 import { api, errorMessage } from '../../lib/api';
@@ -27,6 +27,7 @@ const COMMANDS = [
   { name: 'tier', description: 'Edit a member’s service tier in Members' },
   { name: 'skills', description: 'Use @handle $skill-name to call a provider skill' },
   { name: 'usage', description: 'Show provider limits (add @handle for a member)' },
+  { name: 'compact', description: 'Compact one member’s context with its provider' },
   { name: 'import', description: 'Import a local supported provider conversation' },
   { name: 'status', description: 'Show this group’s mode and members' },
   { name: 'diff', description: 'Open the Changes pane' },
@@ -44,15 +45,18 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
   const providers = useMingle((s) => s.boot?.providers);
   const sessions = useMingle((s) => s.boot?.sessions);
   const ref = useRef<HTMLTextAreaElement>(null);
+  const compactController = useRef<AbortController | null>(null);
+  const compactTargetSessionId = useRef<string | null>(null);
   const pickerButton = useRef<HTMLButtonElement>(null);
   const pickerId = useId();
   const pendingId = useRef<{ key: string; id: string } | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
   const [attachments, setAttachments] = useState<AttachmentRef[]>([]);
-  useEffect(() => { setAttachments([]); }, [snapshot.group.id]);
+  useEffect(() => { setAttachments([]); setCompactStatus(null); }, [snapshot.group.id]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [compactStatus, setCompactStatus] = useState<{ status: 'running' | 'completed' | 'unsupported' | 'failed'; handle?: string; message?: string } | null>(null);
   const [focused, setFocused] = useState(false);
   const [caret, setCaret] = useState(0);
   const [active, setActive] = useState(0);
@@ -109,6 +113,10 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
 
   const empty = draft.trim().length === 0 && attachments.length === 0 && attachmentDraft.uploads.length === 0;
   const local = attachments.length || attachmentDraft.uploads.length ? null : LOCAL_COMMAND.exec(draft.trim());
+  const compactText = maskNonActionable(draft).trim();
+  const compactCandidate = /^\/compact(?:\b|$)/i.test(compactText) || /^@[A-Za-z0-9_-]+\s+\/compact(?:\b|$)/i.test(compactText);
+  const compactSyntax = /^\/compact(?:\s+@([A-Za-z0-9_-]+))?\s*$/i.exec(compactText)
+    ?? /^@([A-Za-z0-9_-]+)\s+\/compact\s*$/i.exec(compactText);
   const unavailable = recipients.map((member) => {
     const session = sessionOf(member.sessionId);
     const state = session && providers ? providerAvailability(providers, session.provider) : null;
@@ -119,7 +127,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
       : recipients.length > MAX_RECIPIENTS ? `A message can address at most ${MAX_RECIPIENTS} agents.`
         : unavailable;
   const problem = staleSelectionError ?? mentions.problems[0]?.message ?? null;
-  const sendDisabled = sending || attachmentDraft.busy || empty || (!local && (Boolean(blocker) || Boolean(problem)));
+  const sendDisabled = sending || (attachmentDraft.busy && !compactCandidate) || empty || (!local && !compactCandidate && (Boolean(blocker) || Boolean(problem)));
 
   useEffect(() => {
     const controller = new AbortController();
@@ -217,12 +225,13 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
       case 'import': store.openDialog({ kind: 'import' }); return;
       case 'diff': store.setContextTab('changes'); return;
       case 'skills': store.toast('info', 'Address a native skill directly, such as @codex1 $skill-name task, or @claude1 $project-skill task.'); return;
+      case 'compact': return;
       case 'status': {
         const lead = members.find((member) => member.id === snapshot.group.orchestratorMemberId);
         store.toast('info', `${MODE_LABEL[snapshot.group.mode]} · ${members.map((member) => `@${member.handle}`).join(', ')}${lead ? ` · ${lead.handle} ${snapshot.group.mode === 'orchestrated' ? 'coordinates' : 'leads'}` : ''}${snapshot.group.paused ? ' · paused' : ''}`);
         return;
       }
-      case 'help': store.toast('info', `Mingle commands: ${COMMANDS.map((command) => `/${command.name}`).join(', ')}. Type @ to address an agent.`); return;
+      case 'help': store.toast('info', `Mingle commands: ${COMMANDS.map((command) => `/${command.name}`).join(', ')}. Use @handle /compact or /compact @handle to compact one member; Type @ to address an agent.`); return;
       case 'usage': {
         if (staleSelectionError) throw new Error(staleSelectionError);
         const resolved = resolveMentions(draft, candidates, retired);
@@ -239,8 +248,67 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
   };
 
   const submit = async () => {
-    if (sending || empty || attachmentDraft.isBusy()) return;
+    if (sending) return;
+    if (compactCandidate && attachmentDraft.isBusy()) {
+      setError('Wait for the attachment upload to finish, then remove or send the attachments before compacting. They remain in your draft.');
+      return;
+    }
+    if (empty || attachmentDraft.isBusy()) return;
+    if (compactCandidate && attachmentDraft.uploads.length) {
+      setError('Retry or remove each failed attachment before compacting. They remain in your draft.');
+      return;
+    }
     if (attachmentDraft.uploads.length) { setError('Retry or remove each failed attachment before sending.'); return; }
+    if (compactCandidate) {
+      setSending(true);
+      setError(null);
+      try {
+        if (!compactSyntax) throw new Error('Choose exactly one member: @handle /compact or /compact @handle.');
+        if (attachments.length) throw new Error('Remove or send the attachments before compacting. They remain in your draft.');
+        if (connection !== 'online') throw new Error('Reconnect to Mingle before compacting a member.');
+        if (mentions.problems.length) throw new Error(mentions.problems[0]!.message);
+        const explicitIds = [...new Set([...mentions.ids, ...pickedActive])];
+        if (explicitIds.length !== 1) throw new Error('Choose exactly one explicit member with @handle or the recipient picker. Group defaults are not used for compaction.');
+        const member = members.find((item) => item.id === explicitIds[0]);
+        if (!member) throw new Error('That member is no longer active in this group. Refresh the roster and choose an active member.');
+        const target = sessionOf(member.sessionId);
+        if (!target) throw new Error(`@${member.handle} has no available session to compact.`);
+        if (isBusy(target)) throw new Error(`@${member.handle} is busy. Wait for its run to finish before compacting.`);
+        setCompactStatus({ status: 'running', handle: member.handle });
+        const controller = new AbortController();
+        compactController.current = controller;
+        compactTargetSessionId.current = target.id;
+        try {
+          const result = await api.compactSession(target.id, controller.signal);
+          if (result.status === 'completed') {
+            setCompactStatus({ status: 'completed', handle: member.handle, message: result.message || 'Context compacted.' });
+            if (useMingle.getState().drafts[anchor.id] === draft) setDraft('');
+            await useMingle.getState().refreshNow();
+          } else if (result.status === 'unsupported') {
+            setCompactStatus({ status: 'unsupported', handle: member.handle, message: result.error || result.message || `${providerName(target.provider)} does not support manual compaction.` });
+          } else {
+            const message = result.error || result.message || `@${member.handle}’s provider could not compact this conversation.`;
+            setCompactStatus({ status: 'failed', handle: member.handle, message });
+          }
+        } catch (cause) {
+          if (!controller.signal.aborted) {
+            setCompactStatus(null);
+            throw cause;
+          }
+        } finally {
+          if (compactController.current === controller) {
+            compactController.current = null;
+            compactTargetSessionId.current = null;
+          }
+        }
+      } catch (cause) {
+        setError(errorMessage(cause));
+      } finally {
+        setSending(false);
+        ref.current?.focus();
+      }
+      return;
+    }
     if (local) {
       setSending(true);
       setError(null);
@@ -302,6 +370,20 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
   };
 
   const togglePick = (memberId: string) => setPicked((current) => (current.includes(memberId) ? current.filter((id) => id !== memberId) : [...current, memberId]));
+  const stopCompaction = () => {
+    const controller = compactController.current;
+    const targetSessionId = compactTargetSessionId.current;
+    if (!controller || !targetSessionId) return;
+    controller.abort();
+    compactController.current = null;
+    compactTargetSessionId.current = null;
+    setSending(false);
+    const handle = compactStatus?.handle;
+    const message = `Stopped waiting for compaction${handle ? ` for @${handle}` : ''} and requested a session interrupt. The provider outcome may be unknown; refresh before retrying.`;
+    setCompactStatus({ status: 'failed', handle, message });
+    setError(null);
+    void api.interrupt(targetSessionId).catch((cause) => setCompactStatus({ status: 'failed', handle, message: `Interrupt could not be confirmed: ${errorMessage(cause)}. The provider outcome may be unknown.` })).finally(() => { void useMingle.getState().refreshNow(); });
+  };
   const defaultLabel = snapshot.group.mode === 'cowork' ? 'default: all peers' : 'default: orchestrator';
   const note = error ?? problem ?? blocker;
   const noteIsError = Boolean(error ?? problem);
@@ -341,6 +423,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
           onChange={(event) => {
             const next = event.target.value;
             setCaret(event.target.selectionStart ?? next.length); setDraft(next);
+            if (compactStatus?.status !== 'running') setCompactStatus(null);
             if (selectedNativeAction) {
               const escaped = selectedNativeAction.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
               const marker = selectedNativeAction.kind === 'skill' ? '\\$' : '/';
@@ -384,11 +467,12 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
         <div className="composer__bar">
           <div className="composer__send">
             <AttachmentDrafts scope={{ kind: 'group', id: snapshot.group.id }} busy={attachmentDraft.busy} onFiles={attachmentDraft.addFiles} disabled={sending || Boolean(blocker)} />
-            <button type="button" className="sendbtn" onClick={() => void submit()} disabled={sendDisabled}
-              aria-label={local?.[1]?.toLowerCase() === 'import' ? 'Import conversation' : local?.[1]?.toLowerCase() === 'usage' ? 'Open usage' : 'Send message'}
-              title={sendDisabled ? (problem ?? blocker ?? (empty ? 'Write a message first' : 'Sending…')) : anyBusy ? `Send and queue for busy agents (${MOD}+Enter or Enter)` : `Send (${MOD}+Enter or Enter)`}>
-              <ArrowUp size={15} />
-            </button>
+            {compactStatus?.status === 'running' ? <button type="button" className="sendbtn sendbtn--stop" onClick={stopCompaction} aria-label="Stop waiting and interrupt compaction" title="Stop waiting and request a session interrupt"><Square size={12} fill="currentColor" /></button> :
+              <button type="button" className="sendbtn" onClick={() => void submit()} disabled={sendDisabled}
+                aria-label={compactCandidate ? 'Compact one member' : local?.[1]?.toLowerCase() === 'import' ? 'Import conversation' : local?.[1]?.toLowerCase() === 'usage' ? 'Open usage' : 'Send message'}
+                title={compactCandidate ? 'Compact exactly one explicitly selected member' : sendDisabled ? (problem ?? blocker ?? (empty ? 'Write a message first' : 'Sending…')) : anyBusy ? `Send and queue for busy agents (${MOD}+Enter or Enter)` : `Send (${MOD}+Enter or Enter)`}>
+                <ArrowUp size={15} />
+              </button>}
           </div>
         </div>
       </div>
@@ -417,6 +501,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
           {!noteIsError && blocker && unavailable ? <> <button type="button" className="link-btn" onClick={() => useMingle.getState().openDialog({ kind: 'settings' })}>Open Settings</button></> : null}
         </p>
       ) : null}
+      {compactStatus ? <p className={cx('composer__note', compactStatus.status === 'failed' && 'is-error')} role={compactStatus.status === 'failed' ? 'alert' : 'status'} aria-live="polite" aria-busy={compactStatus.status === 'running'}>{compactStatus.status === 'running' ? `Compacting @${compactStatus.handle}…` : compactStatus.status === 'completed' ? `@${compactStatus.handle}: ${compactStatus.message}` : compactStatus.status === 'unsupported' ? `Manual compaction unavailable for @${compactStatus.handle}: ${compactStatus.message}` : compactStatus.message}</p> : null}
       <UsagePanel session={usageSession} onClose={closeUsage} />
     </div>
   );

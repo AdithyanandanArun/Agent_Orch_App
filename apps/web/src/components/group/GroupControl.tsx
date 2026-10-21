@@ -27,6 +27,9 @@ export function GroupControl({ snapshot }: { snapshot: GroupSnapshot }) {
   const pendingApprovals = pending.length;
   const waitingWithoutApproval = live.filter((session) => session?.status === 'waiting' && !pendingSessions.has(session.id)).length;
   const queued = snapshot.deliveries.filter((delivery) => delivery.status === 'queued').length;
+  const runningDeliveries = snapshot.deliveries.filter((delivery) => delivery.status === 'running').length;
+  const request = [...snapshot.requests].reverse().find((item) => item.status === 'active' || item.status === 'paused');
+  const waitingForResults = request?.status === 'active' && queued === 0 && runningDeliveries === 0 && running === 0 && waiting === 0;
   const online = connection === 'online';
 
   useEffect(() => () => {
@@ -40,18 +43,19 @@ export function GroupControl({ snapshot }: { snapshot: GroupSnapshot }) {
     pendingApprovals ? `${pendingApprovals} approval${pendingApprovals === 1 ? '' : 's'}` : null,
     erroring ? `${erroring} error${erroring === 1 ? '' : 's'}` : null,
     running ? `${running} running` : null,
+    waitingForResults ? 'Waiting for results' : null,
     waitingWithoutApproval ? `${waitingWithoutApproval} waiting` : null,
     queued ? `${queued} queued` : null,
     unavailable ? `${unavailable} unavailable` : null,
   ].filter((fact): fact is string => Boolean(fact));
   const fullStatus = facts.length ? facts.join(' · ') : 'Idle';
   const status = connection !== 'online' ? (connection === 'offline' ? 'Offline' : 'Connecting')
-    : group.paused ? `Paused${running + waiting ? ` · ${running + waiting} active` : queued ? ` · ${queued} queued` : ''}`
+      : group.paused ? `Paused${running + waiting ? ` · ${running + waiting} active` : queued ? ` · ${queued} queued` : ''}`
       : pendingApprovals ? `${pendingApprovals} approval${pendingApprovals === 1 ? '' : 's'}${running ? ` · ${running} running` : ''}`
         : erroring ? `${erroring} error${erroring === 1 ? '' : 's'}${running ? ` · ${running} running` : ''}`
           : running ? `${running} running${queued ? ` · ${queued} queued` : ''}`
             : waitingWithoutApproval ? `${waitingWithoutApproval} waiting`
-              : queued ? `${queued} queued` : unavailable ? `${unavailable} unavailable` : 'Idle';
+              : queued ? `${queued} queued` : waitingForResults ? 'Waiting for results' : unavailable ? `${unavailable} unavailable` : 'Idle';
   const pauseReason = group.paused && group.pauseReason ? ` Pause reason: ${group.pauseReason}` : '';
   const detail = `Group status: ${fullStatus}.${pauseReason}`;
   const actionLabel = group.paused ? 'Resume group' : 'Pause group';
