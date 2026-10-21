@@ -39,6 +39,12 @@ const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,80}$/;
 
 function isLiveWindow(window) { return Boolean(window && !window.isDestroyed()); }
 
+function isWorkspaceFrame(event) {
+  if (!workspaceUrl || event.senderFrame !== event.sender.mainFrame) return false;
+  try { return new URL(event.senderFrame.url).origin === new URL(workspaceUrl).origin; }
+  catch { return false; }
+}
+
 function openExternalWebTarget(target, origin) {
   try {
     const parsed = new URL(target);
@@ -75,7 +81,7 @@ function focusMainWindow() {
 }
 
 ipcMain.handle('mingle.browser.open-popout', async (event, sessionId) => {
-  if (!isLiveWindow(mainWindow) || event.sender !== mainWindow.webContents || typeof sessionId !== 'string' || !SESSION_ID_PATTERN.test(sessionId)) return false;
+  if (!isLiveWindow(mainWindow) || event.sender !== mainWindow.webContents || !isWorkspaceFrame(event) || typeof sessionId !== 'string' || !SESSION_ID_PATTERN.test(sessionId)) return false;
   const existing = browserWindows.get(sessionId);
   if (isLiveWindow(existing)) {
     if (existing.isMinimized()) existing.restore();
@@ -111,12 +117,12 @@ ipcMain.handle('mingle.browser.open-popout', async (event, sessionId) => {
 });
 
 ipcMain.handle('mingle.browser.is-popout-open', (event, sessionId) => {
-  if (!isLiveWindow(mainWindow) || event.sender !== mainWindow.webContents || typeof sessionId !== 'string' || !SESSION_ID_PATTERN.test(sessionId)) return false;
+  if (!isLiveWindow(mainWindow) || event.sender !== mainWindow.webContents || !isWorkspaceFrame(event) || typeof sessionId !== 'string' || !SESSION_ID_PATTERN.test(sessionId)) return false;
   return isLiveWindow(browserWindows.get(sessionId));
 });
 
 ipcMain.handle('mingle.browser.focus-popout', (event, sessionId) => {
-  if (!isLiveWindow(mainWindow) || event.sender !== mainWindow.webContents || typeof sessionId !== 'string' || !SESSION_ID_PATTERN.test(sessionId)) return false;
+  if (!isLiveWindow(mainWindow) || event.sender !== mainWindow.webContents || !isWorkspaceFrame(event) || typeof sessionId !== 'string' || !SESSION_ID_PATTERN.test(sessionId)) return false;
   const window = browserWindows.get(sessionId);
   if (!isLiveWindow(window)) return false;
   if (window.isMinimized()) window.restore();
@@ -127,6 +133,7 @@ ipcMain.handle('mingle.browser.focus-popout', (event, sessionId) => {
 
 ipcMain.handle('mingle.browser.dock-popout', (event, sessionId) => {
   let target = null;
+  if (!isWorkspaceFrame(event)) return false;
   if (isLiveWindow(mainWindow) && event.sender === mainWindow.webContents) {
     if (typeof sessionId !== 'string' || !SESSION_ID_PATTERN.test(sessionId)) return false;
     target = browserWindows.get(sessionId);

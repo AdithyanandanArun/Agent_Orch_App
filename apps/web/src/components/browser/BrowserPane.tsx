@@ -230,9 +230,9 @@ export function BrowserPane({ session, active, popout = false }: { session: Sess
                 <span className="sr-only">Browser stream quality and performance</span>
                 <select className="input browser-profile__select" aria-label="Browser stream quality and performance" value={profile} onChange={(event) => setProfile(event.target.value as BrowserStreamProfile)}>
                   <option value="saver">Saver · up to 5 fps</option>
-                  <option value="balanced">Balanced · up to 10 fps</option>
-                  <option value="sharp">Sharp · up to 8 fps</option>
-                  <option value="smooth">Smooth · up to 15 fps</option>
+                  <option value="balanced">Balanced · up to 20 fps</option>
+                  <option value="sharp">Sharp · up to 15 fps</option>
+                  <option value="smooth">Smooth · up to 30 fps</option>
                 </select>
               </label>
               {stream.frameSize ? <span className="browser-status__size" title="Last decoded frame size">{stream.frameSize.width} × {stream.frameSize.height}</span> : null}
