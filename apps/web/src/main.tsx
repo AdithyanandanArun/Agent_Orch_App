@@ -16,6 +16,7 @@ import './styles/run-changes.css';
 import './styles/import-dialog.css';
 import './styles/project-picker.css';
 import './styles/browser.css';
+import './styles/browser-footer.css';
 import './styles/git.css';
 import './styles/automation.css';
 import './styles/groups.css';

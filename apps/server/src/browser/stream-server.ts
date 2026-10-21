@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
-import { BrowserClientMessageSchema, BrowserStreamProfileSchema, type BrowserAction, type BrowserServerMessage, type BrowserStreamProfile, type BrowserTab } from '@mingle/contracts';
+import { BrowserClientMessageSchema, type BrowserAction, type BrowserServerMessage, type BrowserTab } from '@mingle/contracts';
 import { WebSocketServer, type RawData, type WebSocket } from 'ws';
 import type { Security } from '../security.ts';
 import type { Logger } from '../types.ts';
@@ -79,10 +79,8 @@ export class BrowserStreamServer {
     const entry = this.host.tab(sessionId, tabId);
     if (!entry) return reject(404, 'Not Found');
     if (this.sockets.size >= STREAM_MAX_CONNECTIONS || entry.viewerCount >= STREAM_MAX_VIEWERS_PER_TAB) return reject(503, 'Service Unavailable');
-    const requestedProfile = url.searchParams.get('profile') ?? 'balanced';
-    const parsedProfile = BrowserStreamProfileSchema.safeParse(requestedProfile);
-    if (!parsedProfile.success) return reject(400, 'Bad Request');
-    this.wss.handleUpgrade(req, socket, head, (ws) => this.accept(ws, sessionId, tabId, entry, parsedProfile.data));
+    // Ignore legacy `profile` query values so saved links cannot change stream quality or pacing.
+    this.wss.handleUpgrade(req, socket, head, (ws) => this.accept(ws, sessionId, tabId, entry));
   }
 
   /** True while `clientId` is a connected viewer of exactly this session's tab. */
@@ -101,7 +99,7 @@ export class BrowserStreamServer {
     });
   }
 
-  private accept(ws: WebSocket, sessionId: string, tabId: string, entry: TabEntry, profile: BrowserStreamProfile): void {
+  private accept(ws: WebSocket, sessionId: string, tabId: string, entry: TabEntry): void {
     const clientId = `cli_${randomBytes(8).toString('hex')}`;
     // Registered before any host callback can run, removed on close: only live viewers can claim control.
     this.clients.set(clientId, { sessionId, tabId });
@@ -126,7 +124,7 @@ export class BrowserStreamServer {
         ws.send(JSON.stringify({ type: 'frame', ...header } satisfies BrowserServerMessage));
         ws.send(jpeg, { binary: true });
       },
-    }, () => entry.touch(), profile);
+    }, () => entry.touch());
 
     const unsubscribe = entry.subscribe({
       state: pushState,

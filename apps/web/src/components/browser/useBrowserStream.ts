@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
-import type { BrowserAction, BrowserServerMessage, BrowserStreamProfile, BrowserTab } from '@mingle/contracts';
+import type { BrowserAction, BrowserServerMessage, BrowserTab } from '@mingle/contracts';
 
 export type StreamStatus = 'idle' | 'connecting' | 'live' | 'closed';
 export interface FrameSize { width: number; height: number }
@@ -13,8 +13,8 @@ const isServerMessage = (value: unknown): value is BrowserServerMessage => {
   return typeof v === 'object' && v !== null && (v.type === 'hello' || v.type === 'state' || v.type === 'frame' || v.type === 'error');
 };
 
-const streamUrl = (sessionId: string, tabId: string, profile: BrowserStreamProfile): string => {
-  const params = new URLSearchParams({ sessionId, tabId, profile });
+const streamUrl = (sessionId: string, tabId: string): string => {
+  const params = new URLSearchParams({ sessionId, tabId });
   return `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/browser?${params}`;
 };
 
@@ -37,7 +37,7 @@ export interface BrowserStream {
  * One viewer socket per (session, tab). Frames arrive as a JSON header then a JPEG blob; at most one image is
  * decoding at a time and its acknowledgement is sent only after it loads, which paces the server's screencast.
  */
-export function useBrowserStream(sessionId: string | undefined, tabId: string | undefined, enabled: boolean, canvasRef: RefObject<HTMLCanvasElement | null>, profile: BrowserStreamProfile = 'balanced'): BrowserStream {
+export function useBrowserStream(sessionId: string | undefined, tabId: string | undefined, enabled: boolean, canvasRef: RefObject<HTMLCanvasElement | null>): BrowserStream {
   const [status, setStatus] = useState<StreamStatus>('idle');
   const [clientId, setClientId] = useState<string | null>(null);
   const [tab, setTab] = useState<BrowserTab | null>(null);
@@ -106,7 +106,7 @@ export function useBrowserStream(sessionId: string | undefined, tabId: string | 
     };
 
     const open = () => {
-      const socket = new WebSocket(streamUrl(sessionId, tabId, profile));
+      const socket = new WebSocket(streamUrl(sessionId, tabId));
       socket.binaryType = 'blob';
       ws = socket;
       socketRef.current = socket;
@@ -161,7 +161,7 @@ export function useBrowserStream(sessionId: string | undefined, tabId: string | 
       if (socketRef.current === ws) socketRef.current = null;
     };
     // canvasRef is a stable ref object; the effect must restart only when the target or reconnect counter changes.
-  }, [sessionId, tabId, enabled, attempt, canvasRef, profile, showError]);
+  }, [sessionId, tabId, enabled, attempt, canvasRef, showError]);
 
   const sendJson = useCallback((payload: unknown): boolean => {
     const socket = socketRef.current;

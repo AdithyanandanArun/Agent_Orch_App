@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ArrowDownToLine, ArrowLeft, ArrowRight, ExternalLink, Globe, Maximize2, Minimize2, Plus, RefreshCw, Scan, Unplug, X } from 'lucide-react';
-import type { BrowserAction, BrowserSessionState, BrowserStreamProfile, BrowserTab, Session } from '@mingle/contracts';
+import type { BrowserAction, BrowserSessionState, BrowserTab, Session } from '@mingle/contracts';
 import { api, errorMessage } from '../../lib/api';
 import { cx } from '../../lib/format';
 import { usePresence, useRetainedPresence } from '../../lib/motion';
@@ -35,25 +35,25 @@ const tabLabel = (tab: BrowserTab): string => {
   try { return new URL(tab.url).hostname || tab.url; } catch { return tab.url || 'New tab'; }
 };
 
-function controlLabel(tab: BrowserTab, clientId: string | null): string {
-  if (tab.controlOwner === null) return 'Agent can control this tab. You are watching.';
-  if (tab.controlOwner === clientId) return 'You are in control of this tab.';
-  return 'Another viewer is in control of this tab.';
+function controlLabel(tab: BrowserTab, clientId: string | null): { label: string; description: string } {
+  if (tab.controlOwner === null) return { label: 'Agent control', description: 'The agent can control this tab. You are watching.' };
+  if (tab.controlOwner === clientId) return { label: 'You control', description: 'You are in control of this tab.' };
+  return { label: 'Watching', description: 'Another viewer is in control of this tab. You are watching.' };
 }
 
 export function BrowserPane({ session, active, popout = false }: { session: Session; active: boolean; popout?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const [floating, setFloating] = useState(false);
   const [detached, setDetached] = useState(false);
-  const [profile, setProfile] = useState<BrowserStreamProfile>('balanced');
   const visible = active || expanded || floating;
   const { state, error: stateError, apply, refresh } = useBrowserState(session.id, visible);
   const selectedId = useBrowserStore((s) => s.selected[session.id]);
   const current = resolveTab(state, selectedId);
   const pageVisible = usePageVisible();
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const stream = useBrowserStream(session.id, current?.id, visible && pageVisible && Boolean(current) && !detached, canvasRef, profile);
+  const stream = useBrowserStream(session.id, current?.id, visible && pageVisible && Boolean(current) && !detached, canvasRef);
   const tab = current && stream.tab && stream.tab.id === current.id ? stream.tab : current;
+  const ownership = tab ? controlLabel(tab, stream.clientId) : { label: 'Watching', description: 'You are watching this tab.' };
   const canInput = Boolean(tab && stream.status === 'live' && stream.clientId && tab.controlOwner === stream.clientId);
 
   useEffect(() => {
@@ -225,17 +225,9 @@ export function BrowserPane({ session, active, popout = false }: { session: Sess
             {pageDialogPresent && pageDialogSnapshot.current ? <PageDialog key={pageDialogKey} tab={pageDialogSnapshot.current.tab} canInput={pageDialogSnapshot.current.canInput} act={pageDialogSnapshot.current.act} closing={pageDialogClosing} /> : null}
             <div className="browser-viewport"><BrowserSurface stream={stream} tab={tab} canvasRef={canvasRef} canInput={canInput} /></div>
             <div className="browser-status">
-              <span className={cx('browser-status__who', canInput && 'is-you')} role="status">{stream.status === 'live' ? controlLabel(tab, stream.clientId) : stream.status === 'closed' ? 'Stream disconnected.' : 'Connecting…'}</span>
-              <label className="browser-profile">
-                <span className="sr-only">Browser stream quality and performance</span>
-                <select className="input browser-profile__select" aria-label="Browser stream quality and performance" value={profile} onChange={(event) => setProfile(event.target.value as BrowserStreamProfile)}>
-                  <option value="saver">Saver · up to 5 fps</option>
-                  <option value="balanced">Balanced · up to 20 fps</option>
-                  <option value="sharp">Sharp · up to 15 fps</option>
-                  <option value="smooth">Smooth · up to 30 fps</option>
-                </select>
-              </label>
-              {stream.frameSize ? <span className="browser-status__size" title="Last decoded frame size">{stream.frameSize.width} × {stream.frameSize.height}</span> : null}
+              {stream.status === 'live'
+                ? <span className="browser-status__who" role="status" aria-label={ownership.description} title={ownership.description}>{ownership.label}</span>
+                : <span className="browser-status__who" role="status">{stream.status === 'closed' ? 'Disconnected' : 'Connecting…'}</span>}
               {stream.status === 'closed' ? <Button size="sm" onClick={stream.reconnect}>Reconnect</Button>
                 : canInput ? <Button size="sm" data-browser-focus-exit onClick={() => stream.setControl('agent')}>Release to agent</Button>
                   : <Button size="sm" variant="primary" disabled={stream.status !== 'live'} why="Waiting for the stream" onClick={() => stream.setControl('human')}>Take control</Button>}

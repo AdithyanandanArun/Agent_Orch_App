@@ -24,7 +24,7 @@ export const BrowserConnectSchema = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('existing'), sourceId: z.string().min(1).max(200).optional(), endpoint: z.string().min(1).max(2048).optional(), consent: z.literal(true) }).strict(),
 ]);
 export type BrowserConnect = z.infer<typeof BrowserConnectSchema>;
-/** Bounded per-viewer stream settings. These are transport caps, not an FPS guarantee. */
+/** @deprecated Legacy stream URL values remain readable; the server normalizes all viewers to one fixed stream. */
 export const BrowserStreamProfileSchema = z.enum(['saver', 'balanced', 'sharp', 'smooth']);
 export type BrowserStreamProfile = z.infer<typeof BrowserStreamProfileSchema>;
 const target = {
