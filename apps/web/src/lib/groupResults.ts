@@ -139,7 +139,7 @@ function boundedError(error: string): string {
   return flat.length > 240 ? `${flat.slice(0, 240).trimEnd()}…` : flat;
 }
 
-function recoveredFailureIds(
+function recoveredAttemptIds(
   snapshot: GroupSnapshot,
   request: GroupRequest,
   deliveries: readonly GroupDelivery[],
@@ -161,7 +161,7 @@ function recoveredFailureIds(
   for (const source of deliveries) {
     const successorId = source.recoveredByDeliveryId;
     const successor = successorId ? deliveryById.get(successorId) : undefined;
-    if (source.status !== 'failed' || !successorId || duplicateIds.has(source.id) || duplicateIds.has(successorId)
+    if ((source.status !== 'failed' && source.status !== 'interrupted') || !successorId || duplicateIds.has(source.id) || duplicateIds.has(successorId)
       || source.groupId !== snapshot.group.id || source.requestId !== request.id || !successor
       || successor.id === source.id || successor.groupId !== source.groupId || successor.requestId !== source.requestId
       || !memberById.has(source.memberId) || !memberById.has(successor.memberId)) continue;
@@ -208,7 +208,7 @@ export function buildGroupResultModel({ snapshot, sessions, messages, runs, task
   const sessionById = new Map(sessions.map((session) => [session.id, session]));
   const runById = new Map(runs.map((run) => [run.id, run]));
   const deliveries = snapshot.deliveries.filter((delivery) => delivery.requestId === request.id && delivery.groupId === group.id);
-  const recoveredDeliveries = recoveredFailureIds(snapshot, request, deliveries, memberById, runById);
+  const recoveredDeliveries = recoveredAttemptIds(snapshot, request, deliveries, memberById, runById);
   const outcomeDeliveries = deliveries.filter((delivery) => !recoveredDeliveries.has(delivery.id));
   const assignments = snapshot.assignments.filter((assignment) => assignment.requestId === request.id && assignment.groupId === group.id);
   const assignedDeliveryIds = new Set(assignments.map((assignment) => assignment.deliveryId));
@@ -225,14 +225,17 @@ export function buildGroupResultModel({ snapshot, sessions, messages, runs, task
   };
   const allTasks = unique(assignments.map((assignment) => assignment.taskId)).map(taskFor);
 
-  const linkedRuns = unique(outcomeDeliveries.flatMap((delivery) => (delivery.runId ? [delivery.runId] : [])))
+  const linkedRuns = unique(deliveries.flatMap((delivery) => (delivery.runId ? [delivery.runId] : [])))
+    .flatMap((id) => runById.get(id) ?? [])
+    .filter((run) => deliveries.some((delivery) => delivery.runId === run.id && memberById.get(delivery.memberId)?.sessionId === run.sessionId));
+  const outcomeRuns = unique(outcomeDeliveries.flatMap((delivery) => (delivery.runId ? [delivery.runId] : [])))
     .flatMap((id) => runById.get(id) ?? [])
     .filter((run) => outcomeDeliveries.some((delivery) => delivery.runId === run.id && memberById.get(delivery.memberId)?.sessionId === run.sessionId));
-  const activeDeliveries = deliveries.filter(isActive);
-  const runningRuns = linkedRuns.filter((run) => run.status === 'running');
+  const activeDeliveries = outcomeDeliveries.filter(isActive);
+  const runningRuns = outcomeRuns.filter((run) => run.status === 'running');
   const activeTurns = Math.max(activeDeliveries.length, runningRuns.length);
   const active = activeTurns > 0;
-  const queuedTurns = deliveries.filter((delivery) => delivery.status === 'queued').length;
+  const queuedTurns = outcomeDeliveries.filter((delivery) => delivery.status === 'queued').length;
 
   const plannerId = request.plannerMemberId;
   const participantIds = new Set<string>([plannerId]);
@@ -241,8 +244,8 @@ export function buildGroupResultModel({ snapshot, sessions, messages, runs, task
 
   const workspaceKeys = new Set<string>();
   const workspaces = new Set<string>();
-  const anyFailedRun = linkedRuns.some((run) => run.status === 'failed');
-  const anyInterruptedRun = linkedRuns.some((run) => run.status === 'interrupted');
+  const anyFailedRun = outcomeRuns.some((run) => run.status === 'failed');
+  const anyInterruptedRun = outcomeRuns.some((run) => run.status === 'interrupted');
 
   const reportFor = (key: string, delivery: GroupDelivery, member: GroupMember, taskTitles: string[]): ResultReport => {
     if (isActive(delivery)) return { key, taskTitles, text: null, note: 'Report not available yet; the turn is still in progress.' };
@@ -279,7 +282,8 @@ export function buildGroupResultModel({ snapshot, sessions, messages, runs, task
       else if (delivery.status === 'cancelled') problems.push('Turn cancelled before finishing.');
     }
     const ownRunIds = unique(own.flatMap((delivery) => (delivery.runId ? [delivery.runId] : [])));
-    const ownRuns = ownRunIds.flatMap((id) => runById.get(id) ?? []).filter((run) => run.sessionId === member.sessionId);
+    const ownRunIdSet = new Set(ownRunIds);
+    const ownRuns = linkedRuns.filter((run) => ownRunIdSet.has(run.id) && run.sessionId === member.sessionId);
     if (!own.some((delivery) => delivery.status === 'failed') && ownRuns.some((run) => run.status === 'failed')) problems.push('A run failed.');
     if (!own.some((delivery) => delivery.status === 'interrupted' || delivery.status === 'cancelled') && ownRuns.some((run) => run.status === 'interrupted')) problems.push('A run was interrupted.');
 
@@ -364,7 +368,7 @@ export function buildGroupResultModel({ snapshot, sessions, messages, runs, task
   const inReview = count('review');
   const missingTasks = allTasks.filter((task) => task.status === null).length;
   const failed = outcomeDeliveries.some((delivery) => delivery.status === 'failed') || anyFailedRun;
-  const stopped = deliveries.some((delivery) => delivery.status === 'interrupted' || delivery.status === 'cancelled') || anyInterruptedRun;
+  const stopped = outcomeDeliveries.some((delivery) => delivery.status === 'interrupted' || delivery.status === 'cancelled') || anyInterruptedRun;
   const paused = group.paused || request.status === 'paused';
   const pauseReason = group.pauseReason?.trim() || null;
 
@@ -376,7 +380,7 @@ export function buildGroupResultModel({ snapshot, sessions, messages, runs, task
     status = 'paused'; title = 'Paused';
     detail = pauseReason ? `Reason: ${pauseReason}` : 'No pause reason recorded.';
     const parts = [
-      runningRuns.length || deliveries.some((delivery) => delivery.status === 'running') ? `${plural(Math.max(runningRuns.length, deliveries.filter((delivery) => delivery.status === 'running').length), 'turn')} still running` : null,
+      runningRuns.length || outcomeDeliveries.some((delivery) => delivery.status === 'running') ? `${plural(Math.max(runningRuns.length, outcomeDeliveries.filter((delivery) => delivery.status === 'running').length), 'turn')} still running` : null,
       queuedTurns ? `${plural(queuedTurns, 'queued turn')} held` : null,
     ].filter(Boolean);
     summary = parts.length ? `No new work starts while paused; ${parts.join(', ')}.` : 'No new work starts while paused. Results may be incomplete.';
@@ -417,7 +421,7 @@ export function buildGroupResultModel({ snapshot, sessions, messages, runs, task
   const facts = [
     agents.length || lead ? plural(unique([...agents.map((agent) => agent.memberId), ...(lead ? [lead.memberId] : [])]).length, 'agent') : null,
     allTasks.length ? plural(allTasks.length, 'task') : null,
-    recoveredDeliveries.size ? `${plural(recoveredDeliveries.size, 'earlier failed turn')} superseded by recovery` : null,
+    recoveredDeliveries.size ? `${plural(recoveredDeliveries.size, 'recovery attempt')}` : null,
     inReview ? `${inReview} need review` : null,
     count('done') ? `${count('done')} accepted` : null,
   ].filter((fact): fact is string => Boolean(fact));

@@ -207,6 +207,7 @@ export function RecoveryPanel({ snapshot, sessions, runs, tasks }: {
     useMingle.getState().setGroupActionBusy(group.id);
     try {
       const result = await api.recoverGroup(group.id, action);
+      pendingActions.current.delete(scope);
       completedAction.current = scope;
       setActionMessage(result.status === 'already-applied' ? 'This recovery action was already recorded.' : 'Recovery action recorded. No new work starts until the scheduler accepts it.');
       await useMingle.getState().refreshNow();
@@ -342,7 +343,11 @@ export function RecoveryPanel({ snapshot, sessions, runs, tasks }: {
         {pendingCheckpointId ? <Button size="sm" variant="secondary" disabled={!online || actionLocked || completedAction.current === ackScope} why={actionWhy ?? undefined} busy={busyAction === ackScope} onClick={() => void performAction(ackScope, (idempotencyKey) => ({ action: 'acknowledge-checkpoint', checkpointId: pendingCheckpointId, idempotencyKey }))}>Acknowledge checkpoint</Button> : null}
       </div>
       {checkpointGuidance ? <p className="recovery-panel__checkpoint-review" role="note">{checkpointGuidance}</p> : null}
-      {failureNeedsHumanReview ? <p className="recovery-panel__risk" role="note">{outcomeMayBeUnknown ? 'The result of the last operation is unknown. Inspect the current workspace before retrying or reassigning.' : `Provider continuation safety is ${visibleFailure?.continuationSafety}. Acknowledge the request’s group checkpoint before retrying or reassigning.`}</p> : null}
+      {failureNeedsHumanReview ? <p className="recovery-panel__risk" role="note">{outcomeMayBeUnknown
+        ? 'The result of the last operation is unknown. Inspect the current workspace before retrying or reassigning.'
+        : !acknowledgedForCurrentScope
+          ? `Provider continuation safety is ${visibleFailure?.continuationSafety}. Acknowledge the request’s group checkpoint before retrying or reassigning.`
+          : 'Checkpoint acknowledged; choose how to continue.'}</p> : null}
       {!online ? <p className="recovery-panel__muted" role="status">Reconnect to Mingle before taking a recovery action.</p> : null}
       {actionError ? <InlineError>{actionError}</InlineError> : null}
       {actionMessage ? <p className="recovery-panel__success" role="status">{actionMessage}</p> : null}

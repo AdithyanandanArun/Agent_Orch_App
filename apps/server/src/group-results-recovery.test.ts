@@ -36,7 +36,7 @@ function delivery(spec: DeliverySpec): GroupDelivery {
   } as GroupDelivery;
 }
 
-function run(id: string, status: SessionRun['status']): SessionRun {
+function run(id: string, status: SessionRun['status'], changes?: SessionRun['changes']): SessionRun {
   return {
     id,
     sessionId: SESSION_ID,
@@ -49,6 +49,7 @@ function run(id: string, status: SessionRun['status']): SessionRun {
     durationMs: 1,
     toolCount: 0,
     toolCounts: {},
+    ...(changes !== undefined ? { changes } : {}),
   };
 }
 
@@ -73,7 +74,9 @@ function result(snapshotDeliveries: GroupDelivery[], runs: SessionRun[]) {
   return buildGroupResultModel({ snapshot, sessions, messages: [], runs, tasks: [] } satisfies GroupResultInput)!;
 }
 
-const sourceFailure = () => delivery({ id: 'source', status: 'failed', runId: 'source-run', error: 'Original quota failure' });
+const sourceFailure = (status: 'failed' | 'interrupted' = 'failed') => delivery({
+  id: 'source', status, runId: 'source-run', error: status === 'failed' ? 'Original quota failure' : null,
+});
 
 it('keeps an unrecovered failed delivery failed', () => {
   const model = result([sourceFailure()], [run('source-run', 'failed')]);
@@ -81,15 +84,23 @@ it('keeps an unrecovered failed delivery failed', () => {
   expect(model.agents[0]?.problems).toContain('Turn failed: Original quota failure');
 });
 
-it('treats a completed same-request replacement as a normal response while preserving the source error', () => {
-  const source = delivery({ ...sourceFailure(), recoveredByDeliveryId: 'replacement' });
+it.each(['failed', 'interrupted'] as const)('treats a completed replacement as a normal response after a %s source while preserving its audit history', (sourceStatus) => {
+  const source = delivery({ ...sourceFailure(sourceStatus), recoveredByDeliveryId: 'replacement' });
   const replacement = delivery({ id: 'replacement', status: 'completed', runId: 'replacement-run' });
-  const model = result([source, replacement], [run('source-run', 'failed'), run('replacement-run', 'completed')]);
+  const sourceChanges: NonNullable<SessionRun['changes']> = {
+    status: 'available', capturedAt: NOW, fileCount: 1,
+    files: [{ path: 'src/partial-edits.ts', status: 'M', additions: 3, deletions: 1, binary: false }],
+    additions: 3, deletions: 1, truncated: false, notices: [],
+  };
+  const sourceRunStatus = sourceStatus === 'failed' ? 'failed' : 'interrupted';
+  const model = result([source, replacement], [run('source-run', sourceRunStatus, sourceChanges), run('replacement-run', 'completed')]);
 
   expect(model.status).toBe('responded');
   expect(model.title).toBe('Team finished responding');
-  expect(model.agents[0]?.problems).toContain('Turn failed: Original quota failure');
-  expect(model.facts).toContain('1 earlier failed turn superseded by recovery');
+  expect(model.agents[0]?.problems).toContain(sourceStatus === 'failed' ? 'Turn failed: Original quota failure' : 'Turn interrupted before finishing.');
+  expect(model.agents[0]?.workspace.paths).toContainEqual(expect.objectContaining({ path: 'src/partial-edits.ts', status: 'M' }));
+  expect(model.changedPathCount).toBe(1);
+  expect(model.facts).toContain('1 recovery attempt');
 });
 
 it.each(['queued', 'running'] as const)('shows a %s replacement as active instead of failed', (status) => {
@@ -109,6 +120,9 @@ it('keeps a failed replacement as the current request failure', () => {
 
   expect(model.status).toBe('failed');
   expect(model.agents[0]?.problems).toContain('Turn failed: Replacement failed');
+
+  const cancelled = delivery({ id: 'replacement', status: 'cancelled' });
+  expect(result([source, cancelled], [run('source-run', 'failed')]).status).toBe('stopped');
 });
 
 it('does not let missing, cross-request, or cyclic recovery links hide a failure', () => {
