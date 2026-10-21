@@ -153,11 +153,10 @@ export function createApplication(options: ApplicationOptions): MingleApplicatio
   const handoffs = new HandoffService(store);
   const attachments = new AttachmentService(store, config.dataDir, log);
   runtime.setAttachments(attachments);
-  const groupOptions = {
+  const groups = new GroupService({
     store, workspace, tasks, handoffs, runtime, log, attachments, providers: () => providers.cached() ?? [],
     catalog: (session, refresh) => providers.catalog(session, refresh), recovery,
-  } satisfies ConstructorParameters<typeof GroupService>[0] & { recovery: RecoveryService };
-  const groups = new GroupService(groupOptions);
+  });
   const teamMcp = new TeamMcpBridge(groups, store, () => boundPort, () => config.host);
   runtime.setGroupServices(groups, teamMcp);
   groups.recover();

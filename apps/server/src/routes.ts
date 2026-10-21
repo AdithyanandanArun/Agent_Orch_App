@@ -4,7 +4,7 @@ import {
   CreateGroupSchema, AddGroupAgentSchema, UpdateGroupSchema, SendGroupMessageSchema, RepositoryCommitSchema, RepositoryPushSchema, RepositoryBranchSchema, RepositoryPullRequestSchema, BrowserConnectSchema, BrowserActionSchema, ApprovalDecisionSchema, ConversationIdSchema, ImportConversationSchema, ProviderSchema, CloneProjectSchema, NewProjectSchema, CreateProjectSchema, CreateSessionSchema, CreateTaskSchema, HandoffSchema, SendMessageSchema, UpdateProjectSchema, UpdateSessionSchema, UpdateSettingsSchema, UpdateTaskSchema,
   RecoveryActionRequestSchema,
 } from '@mingle/contracts';
-import type { Bootstrap, RecoveryActionRequest, RecoveryActionResult, SessionUsage } from '@mingle/contracts';
+import type { Bootstrap, SessionUsage } from '@mingle/contracts';
 import { gitStatus } from './git.ts';
 import type { Hub } from './hub.ts';
 import { listDirectory, readTextFile, writeTextFile } from './paths.ts';
@@ -299,9 +299,8 @@ export function buildRouter(s: Services) {
   add('POST', '/api/groups/:id/members/:memberId/interrupt', async (ctx) => { await ctx.body(emptyGroupBody); return s.groups.stopMember(param(ctx, 'id'), param(ctx, 'memberId')); });
   add('POST', '/api/groups/:id/recovery', async (ctx) => {
     const groupId = param(ctx, 'id');
-    const action = await ctx.body(RecoveryActionRequestSchema) as RecoveryActionRequest;
-    const groups = s.groups as GroupService & { recoverAction(id: string, request: RecoveryActionRequest): Promise<RecoveryActionResult> };
-    return groups.recoverAction(groupId, action);
+    const action = await ctx.body(RecoveryActionRequestSchema);
+    return s.groups.recoverAction(groupId, action);
   });
 
   add('POST', '/api/sessions', async (ctx) => new Reply(201, await s.workspace.createSession(await ctx.body(CreateSessionSchema))));
