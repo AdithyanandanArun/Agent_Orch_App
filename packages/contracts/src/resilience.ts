@@ -20,6 +20,7 @@ export type AutonomyConfig = z.infer<typeof AutonomyConfigSchema>;
 
 export const GroupRecoveryPolicySchema = z.object({
   automaticFallback: z.boolean().default(false),
+  allowUnverifiedQuotaFallback: z.boolean().default(false),
   leadFallbackMemberId: z.string().min(1).max(100).nullable().optional(),
   workerFallbacks: z.record(z.string().min(1).max(100), z.string().min(1).max(100)).optional(),
 }).strict();

@@ -12,7 +12,7 @@ Mingle's resilience layer preserves what the host actually knows about a session
 
 Task finish criteria preserve whether acceptance conditions were explicit or derived and can require evidence or human review. No group turn, task, delivery or hop count is reset by retry or resume.
 
-Fallback is a group-level `GroupRecoveryPolicy`, not a group default. `automaticFallback` defaults false; configured lead and worker fallbacks name existing members and are validated by the group service. A fallback uses that member's saved native session and settings as-is. It never creates a member or mutates the provider/model/permissions of an existing native conversation.
+Fallback is a group-level `GroupRecoveryPolicy`, not a group default. `automaticFallback` defaults false; configured lead and worker fallbacks name existing members and are validated by the group service. Unknown quota-pool identity pauses recovery by default. The explicit advanced `allowUnverifiedQuotaFallback` opt-in (also default false) permits one bounded attempt to the configured fallback member when the failed provider's quota pool is unreported; it does not claim that the destination has independent or available quota. Known same-pool exhaustion, a known quota/held destination, permission mismatch, active source work, or uncertain outcomes still block automatic fallback. Without the opt-in, unknown pool identity remains paused for human recovery. A fallback uses that member's saved native session and settings as-is. It never creates a member or mutates the provider/model/permissions of an existing native conversation.
 
 ## Durable data and bounds
 
