@@ -16,7 +16,7 @@ Fallback is a group-level `GroupRecoveryPolicy`, not a group default. `automatic
 
 ## Durable data and bounds
 
-Migration 11 is additive and introduces:
+Migrations 11 and 12 are additive. Version 11 introduces:
 
 - Group `autonomy_policy`, `recovery_policy`, `recovery_state` and monotonically increasing `coordinator_epoch`; each claimed delivery records the epoch under which it was dispatched.
 - `session_checkpoints`, versioned and bounded to 64 KiB, at most 20 per session.
@@ -25,6 +25,8 @@ Migration 11 is additive and introduces:
 - `group_recovery_checkpoints`, for durable batch acknowledgement/Ask me checkpoints.
 - `group_assignment_milestones`, retaining acceptance provenance and a bounded reference to host evidence.
 - `group_stall_evidence`, retaining fingerprinted evidence/counters rather than transcripts.
+
+Version 12 conditionally adds `session_failures.resolved_at` when absent, preserving compatibility with databases already at version 11 as originally shipped, and adds `group_recovery_deliveries` as a durable one-to-one source/successor link. The optional `GroupDelivery.recoveredByDeliveryId` snapshot field identifies a superseded failed delivery's successor. `GroupRecoveryState.acknowledgedCheckpointId` identifies the durable group checkpoint (not a provider session checkpoint), and coordinator replacement can include a `requestId` to target a Cowork planner lease.
 
 Checkpoints include an objective reference, assigned task titles/descriptions/acceptance criteria/status, actual worktree path/branch/HEAD/dirty paths, group artifact references, pending approval summaries, bounded errors and uncertain tool summaries. They never include approval inputs, tool input/output, complete source files, credentials, or full unbounded message transcripts. Git uses argv arrays with noninteractive, bounded status/metadata commands. Missing Git data yields `statusKnown: false` and a notice; it is not represented as a clean state. Dirty paths cap at 500 and the whole serialized checkpoint caps at 64 KiB. Every checkpoint carries schema `version: 1`. A restart captures a checkpoint for each session recovered from a running/waiting state; shutdown drains outstanding checkpoint captures before SQLite closes.
 

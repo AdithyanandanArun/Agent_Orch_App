@@ -181,7 +181,7 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
    CREATE INDEX session_checkpoints_latest ON session_checkpoints(session_id, created_at DESC);
     CREATE TABLE session_failures (
      id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), run_id TEXT NOT NULL REFERENCES session_runs(id),
-     failure_json TEXT NOT NULL CHECK (length(failure_json) <= 8192), updated_at TEXT NOT NULL, resolved_at TEXT,
+     failure_json TEXT NOT NULL CHECK (length(failure_json) <= 8192), updated_at TEXT NOT NULL,
      UNIQUE(session_id, run_id)
     );
     CREATE INDEX session_failures_latest ON session_failures(session_id, updated_at DESC);
@@ -216,6 +216,18 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
     );
     CREATE INDEX group_stall_evidence_recent ON group_stall_evidence(group_id, updated_at DESC);
     CREATE UNIQUE INDEX group_stall_evidence_fingerprint ON group_stall_evidence(group_id, COALESCE(member_id, ''), COALESCE(request_id, ''), fingerprint);`,
+  // Repair databases already at v11 while also upgrading fresh/revised v11 schemas.
+  (db) => {
+    const failureColumns = db.prepare('PRAGMA table_info(session_failures)').all() as { name: string }[];
+    if (!failureColumns.some((column) => column.name === 'resolved_at')) {
+      db.exec('ALTER TABLE session_failures ADD COLUMN resolved_at TEXT');
+    }
+    db.exec(`CREATE TABLE group_recovery_deliveries (
+      source_delivery_id TEXT PRIMARY KEY REFERENCES group_deliveries(id),
+      successor_delivery_id TEXT NOT NULL UNIQUE REFERENCES group_deliveries(id),
+      created_at TEXT NOT NULL
+    );`);
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

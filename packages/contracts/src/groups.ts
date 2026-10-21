@@ -75,6 +75,7 @@ export interface GroupDelivery {
   /** Coordinator authority generation captured when this delivery was claimed. */
   coordinatorEpoch?: number;
   failure?: import('./resilience').ProviderFailure;
+  recoveredByDeliveryId?: string;
   status: 'queued' | 'running' | 'completed' | 'failed' | 'interrupted' | 'cancelled';
   runId: string | null; hop: number; error: string | null; createdAt: string; updatedAt: string;
 }

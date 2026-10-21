@@ -28,7 +28,8 @@ export type GroupRecoveryPolicy = z.infer<typeof GroupRecoveryPolicySchema>;
 export const GroupRecoveryStateSchema = z.object({
   status: z.enum(['healthy', 'degraded', 'paused', 'recovering']), reason: z.string().max(1000).optional(),
   lastFailureId: z.string().max(100).optional(), updatedAt: z.string().max(40).optional(), activeRequestId: z.string().max(100).optional(),
-  pendingCheckpointId: z.string().max(100).optional(), acknowledgedDeliveryIds: z.array(z.string().max(100)).max(100).optional(),
+  pendingCheckpointId: z.string().max(100).optional(), acknowledgedCheckpointId: z.string().max(100).optional(),
+  acknowledgedDeliveryIds: z.array(z.string().max(100)).max(100).optional(),
 }).strict();
 export type GroupRecoveryState = z.infer<typeof GroupRecoveryStateSchema>;
 
@@ -64,7 +65,7 @@ const RecoveryActionBase = { idempotencyKey: z.string().min(1).max(100) };
 export const RecoveryActionRequestSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('retry-delivery'), deliveryId: z.string().min(1).max(100), checkpointId: z.string().min(1).max(100).optional(), approachNote: z.string().max(1000).optional(), ...RecoveryActionBase }).strict(),
   z.object({ action: z.literal('fallback-delivery'), deliveryId: z.string().min(1).max(100), replacementMemberId: z.string().min(1).max(100), checkpointId: z.string().min(1).max(100).optional(), ...RecoveryActionBase }).strict(),
-  z.object({ action: z.literal('replace-coordinator'), replacementMemberId: z.string().min(1).max(100), checkpointId: z.string().min(1).max(100).optional(), ...RecoveryActionBase }).strict(),
+  z.object({ action: z.literal('replace-coordinator'), replacementMemberId: z.string().min(1).max(100), requestId: z.string().min(1).max(100).optional(), checkpointId: z.string().min(1).max(100).optional(), ...RecoveryActionBase }).strict(),
   z.object({ action: z.literal('pause-for-human'), deliveryId: z.string().min(1).max(100).optional(), reason: z.string().min(1).max(1000), ...RecoveryActionBase }).strict(),
   z.object({ action: z.literal('acknowledge-checkpoint'), checkpointId: z.string().min(1).max(100), ...RecoveryActionBase }).strict(),
   z.object({ action: z.literal('resume'), ...RecoveryActionBase }).strict(),
