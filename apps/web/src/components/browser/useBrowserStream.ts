@@ -90,12 +90,13 @@ export function useBrowserStream(sessionId: string | undefined, tabId: string | 
       try {
         bitmap = await createImageBitmap(blob);
         if (disposed || socketRef.current !== socket) return;
+        const { width, height } = bitmap;
         const target = canvasRef.current;
         if (target) {
-          if (target.width !== bitmap.width || target.height !== bitmap.height) { target.width = bitmap.width; target.height = bitmap.height; }
+          if (target.width !== width || target.height !== height) { target.width = width; target.height = height; }
           target.getContext('2d')?.drawImage(bitmap, 0, 0);
         }
-        setFrameSize((previous) => (previous && previous.width === bitmap!.width && previous.height === bitmap!.height ? previous : { width: bitmap!.width, height: bitmap!.height }));
+        setFrameSize((previous) => (previous && previous.width === width && previous.height === height ? previous : { width, height }));
       } catch {
         if (!disposed && socketRef.current === socket) showError('A browser frame could not be decoded.');
       } finally {
