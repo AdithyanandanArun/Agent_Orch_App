@@ -82,8 +82,9 @@ describe('provider runs', () => {
     await waitFor(() => t.fake.runs.length === 1);
     expect(t.fake.runs).toHaveLength(1);
     gate.resolve();
-    await waitFor(async () => (await session(t)).status === 'idle');
-    expect((await t.api('POST', url, { content: 'again' })).status).toBe(202); // allowed after completion
+    await waitFor(async () => (await session(t)).status === 'idle' && t.app.runtime.activeCount() === 0);
+    const next = await t.api('POST', url, { content: 'again' });
+    expect(next.status).toBe(202); // allowed after completion
     await waitFor(async () => t.fake.runs.length === 2);
   });
 
@@ -131,15 +132,18 @@ describe('provider runs', () => {
   it('records adapter failures (sync and async) with redacted errors and lets the session run again', async () => {
     const t = await boot();
     t.fake.script = async () => { throw new Error('boom sk-ant-api03-SECRETSECRETSECRET'); };
-    await t.api('POST', `/api/sessions/${EXAMPLE_CONTRACT_SESSION_ID}/messages`, { content: 'go' });
-    await waitFor(async () => (await session(t)).status === 'error');
+    const url = `/api/sessions/${EXAMPLE_CONTRACT_SESSION_ID}/messages`;
+    const first = await t.api('POST', url, { content: 'go' });
+    expect(first.status).toBe(202);
+    await waitFor(async () => (await session(t)).status === 'error' && t.app.runtime.activeCount() === 0);
     const failed = await session(t);
     expect(failed.error).toContain('boom');
     expect(failed.error).not.toContain('SECRETSECRET');
     expect((await messages(t)).some((m) => m.kind === 'error')).toBe(true);
     t.fake.createAdapter = () => { throw new Error('no adapter'); };
-    await t.api('POST', `/api/sessions/${EXAMPLE_CONTRACT_SESSION_ID}/messages`, { content: 'again' });
-    await waitFor(async () => (await session(t)).error === 'no adapter');
+    const second = await t.api('POST', url, { content: 'again' });
+    expect(second.status).toBe(202);
+    await waitFor(async () => (await session(t)).error === 'no adapter' && t.app.runtime.activeCount() === 0);
     expect((await session(t)).status).toBe('error');
   });
 

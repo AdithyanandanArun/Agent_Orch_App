@@ -34,13 +34,15 @@ describe('handoffs', () => {
     const t = await boot();
     const from = await sessionOf(t, EXAMPLE_CONTRACT_SESSION_ID);
     await t.api('POST', '/api/handoffs', { fromSessionId: from.id, toSessionId: EXAMPLE_CLIENT_SESSION_ID, path: EXAMPLE_ARTIFACT_PATH, revision: 'HEAD' });
-    await t.api('POST', `/api/sessions/${EXAMPLE_CLIENT_SESSION_ID}/messages`, { content: 'Build the client' });
+    const first = await t.api('POST', `/api/sessions/${EXAMPLE_CLIENT_SESSION_ID}/messages`, { content: 'Build the client' });
+    expect(first.status).toBe(202);
     await waitFor(() => t.fake.runs.length === 1);
     expect(t.fake.runs[0]!.prompt).toContain('handoff:');
     expect(t.fake.runs[0]!.prompt).toContain('Example Users API');
     expect(t.fake.runs[0]!.prompt.endsWith('Build the client')).toBe(true);
-    await waitFor(async () => (await sessionOf(t, EXAMPLE_CLIENT_SESSION_ID)).status === 'idle');
-    await t.api('POST', `/api/sessions/${EXAMPLE_CLIENT_SESSION_ID}/messages`, { content: 'Continue' });
+    await waitFor(async () => (await sessionOf(t, EXAMPLE_CLIENT_SESSION_ID)).status === 'idle' && t.app.runtime.activeCount() === 0);
+    const second = await t.api('POST', `/api/sessions/${EXAMPLE_CLIENT_SESSION_ID}/messages`, { content: 'Continue' });
+    expect(second.status).toBe(202);
     await waitFor(() => t.fake.runs.length === 2);
     expect(t.fake.runs[1]!.prompt).toBe('Continue');
     // The stored user message is what the human typed, not the composed prompt.
