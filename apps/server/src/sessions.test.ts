@@ -125,7 +125,7 @@ describe('provider runs', () => {
     expect(t.app.runtime.interrupt(EXAMPLE_CONTRACT_SESSION_ID)).toBe(true);
     await waitFor(async () => (await session(t)).status === 'interrupted');
     expect(t.fake.runs).toHaveLength(0);
-    expect(t.app.runtime.activeCount()).toBe(0);
+    await waitFor(() => t.app.runtime.activeCount() === 0);
   });
 
   it('records adapter failures (sync and async) with redacted errors and lets the session run again', async () => {

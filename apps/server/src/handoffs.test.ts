@@ -53,10 +53,11 @@ describe('handoffs', () => {
     const from = await sessionOf(t, EXAMPLE_CONTRACT_SESSION_ID);
     await t.api('POST', '/api/handoffs', { fromSessionId: from.id, toSessionId: EXAMPLE_CLIENT_SESSION_ID, path: EXAMPLE_ARTIFACT_PATH, revision: 'HEAD' });
     t.fake.script = async () => { throw new Error('cli missing'); };
-    await t.api('POST', `/api/sessions/${EXAMPLE_CLIENT_SESSION_ID}/messages`, { content: 'first' });
+    expect((await t.api('POST', `/api/sessions/${EXAMPLE_CLIENT_SESSION_ID}/messages`, { content: 'first' })).status).toBe(202);
     await waitFor(async () => (await sessionOf(t, EXAMPLE_CLIENT_SESSION_ID)).status === 'error');
+    await waitFor(() => t.app.runtime.activeCount() === 0);
     t.fake.script = async () => undefined;
-    await t.api('POST', `/api/sessions/${EXAMPLE_CLIENT_SESSION_ID}/messages`, { content: 'second' });
+    expect((await t.api('POST', `/api/sessions/${EXAMPLE_CLIENT_SESSION_ID}/messages`, { content: 'second' })).status).toBe(202);
     await waitFor(() => t.fake.runs.length === 2);
     expect(t.fake.runs[1]!.prompt).toContain('Example Users API');
   });
