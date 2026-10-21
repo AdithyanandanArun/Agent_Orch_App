@@ -127,11 +127,29 @@ export function RecoveryPanel({ snapshot, sessions, runs, tasks }: {
   const pendingCheckpointId = group.recoveryState?.pendingCheckpointId;
   const acknowledgedGroupCheckpointId = request && group.recoveryState?.activeRequestId === request.id
     ? group.recoveryState.acknowledgedCheckpointId : undefined;
-  const checkpointAcknowledgementRequired = Boolean(visibleFailure?.outcomeUnknown && (
-    !acknowledgedGroupCheckpointId || (pendingCheckpointId && pendingCheckpointId !== acknowledgedGroupCheckpointId)
+  const failureRequiresGroupCheckpoint = Boolean(visibleFailure && (
+    visibleFailure.outcomeUnknown || visibleFailure.dispatchState === 'unknown' || visibleFailure.continuationSafety !== 'safe'
   ));
-  const actionCheckpointId = visibleFailure?.outcomeUnknown && !checkpointAcknowledgementRequired
+  const replacementMember = members.find((candidate) => candidate.id === replacementMemberId);
+  const replacementSession = replacementMember ? sessions.find((item) => item.id === replacementMember.sessionId) : undefined;
+  const reassignmentCrossesWorktrees = replacementMemberId !== 'none' && (
+    !session || !replacementSession || session.worktreePath !== replacementSession.worktreePath
+  );
+  const reassignRequiresGroupCheckpoint = failureRequiresGroupCheckpoint || reassignmentCrossesWorktrees;
+  const acknowledgedForDelivery = !affectedDelivery || Boolean(group.recoveryState?.acknowledgedDeliveryIds?.includes(affectedDelivery.id));
+  const acknowledgedForCurrentScope = Boolean(
+    request && group.recoveryState?.activeRequestId === request.id
+    && acknowledgedGroupCheckpointId && acknowledgedForDelivery
+    && (!pendingCheckpointId || pendingCheckpointId === acknowledgedGroupCheckpointId),
+  );
+  const retryCheckpointAcknowledgementRequired = failureRequiresGroupCheckpoint && !acknowledgedForCurrentScope;
+  const reassignCheckpointAcknowledgementRequired = reassignRequiresGroupCheckpoint && !acknowledgedForCurrentScope;
+  const retryCheckpointId = failureRequiresGroupCheckpoint && !retryCheckpointAcknowledgementRequired
     ? acknowledgedGroupCheckpointId : undefined;
+  const reassignCheckpointId = reassignRequiresGroupCheckpoint && !reassignCheckpointAcknowledgementRequired
+    ? acknowledgedGroupCheckpointId : undefined;
+  const outcomeMayBeUnknown = Boolean(visibleFailure?.outcomeUnknown || visibleFailure?.dispatchState === 'unknown');
+  const failureNeedsHumanReview = Boolean(outcomeMayBeUnknown || (visibleFailure && visibleFailure.continuationSafety !== 'safe'));
   const currentRun = affectedDelivery?.runId ? recordedRuns.find((run) => run.id === affectedDelivery.runId) : undefined;
   const assignmentEvidence = snapshot.assignments
     .filter((assignment) => !affectedDelivery || assignment.deliveryId === affectedDelivery.id)
@@ -162,9 +180,9 @@ export function RecoveryPanel({ snapshot, sessions, runs, tasks }: {
   const retryScope = `retry:${affectedDelivery?.id ?? 'none'}:${failureKey}`;
   const reassignScope = `reassign:${affectedDelivery?.id ?? member?.id ?? 'none'}:${replacementMemberId}:${failureKey}`;
   const askScope = `ask:${request?.id ?? group.id}`;
-  const ackScope = `ack:${pendingCheckpointId ?? 'none'}`;
-  const canRetry = Boolean(affectedDelivery && !deliveryBusy && !affectedBusy && !checkpointAcknowledgementRequired);
-  const canReassign = Boolean(replacementAllowed && !deliveryBusy && !affectedBusy && plannerRequestAvailable && !checkpointAcknowledgementRequired && (affectedDelivery || hasLeadFailure));
+  const ackScope = `ack:${request?.id ?? group.id}:${affectedDelivery?.id ?? 'request'}:${pendingCheckpointId ?? 'none'}`;
+  const canRetry = Boolean(affectedDelivery && !deliveryBusy && !affectedBusy && !retryCheckpointAcknowledgementRequired);
+  const canReassign = Boolean(replacementAllowed && !deliveryBusy && !affectedBusy && plannerRequestAvailable && !reassignCheckpointAcknowledgementRequired && (affectedDelivery || hasLeadFailure));
   const reassignLabel = hasLeadFailure
     ? group.mode === 'cowork' ? 'Replace planner' : group.mode === 'current-leads' ? 'Replace lead · switch to Orchestrated' : 'Replace coordinator'
     : 'Reassign';
@@ -232,7 +250,16 @@ export function RecoveryPanel({ snapshot, sessions, runs, tasks }: {
   const failureClass = visibleFailure ? failureName[visibleFailure.kind] : null;
   const retryAt = visibleFailure?.retryAt && Number.isFinite(Date.parse(visibleFailure.retryAt)) ? when(visibleFailure.retryAt) : null;
   const actionWhy = !online ? 'Reconnect to Mingle first.' : actionLocked ? 'Another group action is in progress.' : undefined;
-  const checkpointReviewWhy = checkpointAcknowledgementRequired ? 'Ask me, then acknowledge this request’s group checkpoint before retrying an operation with an unknown outcome.' : undefined;
+  const checkpointScopeLabel = affectedDelivery ? 'request and delivery’s group checkpoint' : 'request’s group checkpoint';
+  const retryCheckpointReviewWhy = retryCheckpointAcknowledgementRequired ? `Ask me, then acknowledge this ${checkpointScopeLabel} before retrying.` : undefined;
+  const reassignCheckpointReviewWhy = reassignCheckpointAcknowledgementRequired
+    ? reassignmentCrossesWorktrees
+      ? `This reassignment crosses worktrees. Ask me, then acknowledge this ${checkpointScopeLabel} before reassigning.`
+      : `Ask me, then acknowledge this ${checkpointScopeLabel} before reassigning.`
+    : undefined;
+  const checkpointGuidance = retryCheckpointReviewWhy && reassignCheckpointReviewWhy
+    ? `Acknowledge this ${checkpointScopeLabel} before retrying or reassigning.`
+    : retryCheckpointReviewWhy ?? reassignCheckpointReviewWhy;
   const sessionBusyWhy = affectedBusy || deliveryBusy ? 'Wait for the affected member’s run or queued delivery to settle.' : undefined;
   const detailRows = checkpoint ? [
     ...checkpoint.pendingApprovals.map((approval) => `Approval pending: ${approval.tool} — ${approval.description}`),
@@ -251,29 +278,31 @@ export function RecoveryPanel({ snapshot, sessions, runs, tasks }: {
       {visibleFailure ? <div className="recovery-panel__failure" aria-label="Provider failure details">
         <span>{failureClass}</span>
         {visibleFailure.providerCode ? <code>{visibleFailure.providerCode}</code> : null}
-        {visibleFailure.outcomeUnknown ? <strong>Operation result unknown — review the workspace before repeating it.</strong> : null}
+        {outcomeMayBeUnknown ? <strong>Operation result unknown — review the workspace before repeating it.</strong> : null}
         {visibleFailure.safeToRetry === true ? <small>Provider marked this attempt safe to retry.</small> : visibleFailure.safeToRetry === false ? <small>Provider marked replay unsafe.</small> : <small>Retry safety was not reported.</small>}
         {retryAt ? <small>Provider retry time: {retryAt}</small> : null}
         {visibleFailure.quotaPool ? <small>Reported quota pool: {visibleFailure.quotaPool}</small> : null}
       </div> : null}
       <div className="recovery-panel__summary">
         <div><span>Latest checkpoint</span><strong>{loading ? 'Checking…' : checkpoint ? `${checkpoint.reason} · ${when(checkpoint.capturedAt)}` : 'Not recorded'}</strong></div>
-        {checkpoint?.objective ? <div><span>Objective</span><p>{checkpoint.objective}</p></div> : null}
-        <div><span>Workspace</span><strong>{checkpoint ? checkpoint.worktree.statusKnown !== true ? 'Status unknown' : checkpoint.worktree.isRepository ? 'Repository status recorded' : 'Not a Git repository' : 'Checkpoint unavailable'}</strong>
-          {checkpoint?.worktree.path ? <small title={checkpoint.worktree.path}>{shortPath(checkpoint.worktree.path, 4)}{checkpoint.worktree.branch ? ` · ${checkpoint.worktree.branch}` : ''}{checkpoint.worktree.head ? ` · ${checkpoint.worktree.head.slice(0, 8)}` : ''}</small> : null}
-          {checkpoint?.worktree.statusKnown === true ? <small>{checkpoint.worktree.dirtyPaths.length}{checkpoint.worktree.dirtyPathsTruncated ? '+' : ''} changed path{checkpoint.worktree.dirtyPaths.length === 1 ? '' : 's'} recorded</small> : null}
-        </div>
-        <div><span>Remaining work</span>{remainingTasks.length ? <ul className="recovery-panel__tasks">{remainingTasks.slice(0, 5).map((task) => <li key={task.id}><strong>{task.title}</strong><small>{task.state}</small></li>)}</ul> : <p>{checkpoint ? 'No unfinished task state is listed in this checkpoint.' : relatedTasks.length ? 'No unfinished assigned task state is recorded.' : 'Remaining tasks are not recorded.'}</p>}</div>
-        <div className="recovery-panel__usage"><span>Recorded request usage</span>
-          <strong>{request ? `${request.turnsUsed} durable turns` : 'Turn count not recorded'} · {groupRunIds.size} run IDs linked to deliveries</strong>
-          <small>{recordedRuns.length} run records available{recordedRuns.length < groupRunIds.size ? ' · partial snapshot' : ''} · summed final run duration: {recordedDurationRuns.length ? `${formatDuration(knownRunDuration)} across ${recordedDurationRuns.length} recorded durations` : 'not recorded'}</small>
-          <small>{requestElapsedLabel}.</small>
-          <small>Group cost is unknown; provider costs are not reported as a group total.</small>
-        </div>
       </div>
       {pendingCheckpointId ? <p className="recovery-panel__checkpoint" role="status">A batch checkpoint is waiting for acknowledgement: <code>{pendingCheckpointId}</code></p> : null}
-      {checkpoint || detailRows.length || assignmentEvidence.length ? <details className="recovery-panel__details">
+      {checkpoint || request || relatedTasks.length || assignmentEvidence.length ? <details className="recovery-panel__details">
         <summary>Checkpoint details and recorded evidence</summary>
+        <div className="recovery-panel__summary">
+          {checkpoint?.objective ? <div><span>Objective</span><p>{checkpoint.objective}</p></div> : null}
+          <div><span>Workspace</span><strong>{checkpoint ? checkpoint.worktree.statusKnown !== true ? 'Status unknown' : checkpoint.worktree.isRepository ? 'Repository status recorded' : 'Not a Git repository' : 'Checkpoint unavailable'}</strong>
+            {checkpoint?.worktree.path ? <small title={checkpoint.worktree.path}>{shortPath(checkpoint.worktree.path, 4)}{checkpoint.worktree.branch ? ` · ${checkpoint.worktree.branch}` : ''}{checkpoint.worktree.head ? ` · ${checkpoint.worktree.head.slice(0, 8)}` : ''}</small> : null}
+            {checkpoint?.worktree.statusKnown === true ? <small>{checkpoint.worktree.dirtyPaths.length}{checkpoint.worktree.dirtyPathsTruncated ? '+' : ''} changed path{checkpoint.worktree.dirtyPaths.length === 1 ? '' : 's'} recorded</small> : null}
+          </div>
+          <div><span>Remaining work</span>{remainingTasks.length ? <ul className="recovery-panel__tasks">{remainingTasks.slice(0, 5).map((task) => <li key={task.id}><strong>{task.title}</strong><small>{task.state}</small></li>)}</ul> : <p>{checkpoint ? 'No unfinished task state is listed in this checkpoint.' : relatedTasks.length ? 'No unfinished assigned task state is recorded.' : 'Remaining tasks are not recorded.'}</p>}</div>
+          <div className="recovery-panel__usage"><span>Request elapsed time</span>
+            <strong>{requestElapsedLabel}</strong>
+            <small>Recorded request usage: {request ? `${request.turnsUsed} durable turns` : 'turn count not recorded'} · {groupRunIds.size} run IDs linked to deliveries</small>
+            <small>{recordedRuns.length} run records available{recordedRuns.length < groupRunIds.size ? ' · partial snapshot' : ''} · summed final run duration: {recordedDurationRuns.length ? `${formatDuration(knownRunDuration)} across ${recordedDurationRuns.length} recorded durations` : 'not recorded'}</small>
+            <small>Group cost is unknown; provider costs are not reported as a group total.</small>
+          </div>
+        </div>
         {checkpoint ? <>
           {checkpoint.worktree.statusKnown === true && checkpoint.worktree.dirtyPaths.length ? <div><strong>Changed paths recorded</strong><ul>{checkpoint.worktree.dirtyPaths.slice(0, 6).map((path) => <li key={path}><code>{path}</code></li>)}</ul>{checkpoint.worktree.dirtyPathsTruncated ? <small>Path list truncated.</small> : null}</div> : null}
           {checkpoint.artifacts.length ? <div><strong>Artifacts referenced</strong><ul>{checkpoint.artifacts.slice(0, 6).map((artifact) => <li key={artifact.id}><code>{artifact.path}</code> · <code>{artifact.revision.slice(0, 12)}</code></li>)}</ul></div> : null}
@@ -286,21 +315,23 @@ export function RecoveryPanel({ snapshot, sessions, runs, tasks }: {
       {loadError ? <InlineError onRetry={() => setReload((value) => value + 1)}>Could not load the latest recovery checkpoint: {loadError}</InlineError> : null}
       {!checkpoint && !loading && session ? <Button size="sm" variant="ghost" disabled={!online || affectedBusy || actionLocked} why={actionWhy ?? sessionBusyWhy ?? 'The server is offline.'} busy={busyAction === 'checkpoint'} onClick={() => void createCheckpoint()}>Save checkpoint</Button> : null}
       <div className="recovery-panel__actions">
-        {affectedDelivery ? <Button size="sm" disabled={!canRetry || actionLocked || !online || completedAction.current === retryScope} why={checkpointReviewWhy ?? sessionBusyWhy ?? actionWhy ?? 'No failed or interrupted delivery to retry.'} busy={busyAction === retryScope} onClick={() => void performAction(retryScope, (idempotencyKey) => ({
-          action: 'retry-delivery', deliveryId: affectedDelivery.id, ...(actionCheckpointId ? { checkpointId: actionCheckpointId } : {}),
+        {affectedDelivery ? <Button size="sm" disabled={!canRetry || actionLocked || !online || completedAction.current === retryScope} why={retryCheckpointReviewWhy ?? sessionBusyWhy ?? actionWhy ?? 'No failed or interrupted delivery to retry.'} busy={busyAction === retryScope} onClick={() => void performAction(retryScope, (idempotencyKey) => ({
+          action: 'retry-delivery', deliveryId: affectedDelivery.id, ...(retryCheckpointId ? { checkpointId: retryCheckpointId } : {}),
           approachNote: 'Use a different approach. Inspect the current workspace and saved checkpoint, preserve completed work, and continue only what remains.', idempotencyKey,
         }))}>Retry with new approach</Button> : null}
         {(affectedDelivery || hasLeadFailure) ? <div className="recovery-panel__reassign">
-           <SelectMenu label="Reassign to member" value={replacementMemberId} displayValue={replacementMemberId === 'none' ? 'Choose member' : undefined} disabled={actionLocked || !online || replacementChoices.length === 0} options={[{ value: 'none', label: 'Choose member', disabled: true }, ...replacementChoices]} onChange={(value) => { setReplacementMemberId(value); setActionError(null); setActionMessage(null); }} />
-          <small className="recovery-panel__muted">The selected member’s existing conversation and workspace are used; source partial edits remain intact and checkpoint/dirty-path references are retained. No files are copied or merged, and permissions do not change.</small>
-          {hasLeadFailure && group.mode === 'cowork' ? <small className="recovery-panel__muted">Only this request’s planner is replaced; the other Cowork peers remain.</small> : null}
-          {hasLeadFailure && group.mode === 'current-leads' ? <small className="recovery-panel__muted">This switches the group to Orchestrated mode; the original anchor and history remain.</small> : null}
-          <Button size="sm" disabled={!canReassign || actionLocked || !online || completedAction.current === reassignScope} why={checkpointReviewWhy ?? sessionBusyWhy ?? actionWhy ?? (!plannerRequestAvailable ? 'The active Cowork request is unavailable, so its planner cannot be replaced safely.' : replacementChoices.length ? 'Choose an available existing member.' : 'No eligible existing member is available.')} busy={busyAction === reassignScope} onClick={() => void performAction(reassignScope, (idempotencyKey) => {
-            if (!hasLeadFailure) return { action: 'fallback-delivery', deliveryId: affectedDelivery!.id, replacementMemberId, ...(actionCheckpointId ? { checkpointId: actionCheckpointId } : {}), idempotencyKey };
+          <SelectMenu label="Reassign to member" value={replacementMemberId} displayValue={replacementMemberId === 'none' ? 'Choose member' : undefined} disabled={actionLocked || !online || replacementChoices.length === 0} options={[{ value: 'none', label: 'Choose member', disabled: true }, ...replacementChoices]} onChange={(value) => { setReplacementMemberId(value); setActionError(null); setActionMessage(null); }} />
+          <div className="recovery-panel__reassign-guidance">
+            <small className="recovery-panel__muted">The selected member’s existing conversation and workspace are used; source partial edits remain intact and checkpoint/dirty-path references are retained. No files are copied or merged, and permissions do not change.</small>
+            {hasLeadFailure && group.mode === 'cowork' ? <small className="recovery-panel__muted">Only this request’s planner is replaced; the other Cowork peers remain.</small> : null}
+            {hasLeadFailure && group.mode === 'current-leads' ? <small className="recovery-panel__muted">This switches the group to Orchestrated mode; the original anchor and history remain.</small> : null}
+          </div>
+          <Button size="sm" disabled={!canReassign || actionLocked || !online || completedAction.current === reassignScope} why={reassignCheckpointReviewWhy ?? sessionBusyWhy ?? actionWhy ?? (!plannerRequestAvailable ? 'The active Cowork request is unavailable, so its planner cannot be replaced safely.' : replacementChoices.length ? 'Choose an available existing member.' : 'No eligible existing member is available.')} busy={busyAction === reassignScope} onClick={() => void performAction(reassignScope, (idempotencyKey) => {
+            if (!hasLeadFailure) return { action: 'fallback-delivery', deliveryId: affectedDelivery!.id, replacementMemberId, ...(reassignCheckpointId ? { checkpointId: reassignCheckpointId } : {}), idempotencyKey };
             const action: Extract<ApiRecoveryActionRequest, { action: 'replace-coordinator' }> = {
               action: 'replace-coordinator', replacementMemberId,
               ...(group.mode === 'cowork' && plannerRequest ? { requestId: plannerRequest.id } : {}),
-              ...(actionCheckpointId ? { checkpointId: actionCheckpointId } : {}), idempotencyKey,
+              ...(reassignCheckpointId ? { checkpointId: reassignCheckpointId } : {}), idempotencyKey,
             };
             return action;
           })}>{reassignLabel}</Button>
@@ -310,7 +341,8 @@ export function RecoveryPanel({ snapshot, sessions, runs, tasks }: {
         }))}>Ask me</Button>
         {pendingCheckpointId ? <Button size="sm" variant="secondary" disabled={!online || actionLocked || completedAction.current === ackScope} why={actionWhy ?? undefined} busy={busyAction === ackScope} onClick={() => void performAction(ackScope, (idempotencyKey) => ({ action: 'acknowledge-checkpoint', checkpointId: pendingCheckpointId, idempotencyKey }))}>Acknowledge checkpoint</Button> : null}
       </div>
-      {visibleFailure?.outcomeUnknown ? <p className="recovery-panel__risk" role="note">The result of the last operation is unknown. Inspect the current workspace before retrying or reassigning.</p> : null}
+      {checkpointGuidance ? <p className="recovery-panel__checkpoint-review" role="note">{checkpointGuidance}</p> : null}
+      {failureNeedsHumanReview ? <p className="recovery-panel__risk" role="note">{outcomeMayBeUnknown ? 'The result of the last operation is unknown. Inspect the current workspace before retrying or reassigning.' : `Provider continuation safety is ${visibleFailure?.continuationSafety}. Acknowledge the request’s group checkpoint before retrying or reassigning.`}</p> : null}
       {!online ? <p className="recovery-panel__muted" role="status">Reconnect to Mingle before taking a recovery action.</p> : null}
       {actionError ? <InlineError>{actionError}</InlineError> : null}
       {actionMessage ? <p className="recovery-panel__success" role="status">{actionMessage}</p> : null}
