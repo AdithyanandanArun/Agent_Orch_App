@@ -1348,8 +1348,9 @@ export class GroupService {
       acknowledgedDeliveryIds: merged, acknowledgedCheckpointId: checkpoint.id, updatedAt: nowIso(),
     } as GroupRecoveryState });
     this.event(group, 'group.checkpoint.acknowledged', 'Recovery checkpoint acknowledged', { checkpointId, kind: checkpoint.kind, deliveryIds: deliveryIds.slice(0, 20) });
-    if (acknowledged.kind === 'supervised-batch' && acknowledged.payload.mode === 'supervised') {
-      this.queueSupervisedBatchContinuation(group, acknowledged);
+    if (acknowledged.kind === 'supervised-batch'
+      && (acknowledged.payload.mode === 'supervised' || acknowledged.payload.mode === 'balanced')) {
+      this.queueAcknowledgedBatchContinuation(group, acknowledged);
     }
   }
 
@@ -1363,15 +1364,18 @@ export class GroupService {
     this.repo.updateGroup(group.id, { paused: false, pauseReason: null });
   }
 
-  private queueSupervisedBatchContinuation(group: ConversationGroup, checkpoint: GroupRecoveryCheckpointRow): boolean {
+  private queueAcknowledgedBatchContinuation(group: ConversationGroup, checkpoint: GroupRecoveryCheckpointRow): boolean {
     const requestIdArg = checkpoint.requestId;
     const request = requestIdArg ? this.repo.getRequest(requestIdArg) : undefined;
     if (!request || request.groupId !== group.id || request.status === 'completed') return false;
     const planner = this.repo.getMember(request.plannerMemberId);
     if (!planner || planner.groupId !== group.id || planner.removedAt) return false;
-    const existing = this.repo.requestDeliveries(request.id, OPEN_DELIVERY).some((delivery) => delivery.groupId === group.id && delivery.memberId === planner.id
+    const queued = this.repo.requestDeliveries(request.id, ['queued']).find((delivery) => delivery.groupId === group.id && delivery.memberId === planner.id
       && (delivery.kind === 'request' || delivery.kind === 'result'));
-    if (existing) return true;
+    if (queued) {
+      this.refreshRequest(request.id);
+      return true;
+    }
 
     const sourceDeliveryIds = Array.isArray(checkpoint.payload.deliveryIds)
       ? checkpoint.payload.deliveryIds.filter((id): id is string => typeof id === 'string').slice(0, 100) : [];
@@ -1390,11 +1394,13 @@ export class GroupService {
     }
     const nextScope = Array.isArray(checkpoint.payload.nextScope)
       ? checkpoint.payload.nextScope.filter((scope): scope is string => typeof scope === 'string').slice(0, 40).map((scope) => clean(scope, 300)) : [];
+    const mode = checkpoint.payload.mode === 'supervised' ? 'supervised' : 'balanced';
+    const checkpointLabel = mode === 'supervised' ? 'supervised delegation batch' : 'balanced scope expansion';
     const hop = Math.max(0, ...[...sourceDeliveries.values()].map((delivery) => delivery.hop)) + 1;
     const turnLimit = effectiveTurnLimit(group);
     const committed = request.turnsUsed + this.repo.requestDeliveries(request.id, ['queued']).length;
     if (hop > group.maxHops || (turnLimit !== null && committed >= turnLimit)) {
-      const reason = 'The supervised delegation batch was acknowledged, but its next planner turn exceeds the current request limit. Raise the applicable limit and resume; the objective and source scope are retained.';
+      const reason = `The acknowledged ${checkpointLabel} needs another planner turn beyond the current request limit. Raise the applicable limit and resume; the objective and source scope are retained.`;
       this.holdBudgetRecord(group, request.id, reason);
       return false;
     }
@@ -1404,18 +1410,21 @@ export class GroupService {
       const task = this.store.getTask(assignment.taskId);
       return `- ${assignment.taskId} [${task?.status ?? 'missing'}] ${clean(task?.title ?? 'Task unavailable', 160)}; source scope: ${assignment.scope.slice(0, 20).map((scope) => clean(scope, 200)).join(', ') || 'none'}`;
     });
-    const content = truncate(`Continue request ${request.id} after the acknowledged supervised delegation batch. Rebuild the plan from the original objective and current source scope; inspect recorded task and artifact state before acting, and do not repeat assignments or side effects already recorded.\nAcknowledged checkpoint: ${checkpoint.id}\n\nOriginal objective:\n${clean(original, 4000)}\n\nNext source scope:\n${nextScope.map((scope) => `- ${scope}`).join('\n') || '- Re-evaluate from the original objective and completed batch.'}\n\nSource batch assignments:\n${batchContext.join('\n') || '- No source assignments remain available.'}`, 12_000);
+    const content = truncate(`Continue request ${request.id} after the acknowledged ${checkpointLabel}. Rebuild the plan from the original objective and current source scope; inspect recorded task and artifact state before acting, and do not repeat assignments or side effects already recorded.\nAcknowledged checkpoint: ${checkpoint.id}\n\nOriginal objective:\n${clean(original, 4000)}\n\nNext source scope:\n${nextScope.map((scope) => `- ${scope}`).join('\n') || '- Re-evaluate from the original objective and completed batch.'}\n\nSource batch assignments:\n${batchContext.join('\n') || '- No source assignments remain available.'}`, 12_000);
     const message = this.repo.insertMessage({ groupId: group.id, senderMemberId: null, recipients: [planner.id], kind: 'status', requestId: request.id, content });
     const deliveryIdValue = deliveryId();
     this.repo.insertDelivery({ id: deliveryIdValue, groupId: group.id, requestId: request.id, messageId: message.id, memberId: planner.id, kind: 'result', hop, coordinatorEpoch: group.coordinatorEpoch });
-    this.repo.updateRequest(request.id, { status: 'active' });
+    this.refreshRequest(request.id);
     const current = this.repo.getGroup(group.id);
     const recoveryState = current?.recoveryState;
+    const unresolved = this.repo.deliveries(group.id, ['failed', 'interrupted'])
+      .some((delivery) => !delivery.retryable && !this.repo.deliverySuccessor(group.id, delivery.id));
     this.repo.updateGroup(group.id, { recoveryState: {
-      ...(recoveryState ?? {}), status: this.repo.latestPendingRecoveryCheckpoint(group.id) ? 'paused' : 'recovering', activeRequestId: request.id, updatedAt: nowIso(),
+      ...(recoveryState ?? {}), status: group.paused || this.repo.latestPendingRecoveryCheckpoint(group.id) ? 'paused' : unresolved ? 'degraded' : 'recovering',
+      activeRequestId: request.id, updatedAt: nowIso(),
     } as GroupRecoveryState });
-    this.event(group, 'group.checkpoint.continuation', 'Supervised batch continuation queued for the planner', {
-      checkpointId: checkpoint.id, requestId: request.id, deliveryId: deliveryIdValue, sourceScope: nextScope.slice(0, 20),
+    this.event(group, 'group.checkpoint.continuation', `${checkpointLabel[0]!.toUpperCase()}${checkpointLabel.slice(1)} continuation queued for the planner`, {
+      checkpointId: checkpoint.id, requestId: request.id, deliveryId: deliveryIdValue, mode, sourceScope: nextScope.slice(0, 20),
     });
     return true;
   }
@@ -1999,7 +2008,13 @@ export class GroupService {
     this.reserved.set(session.id, d.id);
     let runId: string;
     try {
-      runId = this.runtime.start(session.id, text, { groupDeliveryId: d.id, taskId: assignment?.taskId ?? d.taskId ?? undefined, userMessage: { content: text, kind: 'group-delivery' }, attachmentOwnerKind: 'group_message', attachmentOwnerId: d.messageId, invocation: nativeInvocation });
+      const recoverySource = d.kind === 'result' ? this.repo.deliverySource(group.id, d.id) : undefined;
+      const authoritativeCoordinator = group.mode === 'cowork'
+        ? request.plannerMemberId === member.id
+        : group.orchestratorMemberId === member.id;
+      const attachmentOwnerId = recoverySource && authoritativeCoordinator ? request.messageId : d.messageId;
+      runId = this.runtime.start(session.id, text, { groupDeliveryId: d.id, taskId: assignment?.taskId ?? d.taskId ?? undefined,
+        userMessage: { content: text, kind: 'group-delivery' }, attachmentOwnerKind: 'group_message', attachmentOwnerId, invocation: nativeInvocation });
     } catch (error) {
       this.reserved.delete(session.id);
       const message = clean(errorMessage(error), 500);
@@ -2471,7 +2486,10 @@ export class GroupService {
       if (withinPriorScope) return null;
     }
     const batchIds = latest.map((assignment) => assignment.deliveryId).sort();
-    const keyHash = createHash('sha256').update(JSON.stringify([mode, requestIdArg, batchIds])).digest('hex').slice(0, 20);
+    const fingerprintInput = mode === 'balanced'
+      ? [mode, requestIdArg, batchIds, [...nextScope].sort()]
+      : [mode, requestIdArg, batchIds];
+    const keyHash = createHash('sha256').update(JSON.stringify(fingerprintInput)).digest('hex').slice(0, 20);
     const idempotencyKey = `autonomy:${mode}:${requestIdArg}:${keyHash}`.slice(0, 100);
     const existing = this.repo.getRecoveryCheckpointByKey(group.id, idempotencyKey);
     if (existing?.state === 'acknowledged') return null;
