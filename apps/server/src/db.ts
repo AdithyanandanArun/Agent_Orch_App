@@ -228,8 +228,13 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
       created_at TEXT NOT NULL
     );`);
   },
+  // Migration 13 archives group conversations without deleting their retained history.
   `ALTER TABLE conversation_groups ADD COLUMN archived_at TEXT;
    CREATE INDEX conversation_groups_visible ON conversation_groups(archived_at);`,
+  // Migration 14 is reserved for durable planning and native questions.
+  () => {},
+  `ALTER TABLE messages ADD COLUMN context_refs_json TEXT;
+   ALTER TABLE group_messages ADD COLUMN context_refs_json TEXT;`,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

@@ -68,7 +68,7 @@ interface ActiveCompaction {
   promise: Promise<ContextCompactionResult>;
 }
 
-export interface StartOptions { groupDeliveryId?: string; taskId?: string; userMessage?: { content: string; kind?: string }; skills?: ProviderSkill[]; attachmentIds?: string[]; attachmentOwnerKind?: 'message' | 'group_message'; attachmentOwnerId?: string; invocation?: NativeInvocation }
+export interface StartOptions { groupDeliveryId?: string; taskId?: string; userMessage?: { content: string; kind?: string }; skills?: ProviderSkill[]; attachmentIds?: string[]; attachmentOwnerKind?: 'message' | 'group_message'; attachmentOwnerId?: string; invocation?: NativeInvocation; context?: string; contextRefs?: Message['contextRefs'] }
 
 const MAX_TOOL_CHARS = 20_000;
 const MAX_APPROVAL_INPUT_CHARS = 20_000;
@@ -161,10 +161,10 @@ export class SessionRuntime {
     const run: ActiveRun = {
       id: runId, startedAt: nowIso(), provider: session.provider, tick: performance.now(), tools: new Map(), activityTimer: null,
       sessionId, controller: new AbortController(), closed: false, cleanupPending: false, acceptingTools: false, approvals: new Map(), stream: null, flushTimer: null, consumedHandoffs: handoffs.map((h) => h.id), firstEvent: false, capabilityTokens: [],
-      baseInput: session.inputTokens, baseOutput: session.outputTokens, baseCost: session.costUsd, taskId: options.taskId ?? null, skills: options.skills ?? [], invocation, context: invocation && handoffs.length ? this.composePrompt(handoffs, '') : undefined, attachmentOwnerKind: options.attachmentOwnerKind ?? 'message', attachmentOwnerId: options.attachmentOwnerId, changeBaseline: null, dispatchState: 'unknown', promise: Promise.resolve(),
+      baseInput: session.inputTokens, baseOutput: session.outputTokens, baseCost: session.costUsd, taskId: options.taskId ?? null, skills: options.skills ?? [], invocation, context: [options.context, invocation && handoffs.length ? this.composePrompt(handoffs, '') : undefined].filter(Boolean).join('\n\n') || undefined, attachmentOwnerKind: options.attachmentOwnerKind ?? 'message', attachmentOwnerId: options.attachmentOwnerId, changeBaseline: null, dispatchState: 'unknown', promise: Promise.resolve(),
     };
     this.store.tx(() => {
-      const userMessage = this.store.insertMessage({ sessionId, role: 'user', content: options.userMessage?.content ?? content, kind: options.userMessage?.kind ?? null, runId: run.id });
+      const userMessage = this.store.insertMessage({ sessionId, role: 'user', content: options.userMessage?.content ?? content, kind: options.userMessage?.kind ?? null, runId: run.id, contextRefs: options.contextRefs });
       run.attachmentOwnerId ??= userMessage.id;
       if (options.attachmentIds?.length) {
         if (!this.attachmentService) throw conflict('Attachments are unavailable in this Mingle session.');
@@ -219,14 +219,14 @@ export class SessionRuntime {
       const teamMcp = groupContext ? this.teamMcp?.create(run.id, session, run.controller.signal, groupContext) : undefined;
       if (teamMcp) capabilityTokens.push(teamMcp.token);
       const explicit = run.invocation;
-      const effectivePrompt = explicit ? prompt : groupContext ? `${groupContext.instructions}\n\n${prompt}` : prompt;
+      const effectivePrompt = explicit ? prompt : [groupContext?.instructions, run.context, prompt].filter(Boolean).join('\n\n');
       if (explicit && groupContext) run.context = [run.context, groupContext.instructions].filter(Boolean).join('\n\n');
       const stagedAttachments = this.attachmentService && run.attachmentOwnerId
         ? await this.attachmentService.stage(run.id, run.attachmentOwnerKind ?? 'message', run.attachmentOwnerId)
         : [];
       if (run.controller.signal.aborted) throw conflict('The run was interrupted before the provider started.');
       const runOptions: RunOptions & DispatchAwareOptions = {
-        session, prompt: effectivePrompt, ...(explicit ? { invocation: explicit, context: run.context } : {}), attachments: stagedAttachments, teamMcp, providerTaskState: this.nativeTaskState(session), skills: run.skills, browserMcp, signal: run.controller.signal, settings,
+        session, prompt: effectivePrompt, ...(explicit ? { invocation: explicit, ...(run.context ? { context: run.context } : {}) } : {}), attachments: stagedAttachments, teamMcp, providerTaskState: this.nativeTaskState(session), skills: run.skills, browserMcp, signal: run.controller.signal, settings,
         onEvent: (event) => this.handleEvent(run, capabilityTokens.length ? JSON.parse(scrubCapabilities(JSON.stringify(event))) as AdapterEvent : event),
         requestApproval: (request) => this.requestApproval(run, JSON.parse(scrubCapabilities(JSON.stringify(request)))),
         onDispatchState: (state) => { run.dispatchState = state; },

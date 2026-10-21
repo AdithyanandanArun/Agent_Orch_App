@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { GroupDefaultsSchema } from './groups';
 import { AttachmentIdsSchema } from './attachments';
+import { MessageContextRefsSchema } from './message-context';
 
 import { ProviderSchema, PolicySchema, EffortSchema, ServiceTierSchema } from './provider-config';
 import type { Provider, Policy, Effort } from './provider-config';
@@ -48,7 +49,7 @@ export interface ToolActivity {
   parentId?: string | null; summary?: string; command?: string | null; input?: string; output?: string;
   cwd?: string | null; exitCode?: number | null; processId?: string | null; durationMs?: number | null;
 }
-export interface Message { id: string; sessionId: string; role: 'user' | 'assistant' | 'system' | 'tool'; content: string; createdAt: string; kind?: string; runId?: string; attachments?: import('./attachments').AttachmentRef[] }
+export interface Message { id: string; sessionId: string; role: 'user' | 'assistant' | 'system' | 'tool'; content: string; createdAt: string; kind?: string; runId?: string; attachments?: import('./attachments').AttachmentRef[]; contextRefs?: import('./message-context').MessageContextRef[] }
 export interface Task { id: string; projectId: string; title: string; description: string; acceptanceCriteria: string; sessionId: string | null; dependsOn: string[]; status: TaskStatus; createdAt: string; updatedAt: string; source?: import('./project-context').TaskSource }
 export interface WorkspaceEvent { id: number; projectId: string | null; sessionId: string | null; type: string; summary: string; payload: Record<string, unknown>; createdAt: string }
 export interface Approval { id: string; sessionId: string; tool: string; description: string; input: Record<string, unknown>; status: 'pending' | 'approved' | 'denied'; createdAt: string }
@@ -181,6 +182,7 @@ export const UpdateSessionSchema = z.object({
 export const SendMessageSchema = z.object({
   content: z.string().trim().max(100_000).default(''), skills: z.array(z.string().min(1).max(4096)).max(20).optional(),
   attachmentIds: AttachmentIdsSchema.optional(),
+  contextRefs: MessageContextRefsSchema.optional(),
 }).strict().refine((body) => body.content.length > 0 || (body.attachmentIds?.length ?? 0) > 0, { message: 'Write a message or attach a file', path: ['content'] });
 export const CreateTaskSchema = z.object({ projectId: z.string().min(1), title: z.string().trim().min(1).max(200), description: z.string().max(20_000).default(''), acceptanceCriteria: z.string().max(10_000).default(''), sessionId: z.string().nullable().default(null), dependsOn: z.array(z.string()).max(100).default([]) });
 export const UpdateTaskSchema = z.object({ title: z.string().trim().min(1).max(200).optional(), description: z.string().max(20_000).optional(), acceptanceCriteria: z.string().max(10_000).optional(), sessionId: z.string().nullable().optional(), dependsOn: z.array(z.string()).max(100).optional(), status: z.enum(['backlog', 'ready', 'running', 'blocked', 'review', 'done']).optional() });
@@ -240,5 +242,6 @@ export * from './project-context';
 export * from './groups';
 export * from './resilience';
 export * from './attachments';
+export * from './message-context';
 export * from './native-actions';
 export * from './account';

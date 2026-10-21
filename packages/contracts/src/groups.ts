@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ProviderSchema, PolicySchema, EffortSchema, ServiceTierSchema } from './provider-config';
 import { AttachmentIdsSchema, NativeInvocationInputSchema } from './attachments';
+import { MessageContextRefsSchema } from './message-context';
 import type { AttachmentRef, GroupInvocation } from './attachments';
 import { AutonomyConfigSchema, GroupRecoveryPolicySchema } from './resilience';
 
@@ -39,6 +40,7 @@ export const SendGroupMessageSchema = z.object({
   content: z.string().trim().max(100_000).default(''), recipients: z.array(z.string().min(1).max(100)).min(1).max(8).optional(),
   clientMessageId: z.string().min(1).max(100).optional(),
   attachmentIds: AttachmentIdsSchema.optional(),
+  contextRefs: MessageContextRefsSchema.optional(),
   /** An explicit provider-native command or skill for exactly one member; revalidated against a fresh catalog at dispatch. */
   invocation: NativeInvocationInputSchema.optional(),
 }).strict().refine((body) => body.content.length > 0 || (body.attachmentIds?.length ?? 0) > 0, { message: 'Write a message or attach a file', path: ['content'] });
@@ -61,6 +63,8 @@ export interface GroupMessage {
   sourceRunId: string | null; createdAt: string;
   /** Files the human attached to this message; metadata only. */
   attachments?: AttachmentRef[];
+  /** Explicit bounded file references and quoted assistant excerpts included with this human message. */
+  contextRefs?: import('./message-context').MessageContextRef[];
   /** The validated native command or skill this message addresses to one member. */
   invocation?: Pick<GroupInvocation, 'kind' | 'name' | 'arguments' | 'memberId'>;
 }

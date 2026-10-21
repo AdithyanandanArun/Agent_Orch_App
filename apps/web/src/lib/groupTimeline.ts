@@ -69,8 +69,8 @@ export function buildTimeline({ snapshot, sessions, messages, streams }: {
       type: 'native', key: `n:${message.id}`, at, sessionId: message.sessionId, speaker: bySession.get(message.sessionId) ?? null,
       hidden: message.role === 'user' && message.kind === HIDDEN_NATIVE_KIND,
       message: {
-        id: message.id, role: message.role, content: streamed.length > message.content.length ? streamed : message.content, createdAt: message.createdAt,
-        kind: message.kind, runId: message.runId, live: (Boolean(stream) || message.kind === 'streaming') && session?.status === 'running', attachments: message.attachments,
+        id: message.id, sessionId: message.sessionId, role: message.role, content: streamed.length > message.content.length ? streamed : message.content, createdAt: message.createdAt,
+        kind: message.kind, runId: message.runId, live: (Boolean(stream) || message.kind === 'streaming') && session?.status === 'running', attachments: message.attachments, contextRefs: message.contextRefs,
       },
     });
   }
@@ -79,7 +79,7 @@ export function buildTimeline({ snapshot, sessions, messages, streams }: {
     if (seen.has(id) || !cutoff.has(stream.sessionId) || cutoff.get(stream.sessionId) !== null) continue;
     natives.push({
       type: 'native', key: `n:${id}`, at: LIVE_UNTIL_SETTLED, sessionId: stream.sessionId, speaker: bySession.get(stream.sessionId) ?? null, hidden: false,
-      message: { id, role: 'assistant', content: stream.base + stream.text, createdAt: '', live: sessionById.get(stream.sessionId)?.status === 'running' },
+      message: { id, sessionId: stream.sessionId, role: 'assistant', content: stream.base + stream.text, createdAt: '', live: sessionById.get(stream.sessionId)?.status === 'running' },
     });
   }
   const order = new Map(natives.map((item, index) => [item.key, index]));

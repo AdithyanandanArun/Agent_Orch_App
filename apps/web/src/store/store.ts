@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { mergeTextDelta } from '@mingle/contracts/stream';
-import type { Approval, Bootstrap, GroupSnapshot, Message, Project, ServerEvent, ClientEvent, Session, Task, WorkspaceEvent } from '@mingle/contracts';
+import type { Approval, Bootstrap, GroupSnapshot, Message, MessageContextRef, Project, ServerEvent, ClientEvent, Session, Task, WorkspaceEvent } from '@mingle/contracts';
 import { api, errorMessage } from '../lib/api';
 import { terminalBus } from './terminalBus';
 import { resolveTab, useBrowserStore } from './browser';
@@ -93,6 +93,7 @@ interface MingleState {
 
   streams: Record<string, StreamEntry>;
   drafts: Record<string, string>;
+  contextDrafts: Record<string, MessageContextRef[]>;
   toasts: Toast[];
   terminal: TerminalState;
 
@@ -125,6 +126,7 @@ interface MingleState {
   setCenterTab(key: string): void;
   setMapSelection(id: string | null): void;
   setDraft(sessionId: string, text: string): void;
+  setContextDraft(sessionId: string, refs: MessageContextRef[]): void;
   toast(tone: Toast['tone'], text: string): void;
   dismissToast(id: number): void;
   startTerminal(cols: number, rows: number): void;
@@ -456,6 +458,7 @@ export const useMingle = create<MingleState>((set, get) => {
 
     streams: {},
     drafts: {},
+    contextDrafts: {},
     toasts: [],
     terminal: initialTerminal,
 
@@ -623,6 +626,7 @@ export const useMingle = create<MingleState>((set, get) => {
     setCenterTab: (centerTab) => set({ centerTab }),
     setMapSelection: (mapSelection) => set({ mapSelection }),
     setDraft: (sessionId, text) => set((s) => ({ drafts: { ...s.drafts, [sessionId]: text } })),
+    setContextDraft: (sessionId, refs) => set((s) => ({ contextDrafts: { ...s.contextDrafts, [sessionId]: refs.slice(0, 10) } })),
 
     toast(tone, text) {
       const id = toastSeq++;

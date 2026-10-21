@@ -143,6 +143,38 @@ export async function listDirectory(root: string, input: string | undefined | nu
   return entries;
 }
 
+/** Bounded session-worktree search for the composer file picker. Symlinks are deliberately not traversed here. */
+export async function searchFiles(root: string, query: string): Promise<FileEntry[]> {
+  const needle = query.trim().toLocaleLowerCase();
+  if (!needle || needle.length > 100) return [];
+  const results: FileEntry[] = [];
+  const pending: Array<{ path: string; depth: number }> = [{ path: '', depth: 0 }];
+  let visited = 0;
+  let scanned = 0;
+  while (pending.length && visited < 250 && scanned < 10_000 && results.length < 100) {
+    const current = pending.shift()!;
+    let target: ResolvedPath;
+    try { target = await resolveInside(root, current.path); } catch { continue; }
+    const stat = await fsp.stat(target.real).catch(() => null);
+    if (!stat?.isDirectory()) continue;
+    visited++;
+    const entries = await fsp.readdir(target.real, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      if (++scanned > 10_000) break;
+      if (isDeniedName(entry.name) || entry.isSymbolicLink()) continue;
+      const rel = current.path ? `${current.path}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (entry.name !== 'node_modules' && entry.name !== 'vendor' && current.depth < 8) {
+          if (`${rel}/${entry.name}`.toLocaleLowerCase().includes(needle) || rel.toLocaleLowerCase().includes(needle)) results.push({ path: rel, name: entry.name, type: 'directory' });
+          pending.push({ path: rel, depth: current.depth + 1 });
+        }
+      } else if (entry.isFile() && `${rel}`.toLocaleLowerCase().includes(needle)) results.push({ path: rel, name: entry.name, type: 'file' });
+      if (results.length >= 100) break;
+    }
+  }
+  return results.sort((a, b) => (a.type === b.type ? a.path.localeCompare(b.path) : a.type === 'directory' ? -1 : 1));
+}
+
 export async function readTextFile(root: string, input: string): Promise<{ content: string; path: string }> {
   const target = await resolveInside(root, input);
   if (!target.rel) throw pathError(400, 'Path is a directory');

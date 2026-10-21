@@ -10,6 +10,7 @@ import { Composer } from './Composer';
 import { RunActivity } from './RunActivity';
 import { RunChanges } from './RunChanges';
 import { GitBar } from './git/GitBar';
+import { appendContextReference } from './MessageContextControls';
 
 const EMPTY_RUNS: SessionRun[] = [];
 const EMPTY_TOOL_CALLS: ToolCall[] = [];
@@ -27,11 +28,11 @@ function useSessionMessages(session: Session | undefined): DisplayMessage[] {
       const st = streams[m.id];
       const streamed = st ? st.base + st.text : '';
       const content = streamed.length > m.content.length ? streamed : m.content;
-      out.push({ id: m.id, role: m.role, content, createdAt: m.createdAt, kind: m.kind, runId: m.runId, live: (Boolean(st) || m.kind === 'streaming') && session.status === 'running', attachments: m.attachments });
+      out.push({ id: m.id, sessionId: m.sessionId, role: m.role, content, createdAt: m.createdAt, kind: m.kind, runId: m.runId, live: (Boolean(st) || m.kind === 'streaming') && session.status === 'running', attachments: m.attachments, contextRefs: m.contextRefs });
     }
     for (const [id, st] of Object.entries(streams)) {
       if (st.sessionId !== session.id || seen.has(id)) continue;
-      out.push({ id, role: 'assistant', content: st.base + st.text, createdAt: '', live: session.status === 'running' });
+      out.push({ id, sessionId: session.id, role: 'assistant', content: st.base + st.text, createdAt: '', live: session.status === 'running' });
     }
     return out;
   }, [all, streams, session]);
@@ -151,7 +152,7 @@ function SingleSessionPane() {
             }
             return (
               <Fragment key={m.id}>
-                <MessageRow m={m} provider={session.provider} />
+                <MessageRow m={m} provider={session.provider} onAskAboutThis={(quote) => appendContextReference(session.id, quote)} />
                 {m.role === 'user' ? (runsByUserMessage.get(m.id) ?? []).map(run => <RunActivity key={run.id} run={run} initialCalls={toolCallsByRun.get(run.id) ?? EMPTY_TOOL_CALLS} />) : null}
                 {(changesAfterMessage.get(index) ?? []).filter(run => run.status !== 'running').map(run => <RunChanges key={run.id} runId={run.id} summary={run.changes} />)}
               </Fragment>

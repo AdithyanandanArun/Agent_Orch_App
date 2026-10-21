@@ -3,7 +3,7 @@ import {
   nativeActionCommands, nativeActionSkills,
 } from '@mingle/contracts';
 import type {
-  AddGroupAgent, AgentConfiguration, AutonomyConfig, ConversationGroup, CreateGroup, GroupAssignment, GroupDelivery, GroupMember, GroupMessage, GroupMode,
+  AddGroupAgent, AgentConfiguration, AutonomyConfig, ConversationGroup, CreateGroup, GroupAssignment, GroupDelivery, GroupMember, GroupMessage, GroupMode, MessageContextRef,
   GroupMilestone, GroupRecoveryPolicy, GroupRecoveryState, ProviderFailure, RecoveryActionRequest, RecoveryActionResult, RecoveryCheckpoint,
   GroupRunContext, GroupSnapshot, ProviderInfo, Session, Task, TeamArtifactSchema, TeamAssignSchema, TeamMessageSchema, TeamStatusSchema, UpdateGroupSchema,
 } from '@mingle/contracts';
@@ -17,6 +17,7 @@ import { RecoveryService } from '../recovery/service.ts';
 import { HttpError, conflict, errorMessage, newId, notFound, nowIso, redactSecrets, truncate, unprocessable } from '../util.ts';
 import type { WorkspaceService } from '../workspace.ts';
 import type { AttachmentService } from '../attachments/service.ts';
+import { buildMessageContext, validateQuoteCitation } from '../message-context.ts';
 import type { GroupInvocation, NativeInvocationInput, ProviderCatalog } from '@mingle/contracts';
 import {
   GroupRepo, OPEN_DELIVERY, artifactId, assignmentId, deliveryId, recoveryCheckpointId, groupId as newGroupId, memberId as newMemberId, requestId as newRequestId,
@@ -32,7 +33,7 @@ export type GroupLog = (level: 'info' | 'warn' | 'error', message: string, detai
 export interface GroupRuntime {
   isActive(sessionId: string): boolean;
   isRunLive?(sessionId: string, runId: string): boolean;
-  start(sessionId: string, content: string, options?: { taskId?: string; groupDeliveryId?: string; userMessage?: { content: string; kind?: string }; attachmentOwnerKind?: 'message' | 'group_message'; attachmentOwnerId?: string; invocation?: import('@mingle/contracts').NativeInvocation }): string;
+  start(sessionId: string, content: string, options?: { taskId?: string; groupDeliveryId?: string; userMessage?: { content: string; kind?: string }; attachmentOwnerKind?: 'message' | 'group_message'; attachmentOwnerId?: string; invocation?: import('@mingle/contracts').NativeInvocation; context?: string; contextRefs?: MessageContextRef[] }): string;
   interrupt(sessionId: string): boolean;
   withSessionsStopped?<T>(sessionIds: string[], action: () => T): Promise<T>;
 }
@@ -413,7 +414,7 @@ export class GroupService {
 
   // ---------------------------------------------------------------- user messages
 
-  async send(groupId: string, input: { content: string; recipients?: string[]; clientMessageId?: string; attachmentIds?: string[]; invocation?: NativeInvocationInput }): Promise<GroupSnapshot> {
+  async send(groupId: string, input: { content: string; recipients?: string[]; clientMessageId?: string; attachmentIds?: string[]; contextRefs?: MessageContextRef[]; invocation?: NativeInvocationInput }): Promise<GroupSnapshot> {
     this.assertOpen();
     let group = this.requireGroup(groupId);
     if (input.clientMessageId && this.repo.messageByClientId(group.id, input.clientMessageId)) return this.snapshot(group);
@@ -451,6 +452,15 @@ export class GroupService {
     const route = invocation
       ? { recipients: [members.find((m) => m.id === invocation!.memberId)!], runners: [members.find((m) => m.id === invocation!.memberId)!], planner: members.find((m) => m.id === invocation!.memberId)! }
       : this.route(group, members, requested, sendContent);
+    for (const ref of input.contextRefs ?? []) {
+      if (ref.kind === 'file') {
+        if (!this.repo.members(group.id, true).some((candidate) => candidate.sessionId === ref.sourceSessionId)) throw unprocessable('A file reference must come from a session in this group.');
+        continue;
+      }
+      const sourceMember = this.repo.members(group.id, true).find((candidate) => candidate.sessionId === ref.sourceSessionId);
+      if (ref.sourceGroupId !== group.id || !sourceMember) throw unprocessable('A quoted source must be an assistant message from this group.');
+      validateQuoteCitation(ref, this.store.getMessage(ref.sourceMessageId));
+    }
     if (attachmentRows.some((row) => row.kind === 'image')) {
       for (const member of route.recipients) {
         const recipient = this.store.getSession(member.sessionId);
@@ -464,7 +474,7 @@ export class GroupService {
     }
     for (const member of route.recipients) if (!this.store.getSession(member.sessionId)) throw conflict(`@${member.handle} is archived. Remove it from the group first.`);
     this.store.tx(() => {
-      const message = this.repo.insertMessage({ groupId: group.id, senderMemberId: null, recipients: route.recipients.map((m) => m.id), kind: 'user', content: sendContent, clientMessageId: input.clientMessageId ?? null, invocation });
+      const message = this.repo.insertMessage({ groupId: group.id, senderMemberId: null, recipients: route.recipients.map((m) => m.id), kind: 'user', content: sendContent, clientMessageId: input.clientMessageId ?? null, invocation, contextRefs: input.contextRefs });
       if (input.attachmentIds?.length) this.attachments?.claim({ kind: 'group', id: groupId }, input.attachmentIds, 'group_message', message.id);
       const requestId = newRequestId();
       this.repo.insertRequest({ id: requestId, groupId: group.id, messageId: message.id, plannerMemberId: route.planner.id });
@@ -2012,9 +2022,9 @@ export class GroupService {
     }
     const assignment = d.assignmentId ? this.repo.getAssignment(d.assignmentId) : undefined;
     let nativeInvocation: import('@mingle/contracts').NativeInvocation | undefined;
-    const sourceMessage = this.repo.getMessage(d.messageId);
-    if (sourceMessage?.invocation) {
-      const saved = sourceMessage.invocation as GroupInvocation;
+    const invocationMessage = this.repo.getMessage(d.messageId);
+    if (invocationMessage?.invocation) {
+      const saved = invocationMessage.invocation as GroupInvocation;
       if (saved.memberId !== member.id || saved.sessionId !== session.id || saved.provider !== session.provider || saved.model !== session.model) {
         this.cancel(d, 'The selected agent or its settings changed while the native action was queued. Select it again.');
         return false;
@@ -2062,8 +2072,16 @@ export class GroupService {
         ? request.plannerMemberId === member.id
         : group.orchestratorMemberId === member.id;
       const attachmentOwnerId = recoverySource && authoritativeCoordinator ? request.messageId : d.messageId;
+      const contextSourceMessage = this.repo.getMessage(attachmentOwnerId);
+      const context = await buildMessageContext(contextSourceMessage?.contextRefs, (ref) => this.store.getSession(ref.sourceSessionId, true)?.worktreePath, (sourceSessionId, messageId) => {
+        if (contextSourceMessage?.contextRefs?.some((ref) => ref.kind === 'quote' && ref.sourceSessionId === sourceSessionId && ref.sourceMessageId === messageId)) {
+          const sourceMember = this.repo.members(group.id, true).find((candidate) => candidate.sessionId === sourceSessionId);
+          if (!sourceMember) return undefined;
+        }
+        return this.store.getMessage(messageId);
+      });
       runId = this.runtime.start(session.id, text, { groupDeliveryId: d.id, taskId: assignment?.taskId ?? d.taskId ?? undefined,
-        userMessage: { content: text, kind: 'group-delivery' }, attachmentOwnerKind: 'group_message', attachmentOwnerId, invocation: nativeInvocation });
+        userMessage: { content: text, kind: 'group-delivery' }, attachmentOwnerKind: 'group_message', attachmentOwnerId, invocation: nativeInvocation, context, contextRefs: contextSourceMessage?.contextRefs });
     } catch (error) {
       this.reserved.delete(session.id);
       const message = clean(errorMessage(error), 500);

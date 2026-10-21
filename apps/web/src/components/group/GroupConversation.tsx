@@ -18,6 +18,7 @@ import { AgentIdentity } from './AgentIdentity';
 import { AgentPresenceRail } from './AgentPresenceRail';
 import { GroupResultSummary } from './GroupResultSummary';
 import { AttachmentHistory } from '../AttachmentHistory';
+import { appendContextReference, ContextReferenceChips } from '../MessageContextControls';
 
 const NO_SESSIONS: Session[] = [];
 const NO_MESSAGES: Message[] = [];
@@ -70,7 +71,7 @@ function GroupMessageRow({ item, snapshot }: { item: GroupItem; snapshot: GroupS
   if (message.kind === 'user') {
     return (
       <article className="msg msg--user" aria-label="Your message">
-        <div className="msg__bubble"><Markdown text={message.content} /><AttachmentHistory attachments={message.attachments} /></div>
+        <div className="msg__bubble"><Markdown text={message.content} /><AttachmentHistory attachments={message.attachments} /><ContextReferenceChips refs={message.contextRefs ?? []} /></div>
         {recipients.length ? <div className="msg__to">To <Handles speakersList={recipients} sessions={sessions} /></div> : null}
         <DeliveryChips deliveries={deliveries} snapshot={snapshot} sessions={sessions} />
         {time}
@@ -208,7 +209,8 @@ export function GroupConversation({ snapshot }: { snapshot: GroupSnapshot }) {
       } else {
         const session = sessions.find((candidate) => candidate.id === item.sessionId);
         const labelled = item.speaker && (message.role === 'assistant' || (message.role === 'user' && item.sessionId !== snapshot.group.anchorSessionId));
-        body.push(<MessageRow key={`${item.key}:row`} m={message} provider={session?.provider} speaker={labelled ? item.speaker : null} />);
+        body.push(<MessageRow key={`${item.key}:row`} m={message} provider={session?.provider} speaker={labelled ? item.speaker : null}
+          onAskAboutThis={(quote) => appendContextReference(snapshot.group.anchorSessionId, { ...quote, sourceGroupId: snapshot.group.id })} />);
       }
     }
     for (const run of placement.activityAfter.get(item.key) ?? []) {

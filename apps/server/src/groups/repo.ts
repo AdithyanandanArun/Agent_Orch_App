@@ -65,6 +65,7 @@ const mapMessage = (r: Row): GroupMessage => ({
   requestId: (r.request_id as string | null) ?? null, replyToId: (r.reply_to_id as string | null) ?? null,
   sourceMessageId: (r.source_message_id as string | null) ?? null, sourceRunId: (r.source_run_id as string | null) ?? null, createdAt: r.created_at as string,
   ...(r.invocation ? { invocation: JSON.parse(r.invocation as string) as GroupMessage['invocation'] } : {}),
+  ...(r.context_refs_json ? { contextRefs: JSON.parse(r.context_refs_json as string) as GroupMessage['contextRefs'] } : {}),
 });
 const mapRequest = (r: Row): GroupRequest => ({
   id: r.id as string, groupId: r.group_id as string, messageId: r.message_id as string, plannerMemberId: r.planner_member_id as string,
@@ -173,12 +174,12 @@ export class GroupRepo {
   }
   insertMessage(m: {
     groupId: string; senderMemberId: string | null; recipients: string[]; kind: GroupMessage['kind']; content: string; requestId?: string | null;
-    replyToId?: string | null; sourceMessageId?: string | null; sourceRunId?: string | null; clientMessageId?: string | null; invocation?: GroupInvocation | null;
+    replyToId?: string | null; sourceMessageId?: string | null; sourceRunId?: string | null; clientMessageId?: string | null; invocation?: GroupInvocation | null; contextRefs?: GroupMessage['contextRefs'];
   }): GroupMessage {
     const id = messageId();
-    this.run(`INSERT INTO group_messages(id, group_id, sender_member_id, recipient_member_ids, kind, content, request_id, reply_to_id, source_message_id, source_run_id, client_message_id, created_at, invocation)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, m.groupId, m.senderMemberId, JSON.stringify(m.recipients), m.kind, m.content, m.requestId ?? null,
-    m.replyToId ?? null, m.sourceMessageId ?? null, m.sourceRunId ?? null, m.clientMessageId ?? null, nowIso(), m.invocation ? JSON.stringify(m.invocation) : null);
+    this.run(`INSERT INTO group_messages(id, group_id, sender_member_id, recipient_member_ids, kind, content, request_id, reply_to_id, source_message_id, source_run_id, client_message_id, created_at, invocation, context_refs_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, m.groupId, m.senderMemberId, JSON.stringify(m.recipients), m.kind, m.content, m.requestId ?? null,
+    m.replyToId ?? null, m.sourceMessageId ?? null, m.sourceRunId ?? null, m.clientMessageId ?? null, nowIso(), m.invocation ? JSON.stringify(m.invocation) : null, m.contextRefs?.length ? JSON.stringify(m.contextRefs) : null);
     return this.getMessage(id)!;
   }
   getMessage(id: string): GroupMessage | undefined {

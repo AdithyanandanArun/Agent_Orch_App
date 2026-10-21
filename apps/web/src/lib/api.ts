@@ -1,6 +1,6 @@
 import type {
   AddGroupAgent, AntigravityAuthState, AntigravityInstallState, Approval, AppSettings, Bootstrap, BrowserAction, BrowserConnect, BrowserDiscovery, BrowserSessionState, BrowserTab, CreateGroup, DirectoryListing, ExternalConversationDetails, ExternalConversationList, FileEntry, GitHubState, GitStatus, GroupSnapshot, ImportConversationResult, Project, ProjectContext, ProviderCatalog, ProviderInfo,
-  RepositoryBranch, RepositoryCommit, RepositoryMutationResult, RepositoryPullRequest, RepositoryPush, RepositoryState, RunChanges, SendGroupMessage, Session, SessionUsage, ToolCall, Task, TaskStatus, WorkspaceEvent,
+  RepositoryBranch, RepositoryCommit, RepositoryMutationResult, RepositoryPullRequest, RepositoryPush, RepositoryState, RunChanges, SendGroupMessage, Session, SessionUsage, ToolCall, Task, TaskStatus, WorkspaceEvent, MessageContextRef,
 } from '@mingle/contracts';
 import type { AccountState, AccountConnection, AccountPreferences, SavedAccountPreferences, AttachmentRef, NativeActionCatalog } from '@mingle/contracts';
 import type {
@@ -133,8 +133,10 @@ export const api = {
   cloneProject: (input: { url: string; name: string; parentPath: string }) => json<Project>('/api/projects/clone', 'POST', input),
   renameProject: (id: string, name: string) => json<Project>(`/api/projects/${encodeURIComponent(id)}`, 'PATCH', { name }),
   removeProject: (id: string) => json<{ ok: boolean; notices: string[] }>(`/api/projects/${encodeURIComponent(id)}`, 'DELETE'),
-  listFiles: (projectId: string, path: string, sessionId: string | null) =>
-    json<FileEntry[]>(`/api/projects/${encodeURIComponent(projectId)}/files${q({ path, sessionId })}`),
+  listFiles: (projectId: string, path: string, sessionId: string | null, signal?: AbortSignal) =>
+    json<FileEntry[]>(`/api/projects/${encodeURIComponent(projectId)}/files${q({ path, sessionId })}`, 'GET', undefined, signal),
+  searchFiles: (projectId: string, query: string, sessionId: string, signal?: AbortSignal) =>
+    json<FileEntry[]>(`/api/projects/${encodeURIComponent(projectId)}/files/search${q({ query, sessionId })}`, 'GET', undefined, signal),
   readFile,
   writeFile: (projectId: string, path: string, content: string, sessionId: string | null) =>
     json<unknown>(`/api/projects/${encodeURIComponent(projectId)}/file${q({ path, sessionId })}`, 'PUT', { content }),
@@ -175,7 +177,7 @@ export const api = {
   toolCall: (id: string) => json<ToolCall>(`/api/tool-calls/${encodeURIComponent(id)}`),
   renameSession: (id: string, name: string) => json<Session>(`/api/sessions/${encodeURIComponent(id)}`, 'PATCH', { name }),
   deleteSession: (id: string) => json<{ ok: boolean; notices?: string[] }>(`/api/sessions/${encodeURIComponent(id)}`, 'DELETE'),
-  sendMessage: (id: string, content: string, skills?: string[], attachmentIds?: string[]) => json<{ accepted: boolean }>(`/api/sessions/${encodeURIComponent(id)}/messages`, 'POST', { content, ...(skills?.length ? { skills } : {}), ...(attachmentIds?.length ? { attachmentIds } : {}) }),
+  sendMessage: (id: string, content: string, skills?: string[], attachmentIds?: string[], contextRefs?: MessageContextRef[]) => json<{ accepted: boolean }>(`/api/sessions/${encodeURIComponent(id)}/messages`, 'POST', { content, ...(skills?.length ? { skills } : {}), ...(attachmentIds?.length ? { attachmentIds } : {}), ...(contextRefs?.length ? { contextRefs } : {}) }),
   compactSession: (id: string, signal?: AbortSignal, operationId?: string) => json<ContextCompactionResult>(`/api/sessions/${encodeURIComponent(id)}/compact`, 'POST', operationId ? { operationId } : {}, signal),
   interruptCompaction: (id: string, operationId: string) => json<{ interrupted: boolean }>(`/api/sessions/${encodeURIComponent(id)}/compact/interrupt`, 'POST', { operationId }),
   sessionRecovery: (id: string, signal?: AbortSignal) => json<{ checkpoint: ApiRecoveryCheckpoint | null; failure: ApiProviderFailure | null }>(`/api/sessions/${encodeURIComponent(id)}/recovery`, 'GET', undefined, signal),

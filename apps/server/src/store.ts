@@ -38,6 +38,7 @@ const mapMessage = (r: Row): Message => {
   const message: Message = { id: r.id as string, sessionId: r.session_id as string, role: r.role as Message['role'], content: r.content as string, createdAt: r.created_at as string };
   if (r.kind) message.kind = r.kind as string;
   if (r.run_id) message.runId = r.run_id as string;
+  if (r.context_refs_json) message.contextRefs = JSON.parse(r.context_refs_json as string) as Message['contextRefs'];
   return message;
 };
 const mapEvent = (r: Row): WorkspaceEvent => ({
@@ -331,10 +332,10 @@ export class Store {
   }
 
   // messages
-  insertMessage(input: { id?: string; sessionId: string; role: Message['role']; content: string; kind?: string | null; runId?: string; createdAt?: string }): Message {
+  insertMessage(input: { id?: string; sessionId: string; role: Message['role']; content: string; kind?: string | null; runId?: string; createdAt?: string; contextRefs?: Message['contextRefs'] }): Message {
     const id = input.id ?? newId('msg');
     const createdAt = input.createdAt ?? nowIso();
-    this.run('INSERT INTO messages(id, session_id, role, content, kind, created_at, run_id) VALUES (?, ?, ?, ?, ?, ?, ?)', id, input.sessionId, input.role, input.content, input.kind ?? null, createdAt, input.runId ?? null);
+    this.run('INSERT INTO messages(id, session_id, role, content, kind, created_at, run_id, context_refs_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', id, input.sessionId, input.role, input.content, input.kind ?? null, createdAt, input.runId ?? null, input.contextRefs?.length ? JSON.stringify(input.contextRefs) : null);
     return this.getMessage(id)!;
   }
   getMessage(id: string): Message | undefined {

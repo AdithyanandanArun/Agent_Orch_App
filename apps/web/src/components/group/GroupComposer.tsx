@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ArrowUp, AtSign, Square, X } from 'lucide-react';
+import { ArrowUp, AtSign, FilePlus2, Square, X } from 'lucide-react';
 import type { AttachmentRef, GroupSnapshot, NativeActionCatalog, Provider, Session } from '@mingle/contracts';
 import { useMingle } from '../../store/store';
 import { api, errorMessage } from '../../lib/api';
@@ -14,6 +14,7 @@ import { UsagePanel } from '../UsagePanel';
 import { AgentIdentity } from './AgentIdentity';
 import { AttachmentDrafts, AttachmentTray, useAttachmentDraft } from '../AttachmentDrafts';
 import { usePresence } from '../../lib/motion';
+import { appendContextReference, ContextReferenceChips, FileContextPicker } from '../MessageContextControls';
 
 const COMMANDS = [
   { name: 'new', description: 'Create a new session' },
@@ -36,11 +37,12 @@ const COMMANDS = [
 const LOCAL_COMMAND = new RegExp(`^/(${COMMANDS.map((command) => command.name).join('|')})(?:\\s.*)?$`, 'i');
 const MAX_RECIPIENTS = 8;
 
-interface Suggestion { key: string; token: string; description: string; group: string; identityKey?: string; provider?: Provider; action?: { kind: 'command' | 'skill'; id: string; name: string } }
+interface Suggestion { key: string; token: string; description: string; group: string; identityKey?: string; provider?: Provider; browseFiles?: boolean; action?: { kind: 'command' | 'skill'; id: string; name: string } }
 
 /** The group conversation's composer: it resolves recipients itself and sends one message to the group endpoint. */
 export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { snapshot: GroupSnapshot; anchor: Session; onOpenMembers: () => void; footer?: ReactNode }) {
   const draft = useMingle((s) => s.drafts[anchor.id] ?? '');
+  const contextRefs = useMingle((s) => s.contextDrafts[anchor.id] ?? []);
   const connection = useMingle((s) => s.connection);
   const providers = useMingle((s) => s.boot?.providers);
   const sessions = useMingle((s) => s.boot?.sessions);
@@ -51,6 +53,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
   const pendingId = useRef<{ key: string; id: string } | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
   const [attachments, setAttachments] = useState<AttachmentRef[]>([]);
+  const [filePickerOpen, setFilePickerOpen] = useState(false);
   useEffect(() => { setAttachments([]); setCompactStatus(null); }, [snapshot.group.id]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [sending, setSending] = useState(false);
@@ -183,11 +186,12 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
         seen.add(id);
         return true;
       });
-      return choices.slice(0, 8).map((member) => {
+      const fileChoice: Suggestion[] = 'files'.startsWith(query) ? [{ key: 'browse-files', token: '@files', description: 'Choose files from this session worktree', group: 'Workspace context', browseFiles: true }] : [];
+      return [...fileChoice, ...choices.slice(0, 8).map((member) => {
         if ('token' in member) return member;
         const session = sessionOf(member.sessionId);
         return { key: `m:${member.id}`, token: `@${member.handle}`, description: `${ROLE_LABEL[member.role]}${session ? ` · ${providerName(session.provider)} ${session.model}` : ''}`, group: 'Agents', identityKey: member.sessionId, provider: session?.provider };
-      });
+      })];
     }
     if (skillTrigger && actionTargetId && nativeCatalog) return nativeCatalog.skills.filter((skill) => skill.enabled && skill.name.toLowerCase().startsWith(before.match(/(?:^|\s)\$([^\s]*)$/)?.[1]?.toLowerCase() ?? '')).map((skill) => ({ key: `native-skill:${skill.id}`, token: `$${skill.name}`, description: skill.description, group: 'Provider skill', action: { kind: 'skill' as const, id: skill.id, name: skill.name } }));
     return [];
@@ -204,6 +208,12 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
   const choose = (index: number) => {
     const item = suggestions[index];
     if (!item) return;
+    if (item.browseFiles) {
+      const text = `${draft.slice(0, triggerStart)}${draft.slice(caretIndex)}`;
+      setDraft(text); setCaret(triggerStart); setDismissed(null); setFilePickerOpen(true);
+      requestAnimationFrame(() => { ref.current?.focus(); ref.current?.setSelectionRange(triggerStart, triggerStart); });
+      return;
+    }
     setSelectedNativeAction(item.action ?? null);
     const text = `${draft.slice(0, triggerStart)}${item.token} ${draft.slice(caretIndex)}`;
     const next = triggerStart + item.token.length + 1;
@@ -349,10 +359,12 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
     setSending(true);
     setError(null);
     try {
-      const updated = await api.sendGroupMessage(snapshot.group.id, { content, ...(targets.length ? { recipients: ids } : {}), ...(attachments.length ? { attachmentIds: attachments.map((item) => item.id) } : {}), ...(invocation ? { invocation } : {}), clientMessageId });
+      const submittedContextRefs = contextRefs;
+      const updated = await api.sendGroupMessage(snapshot.group.id, { content, ...(targets.length ? { recipients: ids } : {}), ...(attachments.length ? { attachmentIds: attachments.map((item) => item.id) } : {}), ...(submittedContextRefs.length ? { contextRefs: submittedContextRefs } : {}), ...(invocation ? { invocation } : {}), clientMessageId });
       const store = useMingle.getState();
       store.applyGroup(updated);
       if (store.drafts[anchor.id] === draft) setDraft('');
+      if (store.contextDrafts[anchor.id] === submittedContextRefs) store.setContextDraft(anchor.id, []);
       setPicked([]);
       attachmentDraft.sent(attachments.map((item) => item.id));
       pendingId.current = null;
@@ -410,6 +422,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
           {picked.length ? <button type="button" className="recips__clear" onClick={() => setPicked([])}>Clear selection</button> : null}
         </div>
         <label htmlFor={`composer-${anchor.id}`} className="sr-only">Message the group</label>
+        <ContextReferenceChips refs={contextRefs} disabled={sending} onRemove={(index) => useMingle.getState().setContextDraft(anchor.id, contextRefs.filter((_, i) => i !== index))} />
         <AttachmentTray attachments={attachments} busy={attachmentDraft.busy} uploads={attachmentDraft.uploads} onRetry={attachmentDraft.retry} onForget={attachmentDraft.forget} loading={attachmentDraft.loading} loadError={attachmentDraft.loadError} onReload={attachmentDraft.reload} onRemove={(id) => void attachmentDraft.remove(id)} disabled={sending || Boolean(blocker)} />
         <textarea
           id={`composer-${anchor.id}`} ref={ref} className="composer__input" rows={1} value={draft}
@@ -440,7 +453,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
           }}
         />
         {pickerPresent && displayedPicker ? (
-          <div className={cx('composer-picker', pickerClosing && 'is-closing')} id={pickerId} role="listbox" aria-label={displayedPicker.command ? 'Commands' : 'Agents'} aria-hidden={pickerClosing || undefined} inert={pickerClosing}>
+          <div className={cx('composer-picker', pickerClosing && 'is-closing')} id={pickerId} role="listbox" aria-label={displayedPicker.command ? 'Commands' : displayedPicker.suggestions.some((item) => item.browseFiles) ? 'Agents and workspace files' : 'Agents'} aria-hidden={pickerClosing || undefined} inert={pickerClosing}>
             {displayedPicker.suggestions.map((item, index) => (
               <div key={item.key}>
                 {index === 0 || displayedPicker.suggestions[index - 1]?.group !== item.group ? <div className="composer-picker__group" role="presentation">{item.group}</div> : null}
@@ -462,6 +475,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
         </div> : null}
         <div className="composer__bar">
           <div className="composer__send">
+            <button type="button" className="composer__context-button" onClick={() => setFilePickerOpen(true)} disabled={sending || connection !== 'online'} aria-label="Add workspace file context" title="Add a file from this session worktree"><FilePlus2 size={15} /></button>
             <AttachmentDrafts scope={{ kind: 'group', id: snapshot.group.id }} busy={attachmentDraft.busy} onFiles={attachmentDraft.addFiles} disabled={sending || Boolean(blocker)} />
             {compactStatus?.status === 'running' ? <button type="button" className="sendbtn sendbtn--stop" onClick={stopCompaction} aria-label="Request cancellation of this compaction" title="Stop waiting and send a cancellation request"><Square size={12} fill="currentColor" /></button> :
               <button type="button" className="sendbtn" onClick={() => void submit()} disabled={sendDisabled}
@@ -499,6 +513,9 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
       ) : null}
       {compactStatus ? <p className={cx('composer__note', compactStatus.status === 'failed' && 'is-error')} role={compactStatus.status === 'failed' ? 'alert' : 'status'} aria-live="polite" aria-busy={compactStatus.status === 'running'}>{compactStatus.status === 'running' ? `Compacting @${compactStatus.handle}…` : compactStatus.status === 'completed' ? `@${compactStatus.handle}: ${compactStatus.message}` : compactStatus.status === 'unsupported' ? `Manual compaction unavailable for @${compactStatus.handle}: ${compactStatus.message}` : compactStatus.message}</p> : null}
       <UsagePanel session={usageSession} onClose={closeUsage} />
+      <FileContextPicker open={filePickerOpen} projectId={anchor.projectId} sessionId={anchor.id}
+        onClose={() => { setFilePickerOpen(false); requestAnimationFrame(() => ref.current?.focus()); }}
+        onSelect={(file) => appendContextReference(anchor.id, file)} />
     </div>
   );
 }

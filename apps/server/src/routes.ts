@@ -7,7 +7,8 @@ import {
 import type { Bootstrap, SessionUsage } from '@mingle/contracts';
 import { gitStatus } from './git.ts';
 import type { Hub } from './hub.ts';
-import { listDirectory, readTextFile, writeTextFile } from './paths.ts';
+import { listDirectory, readTextFile, searchFiles, writeTextFile } from './paths.ts';
+import { buildMessageContext } from './message-context.ts';
 import type { ProviderService } from './provider-service.ts';
 import type { SessionRuntime } from './runtime.ts';
 import type { Store } from './store.ts';
@@ -220,6 +221,12 @@ export function buildRouter(s: Services) {
     const scope = s.workspace.resolveScope(param(ctx, 'id'), ctx.url.searchParams.get('sessionId') ?? undefined);
     return listDirectory(scope.root, ctx.url.searchParams.get('path'));
   });
+  add('GET', '/api/projects/:id/files/search', (ctx) => {
+    const scope = s.workspace.resolveScope(param(ctx, 'id'), ctx.url.searchParams.get('sessionId') ?? undefined);
+    const query = ctx.url.searchParams.get('query') ?? '';
+    if (query.length > 100) throw badRequest('File search query is too long.');
+    return searchFiles(scope.root, query);
+  });
   add('GET', '/api/projects/:id/file', async (ctx) => {
     const scope = s.workspace.resolveScope(param(ctx, 'id'), ctx.url.searchParams.get('sessionId') ?? undefined);
     const rel = ctx.url.searchParams.get('path');
@@ -379,7 +386,7 @@ export function buildRouter(s: Services) {
   });
   add('POST', '/api/sessions/:id/messages', async (ctx) => {
     const id = param(ctx, 'id');
-    const { content, skills: selected, attachmentIds } = await ctx.body(SendMessageSchema);
+    const { content, skills: selected, attachmentIds, contextRefs } = await ctx.body(SendMessageSchema);
     const session = s.store.getSession(id);
     if (!session) throw notFound('Session not found');
     const group = s.groups.forSession(id);
@@ -387,7 +394,7 @@ export function buildRouter(s: Services) {
       if (selected?.length) throw badRequest('Select skills in an independent session. Address provider actions directly to one group agent.');
       const member = group.members.find((row) => row.sessionId === id && !row.removedAt);
       if (!member) throw conflict('This agent is no longer in the group. Refresh the conversation.');
-      return new Reply(202, await s.groups.send(group.group.id, { content, attachmentIds, ...(id === group.group.anchorSessionId ? {} : { recipients: [member.id] }) }));
+      return new Reply(202, await s.groups.send(group.group.id, { content, attachmentIds, contextRefs, ...(id === group.group.anchorSessionId ? {} : { recipients: [member.id] }) }));
     }
     if (s.runtime.isActive(id)) throw conflict('Session already has an active run or provider cleanup is still in progress');
     const catalog = selected?.length ? await s.providers.catalog(session, true) : null;
@@ -410,7 +417,12 @@ export function buildRouter(s: Services) {
     if (!latest) throw notFound('Session not found');
     if (s.groups.forSession(id)) throw conflict('This session joined a group while loading skills. Send through its group conversation.');
     if (latest.provider !== session.provider || latest.model !== session.model || latest.worktreePath !== session.worktreePath) throw conflict('Session settings changed while loading skills. Send the message again.');
-    s.runtime.start(id, content, { skills, attachmentIds });
+    for (const ref of contextRefs ?? []) {
+      if (ref.kind === 'quote' && (ref.sourceGroupId || ref.sourceSessionId !== id)) throw badRequest('A quoted source must come from this session. Choose text from a message in this conversation.');
+      if (ref.kind === 'file' && ref.sourceSessionId !== id) throw badRequest('A file reference must come from this session worktree. Choose the file again.');
+    }
+    const context = await buildMessageContext(contextRefs, latest.worktreePath, (_sessionId, messageId) => s.store.getMessage(messageId));
+    s.runtime.start(id, content, { skills, attachmentIds, context, contextRefs });
     return new Reply(202, { accepted: true });
   });
   add('POST', '/api/sessions/:id/interrupt', (ctx) => {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
-import { ArrowUp, Square } from 'lucide-react';
+import { ArrowUp, FilePlus2, Square } from 'lucide-react';
 import type { AttachmentRef, ProviderModel, Session } from '@mingle/contracts';
 import { useMingle } from '../store/store';
 import { api, errorMessage, type ProviderCatalog, type SessionPatch } from '../lib/api';
@@ -11,6 +11,7 @@ import { GitBar } from './git/GitBar';
 import { providerModelChoices } from '../lib/providers';
 import { AttachmentDrafts, AttachmentTray, useAttachmentDraft } from './AttachmentDrafts';
 import { usePresence } from '../lib/motion';
+import { appendContextReference, ContextReferenceChips, FileContextPicker } from './MessageContextControls';
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const hasSkillMarker = (text: string, name: string) => new RegExp(`(?:^|\\s)\\$${escapeRegExp(name)}(?=\\s|$)`).test(text);
@@ -20,6 +21,7 @@ const reservedCommands = new Set(localCommandNames);
 
 export function Composer({ session }: { session: Session }) {
   const draft = useMingle((s) => s.drafts[session.id] ?? '');
+  const contextRefs = useMingle((s) => s.contextDrafts[session.id] ?? []);
   const connection = useMingle((s) => s.connection);
   const provider = useMingle((s) => s.boot?.providers.find((p) => p.id === session.provider));
   const providers = useMingle((s) => s.boot?.providers);
@@ -37,6 +39,8 @@ export function Composer({ session }: { session: Session }) {
   const [activeSuggestion, setActiveSuggestion] = useState(0);
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [attachments, setAttachments] = useState<AttachmentRef[]>([]);
+  const [filePickerOpen, setFilePickerOpen] = useState(false);
+  const [filePickerQuery, setFilePickerQuery] = useState('');
   useEffect(() => { setAttachments([]); }, [session.id]);
   const [usageOpen, setUsageOpen] = useState(false);
   const usageOpenRef = useRef(usageOpen);
@@ -198,8 +202,10 @@ export function Composer({ session }: { session: Session }) {
       }
       const submittedDraft = draft;
       const submittedAttachmentIds = attachments.map((item) => item.id);
-      await api.sendMessage(session.id, draft.trim(), messageSkills, submittedAttachmentIds);
+      const submittedContextRefs = contextRefs;
+      await api.sendMessage(session.id, draft.trim(), messageSkills, submittedAttachmentIds, submittedContextRefs);
       if (useMingle.getState().drafts[session.id] === submittedDraft) useMingle.getState().setDraft(session.id, '');
+      if (useMingle.getState().contextDrafts[session.id] === submittedContextRefs) useMingle.getState().setContextDraft(session.id, []);
       attachmentDraft.sent(submittedAttachmentIds);
       setSelectedSkills([]);
       await useMingle.getState().refreshNow();
@@ -383,6 +389,7 @@ export function Composer({ session }: { session: Session }) {
     <div className="composer-wrap">
       <div className={cx('composer', blocker && 'is-blocked')}>
         <label htmlFor={`composer-${session.id}`} className="sr-only">Message {session.name}</label>
+        <ContextReferenceChips refs={contextRefs} disabled={sending || updating} onRemove={(index) => useMingle.getState().setContextDraft(session.id, contextRefs.filter((_, i) => i !== index))} />
         <AttachmentTray attachments={attachments} busy={attachmentDraft.busy} uploads={attachmentDraft.uploads} onRetry={attachmentDraft.retry} onForget={attachmentDraft.forget} loading={attachmentDraft.loading} loadError={attachmentDraft.loadError} onReload={attachmentDraft.reload} onRemove={(id) => void attachmentDraft.remove(id)} disabled={sending || updating || Boolean(blocker)} />
         <textarea
           id={`composer-${session.id}`} ref={ref} className="composer__input" rows={1} value={draft}
@@ -393,6 +400,15 @@ export function Composer({ session }: { session: Session }) {
           onChange={(e) => {
             const nextDraft = e.target.value;
             caret.current = e.target.selectionStart ?? nextDraft.length;
+            const fileMarker = nextDraft.slice(0, caret.current).match(/(^|\s)@files?$/i);
+            if (fileMarker) {
+              const markerStart = caret.current - fileMarker[0].length + fileMarker[1].length;
+              const cleaned = `${nextDraft.slice(0, markerStart)}${nextDraft.slice(caret.current)}`;
+              caret.current = markerStart; setCaretPosition(markerStart);
+              useMingle.getState().setDraft(session.id, cleaned);
+              setFilePickerQuery(''); setFilePickerOpen(true);
+              return;
+            }
             setCaretPosition(caret.current);
             if (compactStatus?.status !== 'running') setCompactStatus(null);
             useMingle.getState().setDraft(session.id, nextDraft);
@@ -441,6 +457,7 @@ export function Composer({ session }: { session: Session }) {
               onChange={(value) => void configure({ policy: value as Session['policy'] })} placement="top" />
           </div>
           <div className="composer__send">
+            <button type="button" className="composer__context-button" onClick={() => { setFilePickerQuery(''); setFilePickerOpen(true); }} disabled={!project || disabled} aria-label="Add workspace file context" title="Add a file from this session worktree"><FilePlus2 size={15} /></button>
             <AttachmentDrafts scope={{ kind: 'session', id: session.id }} busy={attachmentDraft.busy} onFiles={attachmentDraft.addFiles} disabled={sending || updating || Boolean(blocker)} />
             {compactStatus?.status === 'running' ? (
               <button type="button" className="sendbtn sendbtn--stop" onClick={stopCompaction} aria-label="Request cancellation of this compaction" title="Stop waiting and send a cancellation request"><Square size={12} fill="currentColor" /></button>
@@ -462,6 +479,9 @@ export function Composer({ session }: { session: Session }) {
       {catalogError && (trigger.startsWith('/') || trigger.startsWith('$')) ? <p className="composer__note" role="status">Command and skill suggestions unavailable: {catalogError} <button type="button" className="link-btn" onClick={() => setCatalogRevision((value) => value + 1)}>Retry</button></p> : null}
       {catalog?.warnings.length && (suggestion || trigger.startsWith('/') || trigger.startsWith('$')) ? <details className="composer__catalog-note"><summary>Command and skill details · {catalog.warnings.length} notice{catalog.warnings.length === 1 ? '' : 's'}</summary><ul>{catalog.warnings.map((warning, index) => <li key={`${index}:${warning}`}>{warning}</li>)}</ul><button type="button" className="link-btn" onClick={() => setCatalogRevision((value) => value + 1)}>Refresh</button></details> : null}
       <UsagePanel session={usageOpen ? session : null} onClose={closeUsage} />
+      {project ? <FileContextPicker open={filePickerOpen} projectId={project.id} sessionId={session.id} initialQuery={filePickerQuery}
+        onClose={() => { setFilePickerOpen(false); requestAnimationFrame(() => ref.current?.focus()); }}
+        onSelect={(file) => appendContextReference(session.id, file)} /> : null}
     </div>
   );
 }

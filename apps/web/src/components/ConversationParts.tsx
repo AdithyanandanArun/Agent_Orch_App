@@ -1,16 +1,18 @@
 import { memo, useState, type ReactNode } from 'react';
-import { ChevronRight, ShieldAlert, Terminal, Info } from 'lucide-react';
+import { ChevronRight, ShieldAlert, Terminal, Info, Quote } from 'lucide-react';
 import type { Approval, Provider } from '@mingle/contracts';
 import { useMingle } from '../store/store';
 import { api, errorMessage } from '../lib/api';
 import { clockTime, cx } from '../lib/format';
 import { ROLE_LABEL } from '../lib/groups';
 import type { DisplayMessage } from '../lib/conversation';
+import type { QuoteCitation } from '@mingle/contracts';
 import type { Speaker } from '../lib/groupTimeline';
 import { Markdown } from './Markdown';
 import { Button, PROVIDER_NAME } from './ui';
 import { AgentIdentity } from './group/AgentIdentity';
 import { AttachmentHistory } from './AttachmentHistory';
+import { ContextReferenceChips, quoteFromSelection } from './MessageContextControls';
 
 function legacyToolTitle(m: DisplayMessage): string {
   const candidates = [m.kind, ...m.content.split('\n')];
@@ -63,7 +65,7 @@ export function SpeakerLabel({ speaker, provider, identityKey, trailing }: { spe
   );
 }
 
-export const MessageRow = memo(function MessageRow({ m, provider, speaker }: { m: DisplayMessage; provider?: keyof typeof PROVIDER_NAME; speaker?: Speaker | null }) {
+export const MessageRow = memo(function MessageRow({ m, provider, speaker, onAskAboutThis }: { m: DisplayMessage; provider?: keyof typeof PROVIDER_NAME; speaker?: Speaker | null; onAskAboutThis?: (quote: QuoteCitation) => void }) {
   if (m.role === 'tool') return null;
   if (m.role === 'system') {
     const preview = m.content.split('\n').find((line) => line.trim()) ?? '';
@@ -81,17 +83,22 @@ export const MessageRow = memo(function MessageRow({ m, provider, speaker }: { m
   }
   if (m.role === 'user') {
     return (
-      <article className="msg msg--user" aria-label="Your message">
-        <div className="msg__bubble"><Markdown text={m.content} /><AttachmentHistory attachments={m.attachments} /></div>
+      <article className="msg msg--user" aria-label="Your message" data-message-id={m.id}>
+        <div className="msg__bubble"><Markdown text={m.content} /><AttachmentHistory attachments={m.attachments} /><ContextReferenceChips refs={m.contextRefs ?? []} /></div>
         {m.createdAt ? <time className="msg__time" dateTime={m.createdAt} title={clockTime(m.createdAt)}>{clockTime(m.createdAt)}</time> : null}
       </article>
     );
   }
   return (
-    <article className="msg msg--assistant" aria-label={speaker ? `Response from @${speaker.handle}, ${ROLE_LABEL[speaker.role]}` : `Assistant response${provider ? ` from ${PROVIDER_NAME[provider]}` : ''}`}>
+    <article className="msg msg--assistant" aria-label={speaker ? `Response from @${speaker.handle}, ${ROLE_LABEL[speaker.role]}` : `Assistant response${provider ? ` from ${PROVIDER_NAME[provider]}` : ''}`} data-message-id={m.id}>
       <div className="msg__main">
         {speaker ? <SpeakerLabel speaker={speaker} provider={provider} identityKey={speaker.sessionId} /> : <span className="sr-only">Assistant</span>}
         <div className={cx('msg__content', m.live && 'is-live')}><Markdown text={m.content || '…'} /></div>
+        {onAskAboutThis && !m.live && m.sessionId ? <button type="button" className="msg__quote-action" onMouseDown={(event) => event.preventDefault()} onClick={() => {
+          const quote = quoteFromSelection({ id: m.id, sessionId: m.sessionId!, content: m.content });
+          if (quote) onAskAboutThis(quote);
+        }}><Quote size={12} aria-hidden="true" /> Ask about this</button> : null}
+        <ContextReferenceChips refs={m.contextRefs ?? []} />
         {m.createdAt ? <time className="msg__time" dateTime={m.createdAt} title={clockTime(m.createdAt)}>{clockTime(m.createdAt)}</time> : null}
       </div>
     </article>
