@@ -97,6 +97,7 @@ export function GroupModeDialog({ groupId }: { groupId: string }) {
   const [emergencyMode, setEmergencyMode] = useState<'inherit' | 'disabled' | 'custom'>(resilientGroup?.autonomy?.emergencyTurnLimit === null ? 'disabled' : typeof resilientGroup?.autonomy?.emergencyTurnLimit === 'number' ? 'custom' : 'inherit');
   const [emergencyLimit, setEmergencyLimit] = useState(resilientGroup?.autonomy?.emergencyTurnLimit == null ? '' : String(resilientGroup.autonomy.emergencyTurnLimit));
   const [automaticFallback, setAutomaticFallback] = useState(resilientGroup?.recoveryPolicy?.automaticFallback ?? false);
+  const [allowUnverifiedQuotaFallback, setAllowUnverifiedQuotaFallback] = useState(Boolean(resilientGroup?.recoveryPolicy?.automaticFallback && resilientGroup.recoveryPolicy.allowUnverifiedQuotaFallback));
   const [leadFallbackMemberId, setLeadFallbackMemberId] = useState(resilientGroup?.recoveryPolicy?.leadFallbackMemberId ?? 'none');
   const [workerFallbacks, setWorkerFallbacks] = useState<Record<string, string>>(resilientGroup?.recoveryPolicy?.workerFallbacks ?? {});
 
@@ -131,29 +132,36 @@ export function GroupModeDialog({ groupId }: { groupId: string }) {
   const fallbackLeadId = group.orchestratorMemberId ?? requestLead;
   const fallbackChoices = (exclude: string | undefined) => members.filter((member) => member.id !== exclude).map((member) => {
     const candidateSession = sessions.find((item) => item.id === member.sessionId);
+    const workspace = candidateSession
+      ? candidateSession.isolated ? `isolated worktree${candidateSession.branch ? ` · ${candidateSession.branch}` : ''}` : 'project folder'
+      : 'workspace unavailable';
     const configuration = candidateSession
-      ? `${providerName(candidateSession.provider)} · ${candidateSession.model} · ${candidateSession.effort} effort · ${candidateSession.policy} permissions · existing conversation/configuration`
+      ? `${providerName(candidateSession.provider)} · ${candidateSession.model} · ${candidateSession.effort} effort · ${candidateSession.policy} permissions · ${workspace} · existing conversation${member.held ? ' · paused by you' : ''}`
       : 'Session configuration unavailable';
-    return { value: member.id, label: `@${member.handle}`, description: `${ROLE_LABEL[member.role]} · ${configuration}` };
+    return { value: member.id, label: `@${member.handle}`, description: `${ROLE_LABEL[member.role]} · ${configuration}`, disabled: Boolean(member.held || !candidateSession) };
   });
-  const leadFallbackValid = leadFallbackMemberId === 'none' || (members.some((member) => member.id === leadFallbackMemberId) && leadFallbackMemberId !== fallbackLeadId);
+  const hasFallbackSession = (memberId: string) => members.some((member) => member.id === memberId && !member.held && sessions.some((session) => session.id === member.sessionId));
+  const leadFallbackValid = leadFallbackMemberId === 'none' || (hasFallbackSession(leadFallbackMemberId) && leadFallbackMemberId !== fallbackLeadId);
   const normalizedWorkerFallbacks = Object.fromEntries(Object.entries(workerFallbacks).filter(([source, target]) =>
     members.some((member) => member.id === source) && members.some((member) => member.id === target) && source !== target,
   ));
-  const workerFallbackValid = Object.entries(normalizedWorkerFallbacks).every(([source, target]) => source !== target);
-  const hasAutomaticFallbackDestination = Object.keys(normalizedWorkerFallbacks).length > 0 || (mode === 'orchestrated' && leadFallbackMemberId !== 'none');
+  const workerFallbackValid = Object.entries(normalizedWorkerFallbacks).every(([source, target]) => source !== target && hasFallbackSession(target));
+  const hasAutomaticFallbackDestination = Object.values(normalizedWorkerFallbacks).some(hasFallbackSession)
+    || (mode === 'orchestrated' && leadFallbackMemberId !== 'none' && leadFallbackValid);
   const coordinatorFallbackLabel = mode === 'cowork' ? 'Planner fallback' : mode === 'current-leads' ? 'Current lead fallback' : 'Coordinator fallback';
   const coordinatorFallbackHint = mode === 'cowork'
-    ? 'Manual recovery replaces only this request’s planner and keeps peers in Cowork. Planner fallback remains manual in this mode.'
+    ? 'Replaces only the affected request’s planner and keeps the other peers in Cowork.'
     : mode === 'current-leads'
-      ? 'Manual recovery replaces the lead and switches the group to Orchestrated mode, retaining the original anchor and history. Lead fallback remains manual in this mode.'
-      : 'Used when the coordinator or request planner needs manual replacement.';
+      ? 'Replaces the current lead and switches to Orchestrated mode, retaining the original anchor and history.'
+      : 'Replaces the coordinator while keeping the group in Orchestrated mode.';
   const nextRecoveryPolicy: GroupRecoveryPolicy = {
-    automaticFallback, leadFallbackMemberId: leadFallbackMemberId === 'none' ? null : leadFallbackMemberId,
+    automaticFallback, allowUnverifiedQuotaFallback: automaticFallback && allowUnverifiedQuotaFallback,
+    leadFallbackMemberId: leadFallbackMemberId === 'none' ? null : leadFallbackMemberId,
     workerFallbacks: normalizedWorkerFallbacks,
   };
   const currentRecoveryPolicy: GroupRecoveryPolicy = {
     automaticFallback: resilientGroup?.recoveryPolicy?.automaticFallback ?? false,
+    allowUnverifiedQuotaFallback: Boolean(resilientGroup?.recoveryPolicy?.automaticFallback && resilientGroup.recoveryPolicy.allowUnverifiedQuotaFallback),
     leadFallbackMemberId: resilientGroup?.recoveryPolicy?.leadFallbackMemberId ?? null,
     workerFallbacks: resilientGroup?.recoveryPolicy?.workerFallbacks ?? {},
   };
@@ -165,7 +173,7 @@ export function GroupModeDialog({ groupId }: { groupId: string }) {
       : queued.length && !group.paused ? `${queued.length} queued ${queued.length === 1 ? 'delivery' : 'deliveries'} would be affected. Pause the group before changing its mode.`
         : !limitsValid ? 'Enter whole-number limits within the displayed ranges.'
           : !emergencyValid ? 'Enter a whole-number emergency ceiling from 2 to 10,000.'
-            : !policyValid ? automaticFallback && !hasAutomaticFallbackDestination ? 'Automatic fallback needs a worker mapping, or an orchestrated-mode coordinator fallback.' : 'Choose an active, different member for each configured fallback.'
+            : !policyValid ? automaticFallback && !hasAutomaticFallbackDestination ? `Automatic fallback needs an active, unpaused worker destination${mode === 'orchestrated' ? ' or coordinator destination' : ''}.` : 'Choose an active, unpaused, different member for each configured fallback.'
           : needsLead && !leadId ? 'Choose which member coordinates.'
             : mode === 'orchestrated' && !coordinators.some((member) => member.id === leadId) ? 'Choose a coordinator other than the original session.'
               : !settingsChanged ? 'No changes to save.' : undefined;
@@ -255,7 +263,7 @@ export function GroupModeDialog({ groupId }: { groupId: string }) {
           <p className="field__hint" role="status">Effective automatic-turn ceiling: {effectiveTurnsLabel}.</p>
           <div className="group-recovery-settings">
             <h4 className="gd-h">Configured fallback members</h4>
-            <p className="field__hint">Only active members can be selected. Reassignment keeps each member’s saved provider, model, effort, policy, and workspace. No fallback runs automatically unless you opt in below.</p>
+            <p className="field__hint">Choose an unpaused member. Handoff preserves source partial edits and checkpoint/dirty-path references; the destination uses its existing workspace. Files are not copied or merged, and permissions do not change. No fallback runs automatically unless you opt in below.</p>
             <Field label={coordinatorFallbackLabel} htmlFor={`${idBase}-lead-fallback`} hint={coordinatorFallbackHint}>
               <SelectMenu id={`${idBase}-lead-fallback`} label={coordinatorFallbackLabel} value={leadFallbackMemberId} displayValue={leadFallbackValid ? undefined : 'Unavailable member'} disabled={busy} options={[{ value: 'none', label: 'Not configured' }, ...fallbackChoices(fallbackLeadId)]} onChange={setLeadFallbackMemberId} />
             </Field>
@@ -276,10 +284,18 @@ export function GroupModeDialog({ groupId }: { groupId: string }) {
               </div>
             </details>
             <label className="group-recovery-settings__opt-in" htmlFor={`${idBase}-automatic-fallback`}>
-              <input id={`${idBase}-automatic-fallback`} type="checkbox" checked={automaticFallback} disabled={busy} onChange={(event) => setAutomaticFallback(event.target.checked)} />
-              <span><strong>Allow automatic quota fallback</strong><small>When a known quota failure is eligible, use configured worker mappings; only Orchestrated mode can automatically use its coordinator fallback. Unknown quota pools remain paused for you.</small></span>
+              <input id={`${idBase}-automatic-fallback`} type="checkbox" checked={automaticFallback} disabled={busy} onChange={(event) => {
+                const enabled = event.target.checked;
+                setAutomaticFallback(enabled);
+                if (!enabled) setAllowUnverifiedQuotaFallback(false);
+              }} />
+              <span><strong>Allow automatic quota fallback</strong><small>Use configured worker mappings for eligible known quota failures. Only Orchestrated mode can automatically use its coordinator fallback; Cowork planner replacement stays request-scoped, and Current agent lead replacement requires an explicit switch to Orchestrated. Unknown pools stay paused unless you enable the advanced option below.</small></span>
             </label>
-            {automaticFallback && !hasAutomaticFallbackDestination ? <p className="field__hint" role="status">Automatic fallback cannot use this planner/lead destination in the selected mode. Add a worker mapping or disable automatic fallback; manual recovery remains available.</p> : null}
+            {automaticFallback && !hasAutomaticFallbackDestination ? <p className="field__hint" role="status">Automatic fallback needs an active, unpaused worker destination{mode === 'orchestrated' ? ' or coordinator destination' : ''}. Manual recovery remains available.</p> : null}
+            {automaticFallback ? <label className="group-recovery-settings__opt-in is-advanced" htmlFor={`${idBase}-unverified-quota-fallback`}>
+              <input id={`${idBase}-unverified-quota-fallback`} type="checkbox" checked={allowUnverifiedQuotaFallback} disabled={busy} onChange={(event) => setAllowUnverifiedQuotaFallback(event.target.checked)} />
+              <span><strong>Allow one fallback attempt when quota pools are unreported</strong><small>Quota availability remains unverified. This permits one bounded attempt with the selected member’s existing workspace and permissions, without changing them; it does not prove quota availability. A known exhausted pool shared with the source, same-provider unknowns, held targets, and higher or incompatible permission policies remain blocked.</small></span>
+            </label> : null}
           </div>
         </section>
         {queued.length ? <div className="inline-warn" role="note"><AlertTriangle size={14} aria-hidden="true" /><span>{queued.length} queued {queued.length === 1 ? 'delivery stays' : 'deliveries stay'} with {queued.length === 1 ? 'its' : 'their'} original {queued.length === 1 ? 'recipient' : 'recipients'}; review {queued.length === 1 ? 'it' : 'them'} after the change before resuming.</span></div> : null}

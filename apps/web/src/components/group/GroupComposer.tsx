@@ -45,8 +45,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
   const providers = useMingle((s) => s.boot?.providers);
   const sessions = useMingle((s) => s.boot?.sessions);
   const ref = useRef<HTMLTextAreaElement>(null);
-  const compactController = useRef<AbortController | null>(null);
-  const compactTargetSessionId = useRef<string | null>(null);
+  const compactController = useRef<{ controller: AbortController; targetSessionId: string; operationId: string } | null>(null);
   const pickerButton = useRef<HTMLButtonElement>(null);
   const pickerId = useId();
   const pendingId = useRef<{ key: string; id: string } | null>(null);
@@ -276,10 +275,10 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
         if (isBusy(target)) throw new Error(`@${member.handle} is busy. Wait for its run to finish before compacting.`);
         setCompactStatus({ status: 'running', handle: member.handle });
         const controller = new AbortController();
-        compactController.current = controller;
-        compactTargetSessionId.current = target.id;
+        const operationId = crypto.randomUUID();
+        compactController.current = { controller, targetSessionId: target.id, operationId };
         try {
-          const result = await api.compactSession(target.id, controller.signal);
+          const result = await api.compactSession(target.id, controller.signal, operationId);
           if (result.status === 'completed') {
             setCompactStatus({ status: 'completed', handle: member.handle, message: result.message || 'Context compacted.' });
             if (useMingle.getState().drafts[anchor.id] === draft) setDraft('');
@@ -296,10 +295,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
             throw cause;
           }
         } finally {
-          if (compactController.current === controller) {
-            compactController.current = null;
-            compactTargetSessionId.current = null;
-          }
+          if (compactController.current?.controller === controller) compactController.current = null;
         }
       } catch (cause) {
         setError(errorMessage(cause));
@@ -371,18 +367,18 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
 
   const togglePick = (memberId: string) => setPicked((current) => (current.includes(memberId) ? current.filter((id) => id !== memberId) : [...current, memberId]));
   const stopCompaction = () => {
-    const controller = compactController.current;
-    const targetSessionId = compactTargetSessionId.current;
-    if (!controller || !targetSessionId) return;
-    controller.abort();
+    const operation = compactController.current;
+    if (!operation) return;
+    operation.controller.abort();
     compactController.current = null;
-    compactTargetSessionId.current = null;
     setSending(false);
     const handle = compactStatus?.handle;
-    const message = `Stopped waiting for compaction${handle ? ` for @${handle}` : ''} and requested a session interrupt. The provider outcome may be unknown; refresh before retrying.`;
+    const message = `Stopped waiting for compaction${handle ? ` for @${handle}` : ''} and sent a cancellation request for this operation. Its outcome may be unknown; refresh before retrying.`;
     setCompactStatus({ status: 'failed', handle, message });
     setError(null);
-    void api.interrupt(targetSessionId).catch((cause) => setCompactStatus({ status: 'failed', handle, message: `Interrupt could not be confirmed: ${errorMessage(cause)}. The provider outcome may be unknown.` })).finally(() => { void useMingle.getState().refreshNow(); });
+    void api.interruptCompaction(operation.targetSessionId, operation.operationId).then(({ interrupted }) => {
+      if (!interrupted) setCompactStatus({ status: 'failed', handle, message: 'No active compaction matched this cancellation request. It may have completed before cancellation arrived; refresh before retrying.' });
+    }).catch((cause) => setCompactStatus({ status: 'failed', handle, message: `Compaction cancellation could not be confirmed: ${errorMessage(cause)}. Its outcome may be unknown.` })).finally(() => { void useMingle.getState().refreshNow(); });
   };
   const defaultLabel = snapshot.group.mode === 'cowork' ? 'default: all peers' : 'default: orchestrator';
   const note = error ?? problem ?? blocker;
@@ -467,7 +463,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
         <div className="composer__bar">
           <div className="composer__send">
             <AttachmentDrafts scope={{ kind: 'group', id: snapshot.group.id }} busy={attachmentDraft.busy} onFiles={attachmentDraft.addFiles} disabled={sending || Boolean(blocker)} />
-            {compactStatus?.status === 'running' ? <button type="button" className="sendbtn sendbtn--stop" onClick={stopCompaction} aria-label="Stop waiting and interrupt compaction" title="Stop waiting and request a session interrupt"><Square size={12} fill="currentColor" /></button> :
+            {compactStatus?.status === 'running' ? <button type="button" className="sendbtn sendbtn--stop" onClick={stopCompaction} aria-label="Request cancellation of this compaction" title="Stop waiting and send a cancellation request"><Square size={12} fill="currentColor" /></button> :
               <button type="button" className="sendbtn" onClick={() => void submit()} disabled={sendDisabled}
                 aria-label={compactCandidate ? 'Compact one member' : local?.[1]?.toLowerCase() === 'import' ? 'Import conversation' : local?.[1]?.toLowerCase() === 'usage' ? 'Open usage' : 'Send message'}
                 title={compactCandidate ? 'Compact exactly one explicitly selected member' : sendDisabled ? (problem ?? blocker ?? (empty ? 'Write a message first' : 'Sending…')) : anyBusy ? `Send and queue for busy agents (${MOD}+Enter or Enter)` : `Send (${MOD}+Enter or Enter)`}>

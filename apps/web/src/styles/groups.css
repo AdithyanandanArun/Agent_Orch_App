@@ -196,6 +196,7 @@
 .group-recovery-settings__opt-in span { display: grid; gap: 4px; }
 .group-recovery-settings__opt-in strong { color: var(--fg-0); font-size: var(--text-xs); font-weight: 600; }
 .group-recovery-settings__opt-in small { color: var(--fg-2); font-size: var(--text-2xs); line-height: 1.5; }
+.group-recovery-settings__opt-in.is-advanced { margin-left: 19px; border-style: dashed; background: var(--bg-panel); }
 .group-fallbacks { padding-top: 7px; border-top: 1px solid var(--line-soft); }
 .group-fallbacks summary { width: fit-content; color: var(--fg-1); font-size: var(--text-xs); cursor: pointer; }
 .group-fallbacks__list { display: grid; gap: 3px; padding-top: 6px; }

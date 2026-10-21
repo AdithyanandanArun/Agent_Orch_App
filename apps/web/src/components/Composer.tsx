@@ -25,7 +25,7 @@ export function Composer({ session }: { session: Session }) {
   const providers = useMingle((s) => s.boot?.providers);
   const project = useMingle((s) => s.boot?.projects.find((p) => p.id === session.projectId));
   const ref = useRef<HTMLTextAreaElement>(null);
-  const compactController = useRef<AbortController | null>(null);
+  const compactController = useRef<{ controller: AbortController; targetSessionId: string; operationId: string } | null>(null);
   const [sending, setSending] = useState(false);
   const [compactStatus, setCompactStatus] = useState<{ status: 'running' | 'completed' | 'unsupported' | 'failed'; message?: string } | null>(null);
   const [updating, setUpdating] = useState(false);
@@ -129,9 +129,10 @@ export function Composer({ session }: { session: Session }) {
           if (running) throw new Error('This session is busy. Wait for its run to finish before compacting.');
           setCompactStatus({ status: 'running' });
           const controller = new AbortController();
-          compactController.current = controller;
+          const operationId = crypto.randomUUID();
+          compactController.current = { controller, targetSessionId: session.id, operationId };
           try {
-            const result = await api.compactSession(session.id, controller.signal);
+            const result = await api.compactSession(session.id, controller.signal, operationId);
             if (result.status === 'completed') {
               setCompactStatus({ status: 'completed', message: result.message || 'Context compacted.' });
               if (useMingle.getState().drafts[session.id] === draft) useMingle.getState().setDraft(session.id, '');
@@ -148,7 +149,7 @@ export function Composer({ session }: { session: Session }) {
               throw cause;
             }
           } finally {
-            if (compactController.current === controller) compactController.current = null;
+            if (compactController.current?.controller === controller) compactController.current = null;
           }
           return;
         }
@@ -220,15 +221,17 @@ export function Composer({ session }: { session: Session }) {
   };
 
   const stopCompaction = () => {
-    const controller = compactController.current;
-    if (!controller) return;
-    controller.abort();
+    const operation = compactController.current;
+    if (!operation) return;
+    operation.controller.abort();
     compactController.current = null;
     setSending(false);
-    const message = 'Stopped waiting for compaction and requested a session interrupt. The provider outcome may be unknown; refresh the session before retrying.';
+    const message = 'Stopped waiting and sent a cancellation request for this compaction. Its outcome may be unknown; refresh before retrying.';
     setCompactStatus({ status: 'failed', message });
     setError(null);
-    void api.interrupt(session.id).catch((cause) => setCompactStatus({ status: 'failed', message: `Interrupt could not be confirmed: ${errorMessage(cause)}. The provider outcome may be unknown.` })).finally(() => { void useMingle.getState().refreshNow(); });
+    void api.interruptCompaction(operation.targetSessionId, operation.operationId).then(({ interrupted }) => {
+      if (!interrupted) setCompactStatus({ status: 'failed', message: 'No active compaction matched this cancellation request. It may have completed before cancellation arrived; refresh before retrying.' });
+    }).catch((cause) => setCompactStatus({ status: 'failed', message: `Compaction cancellation could not be confirmed: ${errorMessage(cause)}. Its outcome may be unknown.` })).finally(() => { void useMingle.getState().refreshNow(); });
   };
 
   const configure = async (patch: SessionPatch) => {
@@ -440,7 +443,7 @@ export function Composer({ session }: { session: Session }) {
           <div className="composer__send">
             <AttachmentDrafts scope={{ kind: 'session', id: session.id }} busy={attachmentDraft.busy} onFiles={attachmentDraft.addFiles} disabled={sending || updating || Boolean(blocker)} />
             {compactStatus?.status === 'running' ? (
-              <button type="button" className="sendbtn sendbtn--stop" onClick={stopCompaction} aria-label="Stop waiting and interrupt compaction" title="Stop waiting and request a session interrupt"><Square size={12} fill="currentColor" /></button>
+              <button type="button" className="sendbtn sendbtn--stop" onClick={stopCompaction} aria-label="Request cancellation of this compaction" title="Stop waiting and send a cancellation request"><Square size={12} fill="currentColor" /></button>
             ) : running && !['usage', 'import'].includes(localDraftCommand?.[1]?.toLowerCase() ?? '') ? (
               <button type="button" className="sendbtn sendbtn--stop" onClick={stop} aria-label="Interrupt run" title="Interrupt run"><Square size={12} fill="currentColor" /></button>
             ) : (

@@ -46,12 +46,8 @@ export function RecoveryPanel({ snapshot, sessions, runs, tasks }: {
   const request = (group.recoveryState?.activeRequestId ? snapshot.requests.find((item) => item.id === group.recoveryState?.activeRequestId) : undefined)
     ?? requests.find((item) => item.status === 'active' || item.status === 'paused') ?? requests[0];
   const requestDeliveries = snapshot.deliveries.filter((delivery) => !request || delivery.requestId === request.id);
-  const hasRecoverySuccessor = (delivery: GroupSnapshot['deliveries'][number]) => {
-    const successorId = 'recoveredByDeliveryId' in delivery ? delivery.recoveredByDeliveryId : undefined;
-    return typeof successorId === 'string' && successorId.length > 0;
-  };
   const candidateDelivery = [...requestDeliveries]
-    .filter((delivery) => !hasRecoverySuccessor(delivery))
+    .filter((delivery) => !delivery.recoveredByDeliveryId)
     .filter((delivery) => delivery.failure || delivery.status === 'failed' || delivery.status === 'interrupted')
     .sort((a, b) => time(b.updatedAt) - time(a.updatedAt))[0];
   const authoritativeHealthy = group.recoveryState?.status === 'healthy';
@@ -129,11 +125,8 @@ export function RecoveryPanel({ snapshot, sessions, runs, tasks }: {
     ? checkpoint.tasks.filter((task) => task.status !== 'done').map((task) => ({ id: task.id, title: task.title, state: taskState[task.status] }))
     : relatedTasks.filter((task) => task.status !== 'done').map((task) => ({ id: task.id, title: task.title, state: taskState[task.status] }));
   const pendingCheckpointId = group.recoveryState?.pendingCheckpointId;
-  const acknowledgementValue = group.recoveryState && 'acknowledgedCheckpointId' in group.recoveryState
+  const acknowledgedGroupCheckpointId = request && group.recoveryState?.activeRequestId === request.id
     ? group.recoveryState.acknowledgedCheckpointId : undefined;
-  const acknowledgedGroupCheckpointId = typeof acknowledgementValue === 'string'
-    && request && group.recoveryState?.activeRequestId === request.id
-    ? acknowledgementValue : undefined;
   const checkpointAcknowledgementRequired = Boolean(visibleFailure?.outcomeUnknown && (
     !acknowledgedGroupCheckpointId || (pendingCheckpointId && pendingCheckpointId !== acknowledgedGroupCheckpointId)
   ));
@@ -147,11 +140,12 @@ export function RecoveryPanel({ snapshot, sessions, runs, tasks }: {
     const candidateSession = sessions.find((item) => item.id === candidate.sessionId);
     const availability = candidateSession ? providerAvailability(providers, candidateSession.provider) : null;
     const isBusyMember = isBusy(candidateSession);
-    const unavailable = !candidateSession ? 'Session unavailable'
-      : isBusyMember ? 'Busy with another run or queued work'
+    const unavailable = candidate.held ? 'Paused by you'
+      : !candidateSession ? 'Session unavailable'
+        : isBusyMember ? 'Busy with another run or queued work'
         : availability && !availability.available ? `Provider unavailable: ${availability.reason}` : undefined;
     const configuration = candidateSession
-      ? `${providerName(candidateSession.provider)} · ${candidateSession.model} · ${candidateSession.effort} effort · ${candidateSession.policy} permissions · existing conversation/configuration`
+      ? `${providerName(candidateSession.provider)} · ${candidateSession.model} · ${candidateSession.effort} effort · ${candidateSession.policy} permissions · ${candidateSession.isolated ? `isolated worktree${candidateSession.branch ? ` (${candidateSession.branch})` : ''}` : 'project folder'} · existing conversation`
       : 'Session configuration unavailable';
     return { value: candidate.id, label: `@${candidate.handle}`, description: `${ROLE_LABEL[candidate.role]} · ${configuration}${unavailable ? ` · ${unavailable}` : ''}`, disabled: Boolean(unavailable) };
   });
@@ -298,14 +292,17 @@ export function RecoveryPanel({ snapshot, sessions, runs, tasks }: {
         }))}>Retry with new approach</Button> : null}
         {(affectedDelivery || hasLeadFailure) ? <div className="recovery-panel__reassign">
            <SelectMenu label="Reassign to member" value={replacementMemberId} displayValue={replacementMemberId === 'none' ? 'Choose member' : undefined} disabled={actionLocked || !online || replacementChoices.length === 0} options={[{ value: 'none', label: 'Choose member', disabled: true }, ...replacementChoices]} onChange={(value) => { setReplacementMemberId(value); setActionError(null); setActionMessage(null); }} />
-          <small className="recovery-panel__muted">The selected member’s existing conversation, provider, model, effort, and permission policy are used; no configuration is copied or raised automatically.</small>
+          <small className="recovery-panel__muted">The selected member’s existing conversation and workspace are used; source partial edits remain intact and checkpoint/dirty-path references are retained. No files are copied or merged, and permissions do not change.</small>
           {hasLeadFailure && group.mode === 'cowork' ? <small className="recovery-panel__muted">Only this request’s planner is replaced; the other Cowork peers remain.</small> : null}
           {hasLeadFailure && group.mode === 'current-leads' ? <small className="recovery-panel__muted">This switches the group to Orchestrated mode; the original anchor and history remain.</small> : null}
           <Button size="sm" disabled={!canReassign || actionLocked || !online || completedAction.current === reassignScope} why={checkpointReviewWhy ?? sessionBusyWhy ?? actionWhy ?? (!plannerRequestAvailable ? 'The active Cowork request is unavailable, so its planner cannot be replaced safely.' : replacementChoices.length ? 'Choose an available existing member.' : 'No eligible existing member is available.')} busy={busyAction === reassignScope} onClick={() => void performAction(reassignScope, (idempotencyKey) => {
             if (!hasLeadFailure) return { action: 'fallback-delivery', deliveryId: affectedDelivery!.id, replacementMemberId, ...(actionCheckpointId ? { checkpointId: actionCheckpointId } : {}), idempotencyKey };
-            const action: Extract<ApiRecoveryActionRequest, { action: 'replace-coordinator' }> = { action: 'replace-coordinator', replacementMemberId, ...(actionCheckpointId ? { checkpointId: actionCheckpointId } : {}), idempotencyKey };
-            return group.mode === 'cowork' && plannerRequest && (plannerRequest.status === 'active' || plannerRequest.status === 'paused')
-              ? Object.assign(action, { requestId: plannerRequest.id }) : action;
+            const action: Extract<ApiRecoveryActionRequest, { action: 'replace-coordinator' }> = {
+              action: 'replace-coordinator', replacementMemberId,
+              ...(group.mode === 'cowork' && plannerRequest ? { requestId: plannerRequest.id } : {}),
+              ...(actionCheckpointId ? { checkpointId: actionCheckpointId } : {}), idempotencyKey,
+            };
+            return action;
           })}>{reassignLabel}</Button>
         </div> : null}
         <Button size="sm" variant="ghost" disabled={!online || actionLocked || completedAction.current === askScope} why={actionWhy ?? undefined} busy={busyAction === askScope} onClick={() => void performAction(askScope, (idempotencyKey) => ({
