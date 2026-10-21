@@ -278,7 +278,7 @@ export class GroupRepo {
     return this.run("UPDATE group_requests SET planner_member_id = ?, updated_at = ? WHERE group_id = ? AND status IN ('active', 'paused') AND planner_member_id = ?", toMemberId, nowIso(), groupId, fromMemberId);
   }
   updateRequestPlannerOne(requestId: string, toMemberId: string): number {
-    return this.run("UPDATE group_requests SET planner_member_id = ?, updated_at = ? WHERE id = ? AND status IN ('active', 'paused')", toMemberId, nowIso(), requestId);
+    return this.run('UPDATE group_requests SET planner_member_id = ?, updated_at = ? WHERE id = ?', toMemberId, nowIso(), requestId);
   }
   rerouteQueuedRequestDeliveries(requestId: string, fromMemberId: string, toMemberId: string, coordinatorEpoch: number): number {
     return this.run(`UPDATE group_deliveries SET member_id = ?, coordinator_epoch = ?, updated_at = ? WHERE request_id = ? AND member_id = ?

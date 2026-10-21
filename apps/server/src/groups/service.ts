@@ -92,6 +92,7 @@ export class GroupService {
   private closed = false;
   private lock: Promise<unknown> = Promise.resolve();
   private readonly pending = new Set<string>();
+  private readonly automaticFallbackCaptures = new Set<string>();
   private readonly safeRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** Only former coordinator runs lose authority on takeover; independent worker runs keep their tools. */
   private readonly fencedCoordinatorDeliveries = new Set<string>();
@@ -792,12 +793,12 @@ export class GroupService {
 
   private applyCoordinatorReplacement(
     group: ConversationGroup, replacementId: string, automatic: boolean, checkpointId?: string, requestIdArg?: string,
-    quotaPoolVerification?: 'verified-distinct' | 'unverified',
+    quotaPoolVerification?: 'verified-distinct' | 'unverified', automaticCheckpoint?: RecoveryCheckpoint,
   ): void {
     const target = this.requireMember(group, replacementId);
     if (group.mode === 'cowork') {
       const request = requestIdArg ? this.repo.getRequest(requestIdArg) : undefined;
-      if (!request || request.groupId !== group.id || (request.status !== 'active' && request.status !== 'paused')) {
+      if (!request || request.groupId !== group.id || (request.status !== 'active' && request.status !== 'paused' && !(automaticCheckpoint && request.status === 'completed'))) {
         throw conflict('Cowork coordinator recovery requires the affected active request ID');
       }
       const old = this.requireMember(group, request.plannerMemberId);
@@ -809,14 +810,21 @@ export class GroupService {
         || this.repo.requestDeliveries(request.id, ['queued', 'running']).some((row) => row.memberId === target.id)) {
         throw conflict(`@${target.handle} must be idle before taking this request's planning lease`);
       }
+      this.assertNoTargetTaskConflict(group, target, targetSession.worktreePath, [], '');
       const oldRequestDeliveries = this.repo.requestDeliveries(request.id, ['running']).filter((row) => row.memberId === old.id);
       if (sourceBusy && (automatic || sourceSession.worktreePath === targetSession.worktreePath)) throw conflict(`Wait for @${old.handle} to finish cleanup before changing this request's planning lease`);
       const failed = this.repo.requestDeliveries(request.id, ['failed', 'interrupted']).filter((row) => row.memberId === old.id && row.runId).at(-1);
+      if (automaticCheckpoint) {
+        const failedSessionId = failed ? this.repo.getMember(failed.memberId)?.sessionId : undefined;
+        if (!failed || failed.requestId !== request.id || failed.runId !== automaticCheckpoint.runId || failedSessionId !== automaticCheckpoint.sessionId) {
+          throw conflict('The automatic coordinator checkpoint does not match the failed planning run');
+        }
+      }
       const failure = failed?.runId ? this.recovery?.failureForRun(failed.runId) ?? null : null;
-      const checkpoint = this.recoveryCheckpoint(group, checkpointId, failure, request.id, failed?.id ?? oldRequestDeliveries.at(-1)?.id);
+      const checkpoint = automaticCheckpoint ? undefined : this.recoveryCheckpoint(group, checkpointId, failure, request.id, failed?.id ?? oldRequestDeliveries.at(-1)?.id);
       if (sourceBusy && sourceSession.worktreePath !== targetSession.worktreePath && !checkpoint) throw conflict('Changing the planning lease across worktrees requires an acknowledged source checkpoint');
-      if (automatic && (sourceSession.policy !== targetSession.policy || sourceSession.worktreePath !== targetSession.worktreePath)) {
-        throw conflict('Automatic cowork fallback requires the same permission policy and worktree');
+      if (automatic && sourceSession.policy !== targetSession.policy) {
+        throw conflict('Automatic cowork fallback requires the same permission policy');
       }
       const epoch = (group.coordinatorEpoch ?? 1) + 1;
       this.repo.updateRequestPlannerOne(request.id, target.id);
@@ -830,9 +838,10 @@ export class GroupService {
       } as GroupRecoveryState });
       this.consumeLeadFallback(group, target.id);
       const currentGroup = this.repo.getGroup(group.id)!;
-      if (failed) this.queueCoordinatorContinuation(currentGroup, request, target, failed, checkpoint?.id);
+      if (failed) this.queueCoordinatorContinuation(currentGroup, request, target, failed, checkpoint?.id, automaticCheckpoint);
       this.event(group, automatic ? 'group.planner.fallback' : 'group.planner.replaced', `Cowork planning lease moved: @${old.handle} → @${target.handle}`,
-        { requestId: request.id, fromMemberId: old.id, toMemberId: target.id, coordinatorEpoch: epoch, rerouted, automatic, checkpointId: checkpoint?.id ?? null });
+        { requestId: request.id, fromMemberId: old.id, toMemberId: target.id, coordinatorEpoch: epoch, rerouted, automatic,
+          checkpointId: checkpoint?.id ?? null, providerCheckpointId: automaticCheckpoint?.id ?? null });
       return;
     }
 
@@ -851,8 +860,11 @@ export class GroupService {
     const lastFailureDelivery = this.repo.memberDeliveries(old.id, ['failed', 'interrupted']).filter((row) => row.runId).at(-1);
     const activeOld = this.repo.memberDeliveries(old.id, ['running']).at(-1);
     const contextDelivery = lastFailureDelivery ?? activeOld;
+    if (automaticCheckpoint && (!contextDelivery || contextDelivery.runId !== automaticCheckpoint.runId || contextDelivery.memberId !== old.id)) {
+      throw conflict('The automatic coordinator checkpoint does not match the failed coordinator run');
+    }
     const failure = contextDelivery?.runId ? this.recovery?.failureForRun(contextDelivery.runId) ?? null : null;
-    const checkpoint = this.recoveryCheckpoint(group, checkpointId, failure, contextDelivery?.requestId, contextDelivery?.id);
+    const checkpoint = automaticCheckpoint ? undefined : this.recoveryCheckpoint(group, checkpointId, failure, contextDelivery?.requestId, contextDelivery?.id);
     if (!automatic && sourceSession.worktreePath !== targetSession.worktreePath && contextDelivery && !checkpoint) {
       throw conflict('Coordinator replacement across worktrees requires an acknowledged source recovery checkpoint');
     }
@@ -861,8 +873,8 @@ export class GroupService {
       const nativeCheckpoint = providerCheckpointId ? this.recovery?.latest(sourceSession.id) : null;
       if (!nativeCheckpoint || nativeCheckpoint.id !== providerCheckpointId) throw conflict('The acknowledged checkpoint does not contain source worktree references');
     }
-    if (automatic && (sourceSession.policy !== targetSession.policy || sourceSession.worktreePath !== targetSession.worktreePath)) {
-      throw conflict(`Automatic coordinator fallback requires the same permission policy and worktree as @${old.handle}`);
+    if (automatic && sourceSession.policy !== targetSession.policy) {
+      throw conflict(`Automatic coordinator fallback requires the same permission policy as @${old.handle}`);
     }
     const runningOld = this.repo.memberDeliveries(old.id, ['running']).map((row) => row.id);
     const epoch = (group.coordinatorEpoch ?? 1) + 1;
@@ -882,28 +894,54 @@ export class GroupService {
     const rerouted = this.repo.rerouteQueuedCoordinatorWork(group.id, old.id, target.id, epoch);
     const updatedGroup = this.repo.getGroup(group.id)!;
     for (const request of this.repo.requests(group.id, 1000)) {
-      if (request.status === 'completed') continue;
-      const failed = this.repo.memberDeliveries(old.id, ['failed', 'interrupted']).find((row) => row.requestId === request.id);
+      if (request.status === 'completed' && !automaticCheckpoint) continue;
+      const failed = this.repo.memberDeliveries(old.id, ['failed', 'interrupted']).find((row) => row.requestId === request.id
+        && (!automaticCheckpoint || row.runId === automaticCheckpoint.runId));
       if (!failed) continue;
-      this.queueCoordinatorContinuation(updatedGroup, request, target, failed, checkpoint?.id);
+      this.queueCoordinatorContinuation(updatedGroup, request, target, failed, checkpoint?.id, automaticCheckpoint);
     }
     this.event(group, automatic ? 'group.coordinator.fallback' : 'group.coordinator.replaced',
       automatic ? `Coordinator fallback: @${old.handle} → @${target.handle}` : `Coordinator replaced: @${old.handle} → @${target.handle}`,
       { fromMemberId: old.id, toMemberId: target.id, coordinatorEpoch: epoch, rerouted, automatic, convertedFromCurrentLeads: convertsCurrentLead,
         sourceProvider: sourceSession.provider, targetProvider: targetSession.provider, sourceModel: sourceSession.model, targetModel: targetSession.model,
         sourcePolicy: sourceSession.policy, targetPolicy: targetSession.policy, checkpointId: checkpoint?.id ?? null,
+        providerCheckpointId: automaticCheckpoint?.id ?? null,
         quotaPoolVerification: quotaPoolVerification ?? (automatic ? 'verified' : undefined),
         fallbackUncertainty: quotaPoolVerification === 'unverified' ? 'Distinct provider quota pools were not reported; this single explicitly configured fallback does not assert that the replacement has quota available.' : undefined });
     for (const id of runningOld) this.fencedCoordinatorDeliveries.add(id);
   }
 
-  private queueCoordinatorContinuation(group: ConversationGroup, request: ReturnType<GroupRepo['getRequest']> & object, member: MemberRow, failed: DeliveryRow, checkpointId?: string): boolean {
+  private queueCoordinatorContinuation(
+    group: ConversationGroup, request: ReturnType<GroupRepo['getRequest']> & object, member: MemberRow, failed: DeliveryRow,
+    checkpointId?: string, automaticCheckpoint?: RecoveryCheckpoint,
+  ): boolean {
     if (this.repo.deliverySuccessor(group.id, failed.id)) { this.repo.setDelivery(failed.id, { retryable: false }); return true; }
+    this.repo.updateRequestPlannerOne(request.id, member.id);
     const existing = this.repo.requestDeliveries(request.id, ['queued', 'running']).some((row) => row.memberId === member.id && (row.kind === 'request' || row.kind === 'result'));
     if (existing) {
       const candidate = this.repo.requestDeliveries(request.id, ['queued', 'running']).find((row) => row.memberId === member.id && (row.kind === 'request' || row.kind === 'result'));
+      if (automaticCheckpoint && candidate) {
+        if (candidate.status !== 'queued') throw conflict('The replacement coordinator already started this request before its fresh checkpoint could be added');
+        const existingMessage = this.repo.getMessage(candidate.messageId)?.content ?? '';
+        const assignments = this.repo.requestAssignments(request.id).slice(0, 20).map((assignment) => {
+          const task = this.store.getTask(assignment.taskId);
+          if (!task) return `- ${assignment.taskId}: unavailable`;
+          const dependencies = task.dependsOn.map((id) => `${id} [${this.store.getTask(id)?.status ?? 'missing'}]`).join(', ') || 'none';
+          return `- ${task.id} [${task.status}] ${clean(task.title, 160)}; accepts: ${clean(task.acceptanceCriteria, 500)}; depends on: ${dependencies}`;
+        });
+        const artifacts = this.repo.artifactsForRequest(request.id).slice(0, 30)
+          .map((artifact) => `- ${artifact.path} @ ${artifact.commitId.slice(0, 12)}`);
+        const targetSession = this.store.getSession(member.sessionId);
+        const recoveryContext = this.checkpointHandoffContext(automaticCheckpoint, targetSession?.worktreePath ?? '');
+        const message = this.repo.insertMessage({ groupId: group.id, senderMemberId: null, recipients: [member.id], kind: 'status', requestId: request.id,
+          content: truncate(`Continue request ${request.id} after automatic coordinator quota handoff. Inspect the checkpoint, current task and artifact state before acting; do not repeat completed side effects.\n${recoveryContext}\nExisting queued context:\n${clean(existingMessage, 4000)}\n\nAssignments, acceptance, and dependencies:\n${assignments.join('\n') || '- none'}\n\nVerified artifacts:\n${artifacts.join('\n') || '- none'}`, 16_000) });
+        this.repo.setDelivery(candidate.id, { messageId: message.id });
+      }
       const linked = candidate ? this.repo.linkDeliverySuccessor(group.id, request.id, failed.id, candidate.id) : true;
-      if (linked) this.repo.setDelivery(failed.id, { retryable: false });
+      if (linked) {
+        this.repo.setDelivery(failed.id, { retryable: false });
+        if (automaticCheckpoint && candidate && request.status === 'completed') this.repo.updateRequest(request.id, { status: 'active' });
+      }
       return linked;
     }
     const hop = failed.hop + 1;
@@ -922,17 +960,28 @@ export class GroupService {
     const sourceSession = source ? this.store.getSession(source.sessionId) : undefined;
     const targetSession = this.store.getSession(member.sessionId);
     let sourceReferences = '';
-    if (sourceSession && targetSession && sourceSession.worktreePath !== targetSession.worktreePath) {
-      const groupCheckpoint = checkpointId ? this.repo.getRecoveryCheckpoint(group.id, checkpointId) : undefined;
-      const providerCheckpointId = typeof groupCheckpoint?.payload.providerCheckpointId === 'string' ? groupCheckpoint.payload.providerCheckpointId : undefined;
-      const nativeCheckpoint = providerCheckpointId ? this.recovery?.latest(sourceSession.id) : null;
-      if (!nativeCheckpoint || nativeCheckpoint.id !== providerCheckpointId) {
-        const reason = 'Coordinator continuation is waiting for an acknowledged source checkpoint because replacement worktrees differ.';
+    if (automaticCheckpoint) {
+      if (!sourceSession || automaticCheckpoint.sessionId !== sourceSession.id || automaticCheckpoint.runId !== failed.runId) {
+        const reason = 'Coordinator continuation is waiting for its fresh source checkpoint to match the failed run.';
         this.repo.updateGroup(group.id, { recoveryState: { status: 'paused', reason, activeRequestId: request.id, updatedAt: nowIso() } });
-        this.event(group, 'group.coordinator.continuation.blocked', reason, { requestId: request.id, failedDeliveryId: failed.id });
+        this.event(group, 'group.coordinator.continuation.blocked', reason, { requestId: request.id, failedDeliveryId: failed.id, providerCheckpointId: automaticCheckpoint.id });
         return false;
       }
-      sourceReferences = `Source checkpoint worktree: ${nativeCheckpoint.worktree.path}; branch ${nativeCheckpoint.worktree.branch ?? 'unknown'}; HEAD ${nativeCheckpoint.worktree.head ?? 'unknown'}; dirty paths ${nativeCheckpoint.worktree.dirtyPaths.slice(0, 50).join(', ') || 'none reported'}${nativeCheckpoint.worktree.dirtyPathsTruncated ? ' (list truncated)' : ''}. These references are not copied into the replacement worktree; inspect or integrate them explicitly.\n`;
+      sourceReferences = this.checkpointHandoffContext(automaticCheckpoint, targetSession?.worktreePath ?? '');
+    }
+    if (sourceSession && targetSession && sourceSession.worktreePath !== targetSession.worktreePath) {
+      const groupCheckpoint = !automaticCheckpoint && checkpointId ? this.repo.getRecoveryCheckpoint(group.id, checkpointId) : undefined;
+      const providerCheckpointId = typeof groupCheckpoint?.payload.providerCheckpointId === 'string' ? groupCheckpoint.payload.providerCheckpointId : undefined;
+      const nativeCheckpoint = automaticCheckpoint ?? (providerCheckpointId ? this.recovery?.latest(sourceSession.id) : null);
+      if (!automaticCheckpoint) {
+        if (!nativeCheckpoint || nativeCheckpoint.id !== providerCheckpointId) {
+          const reason = 'Coordinator continuation is waiting for an acknowledged source checkpoint because replacement worktrees differ.';
+          this.repo.updateGroup(group.id, { recoveryState: { status: 'paused', reason, activeRequestId: request.id, updatedAt: nowIso() } });
+          this.event(group, 'group.coordinator.continuation.blocked', reason, { requestId: request.id, failedDeliveryId: failed.id });
+          return false;
+        }
+        sourceReferences = this.checkpointHandoffContext(nativeCheckpoint, targetSession.worktreePath);
+      }
     }
     const taskContext = this.repo.requestAssignments(request.id).slice(0, 20).map((assignment) => {
       const task = this.store.getTask(assignment.taskId);
@@ -955,6 +1004,22 @@ export class GroupService {
     return true;
   }
 
+  private checkpointHandoffContext(checkpoint: RecoveryCheckpoint, targetWorktreePath: string): string {
+    const worktree = checkpoint.worktree;
+    const dirtyPaths = worktree.dirtyPaths.slice(0, 50).join(', ') || 'none reported';
+    const artifacts = checkpoint.artifacts.slice(0, 20).map((artifact) => `- ${clean(artifact.path, 500)} @ ${clean(artifact.revision, 100)}`);
+    const tasks = checkpoint.tasks.slice(0, 20).map((task) =>
+      `- ${clean(task.id, 100)} [${task.status}] ${clean(task.title, 200)}; acceptance: ${clean(task.acceptanceCriteria, 500)}`);
+    const separateWorktree = targetWorktreePath !== worktree.path;
+    return `Fresh source recovery checkpoint: ${checkpoint.id} (captured ${checkpoint.capturedAt}).\n`
+      + `Source worktree ${clean(worktree.path, 1000)}; branch ${clean(worktree.branch ?? 'unknown', 200)}; HEAD ${clean(worktree.head ?? 'unknown', 100)}; dirty paths ${clean(dirtyPaths, 3000)}${worktree.dirtyPathsTruncated ? ' (list truncated)' : ''}.\n`
+      + (separateWorktree
+        ? 'These source edits are references only and are not copied into the replacement worktree; inspect or explicitly integrate needed changes.\n'
+        : 'The source and target share a worktree; inspect its recorded changes and do not repeat completed side effects.\n')
+      + `Checkpoint artifacts:\n${artifacts.join('\n') || '- none recorded'}\n`
+      + `Checkpoint tasks and acceptance criteria:\n${tasks.join('\n') || '- none recorded'}\n`;
+  }
+
   private setFallbackBlocked(group: ConversationGroup, failure: ProviderFailure, reason: string): void {
     const bounded = clean(reason, 1000);
     if (group.recoveryState?.lastFailureId === failure.id && group.recoveryState.reason === bounded && group.recoveryState.status === 'paused') return;
@@ -964,6 +1029,16 @@ export class GroupService {
       ...(group.recoveryState?.pendingCheckpointId ? { pendingCheckpointId: group.recoveryState.pendingCheckpointId } : {}), updatedAt: nowIso(),
     } });
     this.event(group, 'group.recovery.fallback-blocked', bounded, { failureId: failure.id, kind: failure.kind });
+  }
+
+  private recordFallbackBlocked(groupId: string, failure: ProviderFailure, reason: string): void {
+    if (!failure.runId) return;
+    this.store.tx(() => {
+      const group = this.repo.getGroup(groupId);
+      const currentFailure = this.recovery?.failureForRun(failure.runId!);
+      if (!group || currentFailure?.id !== failure.id) return;
+      this.setFallbackBlocked(group, failure, reason);
+    });
   }
 
   private quotaFallbackPoolCheck(group: ConversationGroup, source: ProviderFailure, target: Session): { ok: true; verification: 'verified-distinct' | 'unverified' } | { ok: false; reason: string } {
@@ -984,11 +1059,45 @@ export class GroupService {
     return { ok: true, verification: 'unverified' };
   }
 
-  private attemptAutomaticLeadFallback(group: ConversationGroup): boolean {
-    if (!group.recoveryPolicy?.automaticFallback || !group.recoveryPolicy.leadFallbackMemberId) return false;
+  private automaticFallbackFingerprint(groupId: string, deliveryIdArg: string, targetId: string): string | null {
+    const group = this.repo.getGroup(groupId);
+    const delivery = this.repo.getDelivery(deliveryIdArg);
+    const source = delivery ? this.repo.getMember(delivery.memberId) : undefined;
+    const target = this.repo.getMember(targetId);
+    const assignment = delivery?.assignmentId ? this.repo.getAssignment(delivery.assignmentId) : undefined;
+    const task = assignment ? this.store.getTask(assignment.taskId) : undefined;
+    const request = delivery ? this.repo.getRequest(delivery.requestId) : undefined;
+    const sourceSession = source ? this.store.getSession(source.sessionId) : undefined;
+    const targetSession = target ? this.store.getSession(target.sessionId) : undefined;
+    if (!group || !delivery || !source || !target || !sourceSession || !targetSession || !request) return null;
+    const sessionState = (session: Session) => ({ id: session.id, provider: session.provider, model: session.model, effort: session.effort,
+      policy: session.policy, serviceTier: session.serviceTier, worktreePath: session.worktreePath, status: session.status });
+    return JSON.stringify({
+      group: { id: group.id, projectId: group.projectId, mode: group.mode, orchestratorMemberId: group.orchestratorMemberId,
+        coordinatorEpoch: group.coordinatorEpoch, paused: group.paused, maxParallel: group.maxParallel, maxTurns: group.maxTurns,
+        maxHops: group.maxHops, recoveryPolicy: group.recoveryPolicy, recoveryStatus: group.recoveryState?.status,
+        recoveryRequestId: group.recoveryState?.activeRequestId },
+      delivery: { id: delivery.id, groupId: delivery.groupId, requestId: delivery.requestId, messageId: delivery.messageId,
+        memberId: delivery.memberId, status: delivery.status, runId: delivery.runId, kind: delivery.kind, assignmentId: delivery.assignmentId,
+        taskId: delivery.taskId, hop: delivery.hop, retryable: delivery.retryable, updatedAt: delivery.updatedAt },
+      source: { id: source.id, groupId: source.groupId, sessionId: source.sessionId, role: source.role, held: source.held, removedAt: source.removedAt,
+        session: sessionState(sourceSession) },
+      target: { id: target.id, groupId: target.groupId, sessionId: target.sessionId, role: target.role, held: target.held, removedAt: target.removedAt,
+        session: sessionState(targetSession) },
+      assignment: assignment && { id: assignment.id, deliveryId: assignment.deliveryId, taskId: assignment.taskId, toMemberId: assignment.toMemberId,
+        scope: assignment.scope },
+      task: task && { id: task.id, sessionId: task.sessionId, status: task.status, title: task.title, acceptanceCriteria: task.acceptanceCriteria, dependsOn: task.dependsOn },
+      request: { id: request.id, groupId: request.groupId, plannerMemberId: request.plannerMemberId, status: request.status, turnsUsed: request.turnsUsed },
+      failure: delivery.runId ? this.recovery?.failureForRun(delivery.runId) : null,
+    });
+  }
+
+  private async attemptAutomaticLeadFallback(groupArg: ConversationGroup): Promise<boolean> {
+    const group = this.repo.getGroup(groupArg.id);
+    if (!group || group.paused || !group.recoveryPolicy?.automaticFallback || !group.recoveryPolicy.leadFallbackMemberId) return false;
     const coworkRequest = group.mode === 'cowork'
-      ? this.repo.requests(group.id, 1000).find((request) => request.status !== 'completed'
-        && this.repo.requestDeliveries(request.id, ['failed', 'interrupted']).some((row) => row.memberId === request.plannerMemberId && row.runId))
+      ? this.repo.requests(group.id, 1000).find((request) =>
+        this.repo.requestDeliveries(request.id, ['failed', 'interrupted']).some((row) => row.memberId === request.plannerMemberId && row.runId))
       : undefined;
     const leadId = group.mode === 'cowork' ? coworkRequest?.plannerMemberId
       : group.orchestratorMemberId ?? (group.mode === 'current-leads' ? this.repo.members(group.id, false).find((member) => member.sessionId === group.anchorSessionId)?.id : undefined);
@@ -998,80 +1107,197 @@ export class GroupService {
       ? this.repo.requestDeliveries(coworkRequest.id, ['failed', 'interrupted']).filter((row) => row.memberId === lead.id && row.runId).at(-1)
       : this.repo.memberDeliveries(lead.id, ['failed', 'interrupted']).filter((row) => row.runId).at(-1);
     const failure = failed?.runId ? this.recovery?.failureForRun(failed.runId) : null;
-    if (!failure || failure.actor !== 'lead' || failure.kind !== 'quota_exhausted') return false;
-    if (failure.outcomeUnknown !== false || failure.continuationSafety !== 'safe' || failure.dispatchState === 'unknown') {
-      this.setFallbackBlocked(group, failure, 'Automatic coordinator fallback is waiting for a human because the provider outcome is not proven safe to continue.');
+    if (!failed || !failure || failure.actor !== 'lead' || failure.kind !== 'quota_exhausted') return false;
+    if (failure.outcomeUnknown !== false || failure.dispatchState === 'unknown') {
+      this.recordFallbackBlocked(group.id, failure, 'Automatic coordinator fallback is waiting for a human because the provider outcome or dispatch state is unknown.');
       return false;
     }
-    const target = this.repo.getMember(group.recoveryPolicy.leadFallbackMemberId);
-    if (!target || target.groupId !== group.id || target.removedAt || target.held) {
-      this.setFallbackBlocked(group, failure, 'Automatic coordinator fallback is unavailable: the configured replacement is not an active, available group member.');
-      return false;
-    }
+    const targetId = group.recoveryPolicy.leadFallbackMemberId;
+    const target = this.repo.getMember(targetId);
     const sourceSession = this.store.getSession(lead.sessionId);
-    const targetSession = this.store.getSession(target.sessionId);
-    if (!sourceSession || this.sessionBusy(sourceSession)) return false;
-    if (!targetSession || this.sessionBusy(targetSession) || this.repo.memberDeliveries(target.id, ['queued', 'running']).length) return false;
-    if (sourceSession.policy !== targetSession.policy || sourceSession.worktreePath !== targetSession.worktreePath) {
-      this.setFallbackBlocked(group, failure, `Automatic coordinator fallback was blocked: @${target.handle} must share @${lead.handle}'s permission policy and worktree.`);
+    const targetSession = target ? this.store.getSession(target.sessionId) : undefined;
+    if (!target || target.groupId !== group.id || target.removedAt || target.held || !sourceSession || !targetSession) {
+      this.recordFallbackBlocked(group.id, failure, 'Automatic coordinator fallback is unavailable: the configured replacement is not an active, available group member.');
+      return false;
+    }
+    if (this.sessionBusy(sourceSession) || this.repo.memberDeliveries(lead.id, ['running']).length) return false;
+    if (this.sessionBusy(targetSession) || this.repo.memberDeliveries(target.id, ['queued', 'running']).length) return false;
+    if (sourceSession.policy !== targetSession.policy) {
+      this.recordFallbackBlocked(group.id, failure, `Automatic coordinator fallback was blocked: @${target.handle} must share @${lead.handle}'s permission policy.`);
       return false;
     }
     const pool = this.quotaFallbackPoolCheck(group, failure, targetSession);
-    if (!pool.ok) { this.setFallbackBlocked(group, failure, pool.reason); return false; }
+    if (!pool.ok) { this.recordFallbackBlocked(group.id, failure, pool.reason); return false; }
+    const fingerprint = this.automaticFallbackFingerprint(group.id, failed.id, target.id);
+    if (!fingerprint) return false;
+    const captureKey = `${group.id}:lead:${failed.id}`;
+    if (this.automaticFallbackCaptures.has(captureKey)) return false;
+    this.automaticFallbackCaptures.add(captureKey);
     try {
-      this.applyCoordinatorReplacement(group, target.id, true, undefined, coworkRequest?.id, pool.verification);
-      return true;
-    } catch (error) {
-      if (error instanceof HttpError) {
-        this.setFallbackBlocked(group, failure, error.message);
+      let checkpoint: RecoveryCheckpoint;
+      try {
+        checkpoint = await this.recovery!.capture(sourceSession.id, `Automatic quota handoff for ${failed.id}`, failed.runId!);
+        this.validateHandoffCheckpoint(checkpoint, sourceSession.id, failed.runId!);
+      } catch (error) {
+        const reason = error instanceof HttpError ? error.message : 'A fresh source recovery checkpoint could not be captured; automatic fallback remains blocked.';
+        this.recordFallbackBlocked(group.id, failure, reason);
         return false;
       }
-      return false;
+      if (this.closed || this.automaticFallbackFingerprint(group.id, failed.id, target.id) !== fingerprint) return false;
+      let moved = false;
+      try {
+        this.store.tx(() => {
+          const fresh = this.repo.getGroup(group.id);
+          const currentFailure = this.recovery?.failureForRun(failed.runId!);
+          const currentSource = this.repo.getMember(lead.id);
+          const currentTarget = this.repo.getMember(target.id);
+          const currentSourceSession = currentSource ? this.store.getSession(currentSource.sessionId) : undefined;
+          const currentTargetSession = currentTarget ? this.store.getSession(currentTarget.sessionId) : undefined;
+          if (this.closed || !fresh || fresh.paused || this.automaticFallbackFingerprint(group.id, failed.id, target.id) !== fingerprint
+            || currentFailure?.id !== failure.id || !currentSourceSession || !currentTargetSession
+            || this.sessionBusy(currentSourceSession) || this.repo.memberDeliveries(lead.id, ['running']).length
+            || this.sessionBusy(currentTargetSession) || this.repo.memberDeliveries(target.id, ['queued', 'running']).length) return;
+          this.validateHandoffCheckpoint(checkpoint, currentSourceSession.id, failed.runId!);
+          const currentPool = this.quotaFallbackPoolCheck(fresh, currentFailure, currentTargetSession);
+          if (!currentPool.ok) { this.setFallbackBlocked(fresh, failure, currentPool.reason); return; }
+          this.applyCoordinatorReplacement(fresh, target.id, true, undefined, coworkRequest?.id, currentPool.verification, checkpoint);
+          moved = true;
+        });
+      } catch (error) {
+        moved = false;
+        if (error instanceof HttpError) this.recordFallbackBlocked(group.id, failure, error.message);
+        else this.log('error', `Automatic coordinator handoff failed for ${failed.id}`, error);
+      }
+      return moved;
+    } finally {
+      this.automaticFallbackCaptures.delete(captureKey);
     }
   }
 
-  private attemptAutomaticWorkerFallback(group: ConversationGroup, delivery: DeliveryRow): boolean {
-    if (!group.recoveryPolicy?.automaticFallback || delivery.kind !== 'assignment' || !delivery.assignmentId || !delivery.runId) return false;
+  private consumeWorkerFallback(group: ConversationGroup, sourceId: string, targetId: string): void {
+    const policy = group.recoveryPolicy;
+    if (!policy) return;
+    const workerFallbacks = Object.fromEntries(Object.entries(policy.workerFallbacks ?? {}).filter(([id]) => id !== sourceId && id !== targetId));
+    const automaticFallback = Boolean(policy.leadFallbackMemberId || Object.keys(workerFallbacks).length) && policy.automaticFallback;
+    const nextPolicy: GroupRecoveryPolicy = { ...policy, automaticFallback, workerFallbacks };
+    this.repo.updateGroup(group.id, { recoveryPolicy: nextPolicy });
+    this.event(group, 'group.recovery-policy.consumed', 'Configured worker fallback was consumed by quota handoff', {
+      sourceMemberId: sourceId, replacementMemberId: targetId, recoveryPolicy: nextPolicy,
+    });
+  }
+
+  private async attemptAutomaticWorkerFallback(groupArg: ConversationGroup, deliveryArg: DeliveryRow): Promise<boolean> {
+    const group = this.repo.getGroup(groupArg.id);
+    const delivery = this.repo.getDelivery(deliveryArg.id);
+    if (!group || group.paused || !delivery || !group.recoveryPolicy?.automaticFallback || delivery.kind !== 'assignment' || !delivery.assignmentId || !delivery.runId) return false;
     const source = this.repo.getMember(delivery.memberId);
     const assignment = this.repo.getAssignment(delivery.assignmentId);
-    if (!source || !assignment || assignment.deliveryId !== delivery.id || this.repo.deliverySuccessor(group.id, delivery.id)) return false;
+    const workerRole: GroupMember['role'] = group.mode === 'cowork' ? 'peer' : 'worker';
+    if (!source || source.role !== workerRole || !assignment || assignment.deliveryId !== delivery.id || this.repo.deliverySuccessor(group.id, delivery.id)) return false;
     const failure = this.recovery?.failureForRun(delivery.runId);
-    if (!failure || failure.actor !== 'worker' || failure.kind !== 'quota_exhausted' || failure.outcomeUnknown !== false || failure.continuationSafety !== 'safe' || failure.dispatchState === 'unknown') return false;
-    const replacementId = group.recoveryPolicy.workerFallbacks?.[source.id];
-    if (!replacementId) return false;
-    const target = this.repo.getMember(replacementId);
+    if (!failure || failure.actor !== 'worker' || failure.kind !== 'quota_exhausted') return false;
+    if (failure.outcomeUnknown !== false || failure.dispatchState === 'unknown') {
+      this.recordFallbackBlocked(group.id, failure, 'Automatic worker fallback is waiting for a human because the provider outcome or dispatch state is unknown.');
+      return false;
+    }
+    const targetId = group.recoveryPolicy.workerFallbacks?.[source.id];
+    if (!targetId) return false;
+    const target = this.repo.getMember(targetId);
     const task = this.store.getTask(assignment.taskId);
     const sourceSession = this.store.getSession(source.sessionId);
     const targetSession = target ? this.store.getSession(target.sessionId) : undefined;
-    if (!target || target.groupId !== group.id || target.removedAt || target.held || !task || task.status === 'done' || task.status === 'running') return false;
+    if (!target || target.groupId !== group.id || target.removedAt || target.held || target.role !== workerRole || !task || task.status === 'done' || task.status === 'running') {
+      this.recordFallbackBlocked(group.id, failure, 'Automatic worker fallback is unavailable: the configured replacement or task is no longer eligible.');
+      return false;
+    }
     if (!sourceSession || this.sessionBusy(sourceSession) || this.repo.memberDeliveries(source.id, ['running']).length) return false;
     if (!targetSession || this.sessionBusy(targetSession) || this.repo.memberDeliveries(target.id, ['queued', 'running']).length) return false;
-    if (sourceSession.policy !== targetSession.policy || sourceSession.worktreePath !== targetSession.worktreePath) {
-      this.setFallbackBlocked(group, failure, `Automatic reassignment for @${source.handle} was blocked: @${target.handle} does not have the same permission policy and worktree.`);
+    if (sourceSession.policy !== targetSession.policy) {
+      this.recordFallbackBlocked(group.id, failure, `Automatic reassignment for @${source.handle} was blocked: @${target.handle} does not have the same permission policy.`);
       return false;
     }
     const pool = this.quotaFallbackPoolCheck(group, failure, targetSession);
-    if (!pool.ok) { this.setFallbackBlocked(group, failure, pool.reason); return false; }
+    if (!pool.ok) { this.recordFallbackBlocked(group.id, failure, pool.reason); return false; }
     try { this.assertNoTargetTaskConflict(group, target, targetSession.worktreePath, assignment.scope, assignment.id); }
     catch (error) {
-      if (error instanceof HttpError) this.setFallbackBlocked(group, failure, error.message);
+      if (error instanceof HttpError) this.recordFallbackBlocked(group.id, failure, error.message);
       return false;
     }
     const request = this.repo.getRequest(delivery.requestId);
     if (!request) return false;
-    const oldText = this.repo.getMessage(delivery.messageId)?.content ?? task.description;
-    const message = this.repo.insertMessage({ groupId: group.id, senderMemberId: null, recipients: [target.id], kind: 'assignment', requestId: request.id,
-      content: truncate(`Automatic quota fallback for task ${task.id}: ${task.title}. Continue in the same worktree and inspect current changes; do not repeat completed side effects.\nScope: ${assignment.scope.join(', ')}\n${clean(oldText, 6000)}`, 12_000) });
-    const nextId = deliveryId();
-    this.store.updateTask(task.id, { sessionId: target.sessionId });
-    this.repo.insertDelivery({ id: nextId, groupId: group.id, requestId: request.id, messageId: message.id, memberId: target.id, kind: 'assignment', hop: delivery.hop, assignmentId: assignment.id, taskId: task.id, coordinatorEpoch: group.coordinatorEpoch });
-    this.repo.reassignAssignment(assignment.id, target.id, nextId);
-    this.linkRecoverySuccessor(group, delivery, nextId);
-    this.repo.setDelivery(delivery.id, { retryable: false });
-    this.repo.updateMember(source.id, { held: true });
-    this.repo.updateGroup(group.id, { recoveryState: { status: 'recovering', activeRequestId: request.id, updatedAt: nowIso() } });
-    this.event(group, 'group.assignment.fallback', `Quota fallback: @${source.handle} → @${target.handle}`, { assignmentId: assignment.id, failedDeliveryId: delivery.id, replacementDeliveryId: nextId, failureId: failure.id }, target.sessionId);
-    return true;
+    const fingerprint = this.automaticFallbackFingerprint(group.id, delivery.id, target.id);
+    if (!fingerprint) return false;
+    const captureKey = `${group.id}:worker:${delivery.id}`;
+    if (this.automaticFallbackCaptures.has(captureKey)) return false;
+    this.automaticFallbackCaptures.add(captureKey);
+    try {
+      let checkpoint: RecoveryCheckpoint;
+      try {
+        checkpoint = await this.recovery!.capture(sourceSession.id, `Automatic quota handoff for ${delivery.id}`, delivery.runId);
+        this.validateHandoffCheckpoint(checkpoint, sourceSession.id, delivery.runId);
+      } catch (error) {
+        const reason = error instanceof HttpError ? error.message : 'A fresh source recovery checkpoint could not be captured; automatic fallback remains blocked.';
+        this.recordFallbackBlocked(group.id, failure, reason);
+        return false;
+      }
+      if (this.closed || this.automaticFallbackFingerprint(group.id, delivery.id, target.id) !== fingerprint) return false;
+      let moved = false;
+      try {
+        this.store.tx(() => {
+          const fresh = this.repo.getGroup(group.id);
+          const currentFailure = this.recovery?.failureForRun(delivery.runId!);
+          const currentSource = this.repo.getMember(source.id);
+          const currentTarget = this.repo.getMember(target.id);
+          const currentAssignment = this.repo.getAssignment(assignment.id);
+          const currentTask = this.store.getTask(task.id);
+          const currentSourceSession = currentSource ? this.store.getSession(currentSource.sessionId) : undefined;
+          const currentTargetSession = currentTarget ? this.store.getSession(currentTarget.sessionId) : undefined;
+          const currentRequest = this.repo.getRequest(request.id);
+          const currentDelivery = this.repo.getDelivery(delivery.id);
+          if (this.closed || !fresh || fresh.paused || !currentDelivery || currentDelivery.status !== 'failed'
+            || this.automaticFallbackFingerprint(group.id, delivery.id, target.id) !== fingerprint || currentFailure?.id !== failure.id
+            || !currentSource || !currentTarget || !currentAssignment || !currentTask || !currentRequest || !currentSourceSession || !currentTargetSession
+            || this.sessionBusy(currentSourceSession) || this.repo.memberDeliveries(currentSource.id, ['running']).length
+            || this.sessionBusy(currentTargetSession) || this.repo.memberDeliveries(currentTarget.id, ['queued', 'running']).length
+            || currentSource.role !== workerRole || currentTarget.role !== workerRole || currentTarget.held
+            || currentSourceSession.policy !== currentTargetSession.policy || currentTask.status === 'done' || currentTask.status === 'running'
+            || this.repo.deliverySuccessor(group.id, currentDelivery.id) || this.existingRecoveryContinuation(group, currentDelivery)) return;
+          this.validateHandoffCheckpoint(checkpoint, currentSourceSession.id, delivery.runId!);
+          const currentPool = this.quotaFallbackPoolCheck(fresh, currentFailure, currentTargetSession);
+          if (!currentPool.ok) { this.setFallbackBlocked(fresh, failure, currentPool.reason); return; }
+          this.assertNoTargetTaskConflict(fresh, currentTarget, currentTargetSession.worktreePath, currentAssignment.scope, currentAssignment.id);
+          const oldText = this.repo.getMessage(currentDelivery.messageId)?.content ?? currentTask.description;
+          const dependencies = currentTask.dependsOn.map((id) => `${id} [${this.store.getTask(id)?.status ?? 'missing'}]`).join(', ') || 'none';
+          const sourceContext = this.checkpointHandoffContext(checkpoint, currentTargetSession.worktreePath);
+          const message = this.repo.insertMessage({ groupId: fresh.id, senderMemberId: null, recipients: [currentTarget.id], kind: 'assignment', requestId: currentRequest.id,
+            content: truncate(`Automatic quota fallback for task ${currentTask.id}: ${currentTask.title}. Inspect the fresh recovery checkpoint and current workspace before acting; do not repeat completed side effects.\nScope: ${currentAssignment.scope.join(', ')}\nAcceptance criteria: ${clean(currentTask.acceptanceCriteria, 1000)}\nDependencies: ${clean(dependencies, 1000)}\n${sourceContext}${clean(oldText, 6000)}`, 12_000) });
+          const nextId = deliveryId();
+          this.store.updateTask(currentTask.id, { sessionId: currentTarget.sessionId });
+          this.repo.insertDelivery({ id: nextId, groupId: fresh.id, requestId: currentRequest.id, messageId: message.id, memberId: currentTarget.id,
+            kind: 'assignment', hop: currentDelivery.hop, assignmentId: currentAssignment.id, taskId: currentTask.id, coordinatorEpoch: fresh.coordinatorEpoch });
+          this.repo.reassignAssignment(currentAssignment.id, currentTarget.id, nextId);
+          this.linkRecoverySuccessor(fresh, currentDelivery, nextId);
+          this.repo.setDelivery(currentDelivery.id, { retryable: false });
+          this.repo.updateMember(currentSource.id, { held: true });
+          this.repo.updateRequest(currentRequest.id, { status: 'active' });
+          this.repo.updateGroup(fresh.id, { recoveryState: { status: 'recovering', activeRequestId: currentRequest.id, updatedAt: nowIso() } });
+          this.consumeWorkerFallback(fresh, currentSource.id, currentTarget.id);
+          this.event(fresh, 'group.assignment.fallback', `Quota fallback: @${currentSource.handle} → @${currentTarget.handle}`, {
+            assignmentId: currentAssignment.id, failedDeliveryId: currentDelivery.id, replacementDeliveryId: nextId, failureId: failure.id,
+            providerCheckpointId: checkpoint.id, quotaPoolVerification: currentPool.verification,
+            fallbackUncertainty: currentPool.verification === 'unverified' ? 'Distinct provider quota pools were not reported; this single explicitly configured fallback does not assert that the replacement has quota available.' : undefined,
+          }, currentTarget.sessionId);
+          moved = true;
+        });
+      } catch (error) {
+        moved = false;
+        if (error instanceof HttpError) this.recordFallbackBlocked(group.id, failure, error.message);
+        else this.log('error', `Automatic worker handoff failed for ${delivery.id}`, error);
+      }
+      return moved;
+    } finally {
+      this.automaticFallbackCaptures.delete(captureKey);
+    }
   }
 
   private acknowledgeCheckpoint(group: ConversationGroup, checkpointId: string): void {
@@ -1594,12 +1820,12 @@ export class GroupService {
       if (!group || group.paused) return;
       if (group.recoveryPolicy?.automaticFallback) {
         for (const failed of this.repo.deliveries(groupId, ['failed'])) {
-          const moved = this.store.tx(() => this.attemptAutomaticWorkerFallback(group!, failed));
+          const moved = await this.attemptAutomaticWorkerFallback(group, failed);
           if (moved) group = this.repo.getGroup(groupId) ?? group;
         }
       }
       if (group.recoveryState?.status === 'degraded' && group.recoveryPolicy?.automaticFallback) {
-        this.store.tx(() => this.attemptAutomaticLeadFallback(group!));
+        await this.attemptAutomaticLeadFallback(group);
         group = this.repo.getGroup(groupId);
         if (!group || group.paused) return;
       }
@@ -2303,20 +2529,23 @@ export class GroupService {
       if (policy.automaticFallback) {
         const targetSession = this.store.getSession(target.sessionId);
         const sources = [...leadIds].map((id) => this.store.getSession(byId.get(id)?.sessionId ?? '')).filter((session): session is Session => Boolean(session));
-        if (!targetSession || sources.some((sourceSession) => sourceSession.policy !== targetSession.policy || sourceSession.worktreePath !== targetSession.worktreePath)) {
-          throw unprocessable('Automatic lead fallback requires the same permission policy and worktree as current coordinators/planners');
+        if (!targetSession || sources.some((sourceSession) => sourceSession.policy !== targetSession.policy)) {
+          throw unprocessable('Automatic lead fallback requires the same permission policy as current coordinators/planners');
         }
       }
     }
     for (const [sourceId, targetId] of Object.entries(workerFallbacks)) {
       const source = byId.get(sourceId);
       const target = byId.get(targetId);
-      if (!source || !target || source.id === target.id || source.role === 'orchestrator') throw unprocessable('Worker fallback mappings must reference two different active worker members');
+      const workerRole: GroupMember['role'] = group.mode === 'cowork' ? 'peer' : 'worker';
+      if (!source || !target || source.id === target.id || source.role !== workerRole || target.role !== workerRole) {
+        throw unprocessable('Worker fallback mappings must reference two different active worker members');
+      }
       if (!policy.automaticFallback) continue;
       const sourceSession = this.store.getSession(source.sessionId);
       const targetSession = this.store.getSession(target.sessionId);
-      if (!sourceSession || !targetSession || sourceSession.policy !== targetSession.policy || sourceSession.worktreePath !== targetSession.worktreePath) {
-        throw unprocessable('Automatic worker fallback requires the same permission policy and shared worktree');
+      if (!sourceSession || !targetSession || sourceSession.policy !== targetSession.policy) {
+        throw unprocessable('Automatic worker fallback requires the same permission policy');
       }
     }
   }
