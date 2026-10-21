@@ -4,6 +4,8 @@ import { MESSAGE_CONTEXT_LIMITS, type FileContextRef, type FileEntry, type Messa
 import { api, errorMessage } from '../lib/api';
 import { useMingle } from '../store/store';
 
+export const EMPTY_CONTEXT_REFS: MessageContextRef[] = [];
+
 export function FileContextPicker({ open, projectId, sessionId, initialQuery = '', onClose, onSelect }: {
   open: boolean; projectId: string; sessionId: string; initialQuery?: string; onClose: () => void; onSelect: (ref: FileContextRef) => void;
 }) {
@@ -13,6 +15,8 @@ export function FileContextPicker({ open, projectId, sessionId, initialQuery = '
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   const titleId = useId();
 
   useEffect(() => {
@@ -34,7 +38,7 @@ export function FileContextPicker({ open, projectId, sessionId, initialQuery = '
     if (!open) return;
     searchRef.current?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { event.preventDefault(); onClose(); }
+      if (event.key === 'Escape') { event.preventDefault(); onCloseRef.current(); }
       if (event.key !== 'Tab') return;
       const dialog = document.getElementById(titleId)?.closest<HTMLElement>('[role="dialog"]');
       const focusable = dialog ? Array.from(dialog.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)')) : [];
@@ -45,7 +49,7 @@ export function FileContextPicker({ open, projectId, sessionId, initialQuery = '
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [open, onClose, titleId]);
+  }, [open, titleId]);
 
   if (!open) return null;
   const parentPath = path.split('/').slice(0, -1).join('/');

@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowDown, ArrowRight, FolderPlus } from 'lucide-react';
-import type { GroupDelivery, GroupSnapshot, Message, Session, SessionRun, Task, ToolCall } from '@mingle/contracts';
+import type { GroupDelivery, GroupSnapshot, Message, ProviderInfo, Session, SessionRun, Task, ToolCall } from '@mingle/contracts';
 import { useMingle, useProject } from '../../store/store';
 import { clockTime, cx } from '../../lib/format';
 import { DELIVERY_LABEL, activeMembers } from '../../lib/groups';
@@ -24,6 +24,7 @@ const NO_SESSIONS: Session[] = [];
 const NO_MESSAGES: Message[] = [];
 const NO_RUNS: SessionRun[] = [];
 const NO_CALLS: ToolCall[] = [];
+const NO_PROVIDERS: ProviderInfo[] = [];
 const NO_TASKS: Task[] = [];
 
 /** Start a long final report at its outcome, rather than hiding it above the viewport. */
@@ -144,7 +145,7 @@ export function GroupConversation({ snapshot }: { snapshot: GroupSnapshot }) {
   const allRuns = useMingle((s) => s.boot?.runs ?? NO_RUNS);
   const allCalls = useMingle((s) => s.boot?.toolCalls ?? NO_CALLS);
   const approvals = useMingle((s) => s.boot?.approvals);
-  const providers = useMingle((s) => s.boot?.providers ?? []);
+  const providers = useMingle((s) => s.boot?.providers ?? NO_PROVIDERS);
   const connection = useMingle((s) => s.connection);
   const contextOpen = useMingle((s) => s.contextOpen);
   const creating = useMingle((s) => s.creatingSession);

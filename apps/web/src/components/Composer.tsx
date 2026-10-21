@@ -11,7 +11,7 @@ import { GitBar } from './git/GitBar';
 import { providerModelChoices } from '../lib/providers';
 import { AttachmentDrafts, AttachmentTray, useAttachmentDraft } from './AttachmentDrafts';
 import { usePresence } from '../lib/motion';
-import { appendContextReference, ContextReferenceChips, FileContextPicker } from './MessageContextControls';
+import { appendContextReference, ContextReferenceChips, EMPTY_CONTEXT_REFS, FileContextPicker } from './MessageContextControls';
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const hasSkillMarker = (text: string, name: string) => new RegExp(`(?:^|\\s)\\$${escapeRegExp(name)}(?=\\s|$)`).test(text);
@@ -21,7 +21,7 @@ const reservedCommands = new Set(localCommandNames);
 
 export function Composer({ session }: { session: Session }) {
   const draft = useMingle((s) => s.drafts[session.id] ?? '');
-  const contextRefs = useMingle((s) => s.contextDrafts[session.id] ?? []);
+  const contextRefs = useMingle((s) => s.contextDrafts[session.id] ?? EMPTY_CONTEXT_REFS);
   const connection = useMingle((s) => s.connection);
   const provider = useMingle((s) => s.boot?.providers.find((p) => p.id === session.provider));
   const providers = useMingle((s) => s.boot?.providers);

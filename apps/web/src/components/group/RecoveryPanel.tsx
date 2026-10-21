@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { GroupRecoveryState, GroupSnapshot, Session, SessionRun, Task } from '@mingle/contracts';
+import type { GroupRecoveryState, GroupSnapshot, ProviderInfo, Session, SessionRun, Task } from '@mingle/contracts';
 import { useMingle } from '../../store/store';
 import { activeMembers, isBusy, providerAvailability, providerName, ROLE_LABEL } from '../../lib/groups';
 import { ApiError, api, errorMessage, type ApiProviderFailure, type ApiRecoveryActionRequest, type ApiRecoveryCheckpoint, type ApiRecoveryActionResult } from '../../lib/api';
@@ -8,6 +8,8 @@ import { Button, InlineError } from '../ui';
 import { SelectMenu } from '../SelectMenu';
 import { AgentIdentity } from './AgentIdentity';
 import '../../styles/recovery.css';
+
+const EMPTY_PROVIDERS: ProviderInfo[] = [];
 
 type RecoverySnapshot = { checkpoint: ApiRecoveryCheckpoint | null; failure: ApiProviderFailure | null };
 
@@ -38,7 +40,7 @@ export function RecoveryPanel({ snapshot, sessions, runs, tasks }: {
   snapshot: GroupSnapshot; sessions: readonly Session[]; runs: readonly SessionRun[]; tasks: readonly Task[];
 }) {
   const connection = useMingle((state) => state.connection);
-  const providers = useMingle((state) => state.boot?.providers ?? []);
+  const providers = useMingle((state) => state.boot?.providers ?? EMPTY_PROVIDERS);
   const globalAction = useMingle((state) => state.groupActionBusyId);
   const group = snapshot.group;
   const resilientMembers = snapshot.members;

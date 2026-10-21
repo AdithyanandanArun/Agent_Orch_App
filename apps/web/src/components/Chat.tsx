@@ -47,7 +47,7 @@ export function SessionPane() {
 function SingleSessionPane() {
   const project = useProject();
   const session = useActiveSession();
-  const hasSessions = useMingle((s) => (s.boot?.sessions ?? []).some((x) => x.projectId === s.activeProjectId));
+  const hasSessions = useMingle((s) => s.boot?.sessions.some((x) => x.projectId === s.activeProjectId) ?? false);
   const messages = useSessionMessages(session);
   const allRuns = useMingle((s) => s.boot?.runs ?? EMPTY_RUNS);
   const runs = useMemo(() => allRuns.filter(run => run.sessionId === session?.id), [allRuns, session?.id]);

@@ -1,4 +1,5 @@
 import { ArrowLeft, Menu as MenuIcon, PanelRight, Pencil, SquareTerminal, MoreHorizontal, Square, ListPlus, UserPlus, Trash2 } from 'lucide-react';
+import type { Session } from '@mingle/contracts';
 import { useMingle, useActiveSession, useActiveGroup, useProject } from '../store/store';
 import { api, errorMessage } from '../lib/api';
 import { Button, IconButton, Menu, MenuItem, MenuSeparator } from './ui';
@@ -9,13 +10,14 @@ import { GroupControl } from './group/GroupControl';
 import { cx } from '../lib/format';
 
 const TITLES = { workspace: 'Workspace', tasks: 'Tasks', activity: 'Activity', map: 'Agent map', settings: 'Settings' } as const;
+const EMPTY_SESSIONS: Session[] = [];
 
 export function Header() {
   const view = useMingle((s) => s.view);
   const project = useProject();
   const session = useActiveSession();
   const group = useActiveGroup();
-  const sessions = useMingle((s) => s.boot?.sessions ?? []);
+  const sessions = useMingle((s) => s.boot?.sessions ?? EMPTY_SESSIONS);
   const connection = useMingle((s) => s.connection);
   const contextOpen = useMingle((s) => s.contextOpen);
   const terminalOpen = useMingle((s) => s.terminalOpen);

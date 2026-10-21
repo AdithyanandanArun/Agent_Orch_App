@@ -14,7 +14,7 @@ import { UsagePanel } from '../UsagePanel';
 import { AgentIdentity } from './AgentIdentity';
 import { AttachmentDrafts, AttachmentTray, useAttachmentDraft } from '../AttachmentDrafts';
 import { usePresence } from '../../lib/motion';
-import { appendContextReference, ContextReferenceChips, FileContextPicker } from '../MessageContextControls';
+import { appendContextReference, ContextReferenceChips, EMPTY_CONTEXT_REFS, FileContextPicker } from '../MessageContextControls';
 
 const COMMANDS = [
   { name: 'new', description: 'Create a new session' },
@@ -42,7 +42,7 @@ interface Suggestion { key: string; token: string; description: string; group: s
 /** The group conversation's composer: it resolves recipients itself and sends one message to the group endpoint. */
 export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { snapshot: GroupSnapshot; anchor: Session; onOpenMembers: () => void; footer?: ReactNode }) {
   const draft = useMingle((s) => s.drafts[anchor.id] ?? '');
-  const contextRefs = useMingle((s) => s.contextDrafts[anchor.id] ?? []);
+  const contextRefs = useMingle((s) => s.contextDrafts[anchor.id] ?? EMPTY_CONTEXT_REFS);
   const connection = useMingle((s) => s.connection);
   const providers = useMingle((s) => s.boot?.providers);
   const sessions = useMingle((s) => s.boot?.sessions);

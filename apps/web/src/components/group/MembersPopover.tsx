@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { Play, Settings2, Square, UserMinus, UserPlus } from 'lucide-react';
-import type { GroupMember, GroupSnapshot, Session } from '@mingle/contracts';
+import type { GroupMember, GroupSnapshot, Session, SessionRun } from '@mingle/contracts';
 import { useMingle } from '../../store/store';
 import { shortPath } from '../../lib/format';
 import { interruptMember, removeMember, resumeMember } from '../../lib/groupActions';
@@ -13,6 +13,8 @@ import { AgentIdentity } from './AgentIdentity';
 import { usePresence } from '../../lib/motion';
 import { cx } from '../../lib/format';
 
+const EMPTY_RUNS: SessionRun[] = [];
+
 function removalBlock(snapshot: GroupSnapshot, member: GroupMember, session: Session | undefined, online: boolean): string | null {
   if (!online) return 'Reconnect to the server first.';
   if (member.sessionId === snapshot.group.anchorSessionId) return 'The anchor session cannot be removed from its group.';
@@ -24,7 +26,7 @@ function removalBlock(snapshot: GroupSnapshot, member: GroupMember, session: Ses
 /** Compact participant list: live status, per-member stop/settings/remove, and the group's queue and bounds. */
 export function MembersPopover({ snapshot, anchor, open, onClose }: { snapshot: GroupSnapshot; anchor: RefObject<HTMLElement | null>; open: boolean; onClose: () => void }) {
   const sessions = useMingle((s) => s.boot?.sessions);
-  const runs = useMingle((s) => s.boot?.runs ?? []);
+  const runs = useMingle((s) => s.boot?.runs ?? EMPTY_RUNS);
   const providers = useMingle((s) => s.boot?.providers);
   const connection = useMingle((s) => s.connection);
   const project = useMingle((s) => s.boot?.projects.find((item) => item.id === snapshot.group.projectId));
