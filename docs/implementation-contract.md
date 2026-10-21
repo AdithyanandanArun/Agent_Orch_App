@@ -62,6 +62,16 @@ Migration 5 adds a saved change summary and bounded patch to each run. Before in
 
 Capture is bounded to 2,000 eligible files, 10 MiB per file, 100 MiB total and a checked 15-second budget (individual Git operations also have timeouts). Incomplete/unreadable/unstable snapshots or unsupported submodules make the summary unavailable, preserving provider execution. Summary lists cap at 200 files with complete overall totals; saved patches cap at 500 KiB, and the viewer limits each file to 1,500 rendered lines with a notice. Renames are represented as deletion/addition. Capture baselines live in memory, so interrupted runs recovered after a server crash have no reconstructed summary. Completed summaries and patches remain in SQLite. Git objects written for checkpoints are unreferenced and follow the repository's normal garbage collection.
 
+## Native plans and interactive questions
+
+`POST /api/sessions/:id/messages` accepts `intent: 'plan'` only when the provider adapter has a real native read-only plan mode. Providers report proposals through `session.plan`; Mingle stores them as durable plans associated with the generating run. Plans are editable, ordered revisions with explicit dependency edges. Self, missing, duplicate and cyclic dependencies reject. Editing resets approval; only the exact current revision can be approved or executed. Execution is an explicit user action and runs through the session lock. Group plan intent requires exactly one selected agent, rejects native commands/skills, withholds browser/team side-effect tools, and persists through the durable group delivery queue. Model prose never schedules other agents.
+
+Plan execution retains the original request's selected context references and attachments. Session plans validate that references remain scoped to the session; group plans resolve references and attachment ownership from the original group request and target the same active member. If the source request is unavailable or no longer valid, execution rejects and asks for a new plan rather than dropping context silently.
+
+Native provider questions are durable, run-scoped records. `requestUserInput` suspends its provider run and exposes `POST /api/questions/:id/answer` and `/cancel`; answers must cover exactly the active fields and obey each field's option/multi-select rules. Secret-marked answers are passed to the waiting provider but excluded from persisted answers. Questions are cancelled on explicit cancellation, timeout, run interruption or server restart; stale answers cannot resume another run.
+
+The shared additive schema sequence preserves the existing migration slots: 13 ensures project/group archival columns, 14 creates session plans and user questions, 15 remains reserved for the shared mentions work, 16 adds group request plan intent/execution identity, 17 repairs branch-order variants idempotently, and 18 adds session/group message context-reference columns. These guards support databases that reached v16 with plans/questions and group metadata in either order. Project archival was also introduced earlier in the integration sequence; v13 reconciles both archival columns. No provider inference is part of migration or automatic checks.
+
 ## Provider controls and command discovery
 
 ### Local conversation import

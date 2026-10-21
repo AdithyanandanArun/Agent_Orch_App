@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import type { AttachmentRef, GroupSnapshot, ProviderInfo, RunAttachment, RunOptions } from '@mingle/contracts';
+import type { AppSettings, AttachmentRef, GroupSnapshot, ProviderCatalog, ProviderInfo, RunAttachment, RunOptions, Session } from '@mingle/contracts';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { EXAMPLE_CLIENT_SESSION_ID } from './example.ts';
@@ -23,6 +23,65 @@ function imageCapableProviders(): FakeProviders {
 }
 
 describe('recovery input preservation', () => {
+  it('revalidates and preserves an addressed native skill through a safe retry', async () => {
+    const fake = imageCapableProviders();
+    (fake as FakeProviders & { getCatalog: (session: Session, settings: AppSettings) => Promise<ProviderCatalog> }).getCatalog = async () => ({
+      commands: [], warnings: [], skills: [{ id: 'codex:build-review', name: 'build-review', description: 'Review a code change.', source: 'provider', enabled: true, path: '/fake/skills/build-review' }],
+    });
+    const t = await startTestApp({ fake });
+    apps.push(t);
+    await t.api('POST', '/api/providers/refresh', {});
+    const created = await t.api<GroupSnapshot>('POST', '/api/groups', {
+      sessionId: EXAMPLE_CLIENT_SESSION_ID, mode: 'current-leads', agent: { handle: 'skill-target', isolated: false, configuration: {
+        provider: 'codex', model: 'gpt-6.1-sol', effort: 'high', policy: 'supervised', serviceTier: 'standard',
+      } },
+    });
+    expect(created.status, JSON.stringify(created.json)).toBe(201);
+    const groupId = created.json.group.id;
+    const target = created.json.members.find((member) => member.handle === 'skill-target')!;
+    let attempts = 0;
+    let retriedRun: RunOptions | undefined;
+    fake.script = async (options, emit) => {
+      if (options.session.id === target.sessionId && ++attempts === 1) {
+        (options as RunOptions & DispatchAwareOptions).onDispatchState?.('not-dispatched');
+        throw new ProviderError('The provider stopped before running the selected skill.', {
+          providerCode: 'usageLimitExceeded', outcomeKnown: true, continuationSafety: 'safe',
+        });
+      }
+      if (options.session.id === target.sessionId) retriedRun = options;
+      emit({ type: 'text', text: 'The selected skill completed.' });
+    };
+
+    const message = await t.api('POST', `/api/groups/${groupId}/messages`, {
+      content: 'Review the compatibility changes.', invocation: {
+        kind: 'skill', id: 'codex:build-review', name: 'build-review', arguments: 'focus on pagination', recipient: target.id,
+      },
+    });
+    expect(message.status, JSON.stringify(message.json)).toBe(202);
+    const failed = await waitFor(() => {
+      const delivery = t.app.groups.get(groupId).deliveries.find((row) => row.memberId === target.id && row.status === 'failed');
+      return delivery && t.app.runtime.activeCount() === 0 ? delivery : undefined;
+    }, 5000, 'safe native skill failure');
+    const retried = await t.api('POST', `/api/groups/${groupId}/recovery`, {
+      action: 'retry-delivery', deliveryId: failed.id, idempotencyKey: `retry-skill-${failed.id}`,
+    });
+    expect(retried.status, JSON.stringify(retried.json)).toBe(200);
+    await waitFor(() => retriedRun && t.app.runtime.activeCount() === 0, 5000, 'retried native skill');
+
+    expect(attempts).toBe(2);
+    expect(retriedRun!.invocation).toMatchObject({
+      kind: 'skill', name: 'build-review', arguments: 'focus on pagination',
+      skill: { id: 'codex:build-review', path: '/fake/skills/build-review' },
+    });
+    expect(retriedRun!.prompt).toContain('Review the compatibility changes.');
+    const snapshot = t.app.groups.get(groupId);
+    const original = snapshot.deliveries.find((row) => row.id === failed.id)!;
+    const request = snapshot.requests.find((row) => row.id === original.requestId)!;
+    expect(snapshot.messages.find((row) => row.id === request.messageId)?.invocation).toMatchObject({
+      kind: 'skill', name: 'build-review', arguments: 'focus on pagination', memberId: target.id,
+    });
+  });
+
   it('preserves selected quote, file, and upload inputs through isolated coordinator handover', async () => {
     const fake = imageCapableProviders();
     const t = await startTestApp({ fake });

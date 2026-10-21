@@ -1,6 +1,46 @@
 import { DatabaseSync } from 'node:sqlite';
 import { chmodSync, existsSync } from 'node:fs';
 
+function hasColumn(db: DatabaseSync, table: string, column: string): boolean {
+  return (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((row) => row.name === column);
+}
+
+function addColumn(db: DatabaseSync, table: string, column: string, statement: string): void {
+  if (!hasColumn(db, table, column)) db.exec(statement);
+}
+
+function ensurePlanTables(db: DatabaseSync): void {
+  db.exec(`CREATE TABLE IF NOT EXISTS session_plans (
+    id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), run_id TEXT NOT NULL REFERENCES session_runs(id),
+    provider_plan_id TEXT NOT NULL, status TEXT NOT NULL CHECK (status IN ('review', 'approved', 'executing', 'completed', 'interrupted', 'failed')),
+    data TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(run_id, provider_plan_id)
+  );
+  CREATE INDEX IF NOT EXISTS session_plans_session ON session_plans(session_id, created_at DESC);
+  CREATE TABLE IF NOT EXISTS user_questions (
+    id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), run_id TEXT NOT NULL REFERENCES session_runs(id),
+    native_request_id TEXT NOT NULL, status TEXT NOT NULL CHECK (status IN ('pending', 'answered', 'cancelled')),
+    data TEXT NOT NULL, created_at TEXT NOT NULL, resolved_at TEXT, UNIQUE(run_id, native_request_id)
+  );
+  CREATE INDEX IF NOT EXISTS user_questions_session ON user_questions(session_id, created_at DESC);
+  CREATE INDEX IF NOT EXISTS user_questions_pending ON user_questions(status, session_id);`);
+}
+
+function ensureGroupPlanColumns(db: DatabaseSync): void {
+  addColumn(db, 'group_requests', 'intent', "ALTER TABLE group_requests ADD COLUMN intent TEXT NOT NULL DEFAULT 'normal' CHECK (intent IN ('normal', 'plan'));");
+  addColumn(db, 'group_requests', 'execution_plan_id', 'ALTER TABLE group_requests ADD COLUMN execution_plan_id TEXT;');
+}
+
+function ensureArchiveColumns(db: DatabaseSync): void {
+  addColumn(db, 'projects', 'archived_at', 'ALTER TABLE projects ADD COLUMN archived_at TEXT;');
+  addColumn(db, 'conversation_groups', 'archived_at', 'ALTER TABLE conversation_groups ADD COLUMN archived_at TEXT;');
+  db.exec('CREATE INDEX IF NOT EXISTS projects_visible ON projects(archived_at); CREATE INDEX IF NOT EXISTS conversation_groups_visible ON conversation_groups(archived_at);');
+}
+
+function ensureMessageContextColumns(db: DatabaseSync): void {
+  addColumn(db, 'messages', 'context_refs_json', 'ALTER TABLE messages ADD COLUMN context_refs_json TEXT;');
+  addColumn(db, 'group_messages', 'context_refs_json', 'ALTER TABLE group_messages ADD COLUMN context_refs_json TEXT;');
+}
+
 const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
   `
   CREATE TABLE projects (
@@ -228,40 +268,18 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
       created_at TEXT NOT NULL
     );`);
   },
-   // Migration 13 archives group conversations without deleting their retained history.
-   `ALTER TABLE conversation_groups ADD COLUMN archived_at TEXT;
-    CREATE INDEX conversation_groups_visible ON conversation_groups(archived_at);`,
-   // Keep the reserved migration slot stable for databases already opened on this shared sequence.
+   // Migration 13 reconciles project and group archival columns across shared schema branches.
+   ensureArchiveColumns,
+   // Migration 14 adds durable plans and run-scoped questions; creation is safe across branch variants.
+   ensurePlanTables,
+   // Migration 15 remains reserved in the shared sequence for mentions.
    () => {},
-   `ALTER TABLE messages ADD COLUMN context_refs_json TEXT;
-    ALTER TABLE group_messages ADD COLUMN context_refs_json TEXT;`,
-   // Migration 16 adds durable native plans and run-scoped user questions after shared migration 15.
-   `CREATE TABLE session_plans (
-       id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), run_id TEXT NOT NULL REFERENCES session_runs(id),
-       provider_plan_id TEXT NOT NULL, status TEXT NOT NULL CHECK (status IN ('review', 'approved', 'executing', 'completed', 'interrupted', 'failed')),
-      data TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-     UNIQUE(run_id, provider_plan_id)
-   );
-   CREATE INDEX session_plans_session ON session_plans(session_id, created_at DESC);
-   CREATE TABLE user_questions (
-      id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), run_id TEXT NOT NULL REFERENCES session_runs(id),
-      native_request_id TEXT NOT NULL, status TEXT NOT NULL CHECK (status IN ('pending', 'answered', 'cancelled')),
-      data TEXT NOT NULL, created_at TEXT NOT NULL, resolved_at TEXT,
-     UNIQUE(run_id, native_request_id)
-     );
-     CREATE INDEX user_questions_session ON user_questions(session_id, created_at DESC);
-     CREATE INDEX user_questions_pending ON user_questions(status, session_id);`,
-   // Migration 17 persists group planning intent and execution identity. Accept a v16 database
-   // created by the standalone planning sequence, where these columns may already exist.
-   (db) => {
-    const columns = db.prepare('PRAGMA table_info(group_requests)').all() as { name: string }[];
-    if (!columns.some((column) => column.name === 'intent')) {
-      db.exec("ALTER TABLE group_requests ADD COLUMN intent TEXT NOT NULL DEFAULT 'normal' CHECK (intent IN ('normal', 'plan'));");
-    }
-     if (!columns.some((column) => column.name === 'execution_plan_id')) {
-       db.exec('ALTER TABLE group_requests ADD COLUMN execution_plan_id TEXT;');
-     }
-   },
+   // Migration 16 persists native group-plan intent and approved execution identity.
+   ensureGroupPlanColumns,
+   // Migration 17 repairs databases opened against either planning migration order.
+   (db) => { ensureArchiveColumns(db); ensurePlanTables(db); ensureGroupPlanColumns(db); },
+   // Migration 18 preserves selected context references on session and group messages.
+   ensureMessageContextColumns,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

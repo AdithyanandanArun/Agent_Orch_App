@@ -250,6 +250,11 @@
 .plan-card__step-order { display: flex; align-items: center; gap: 6px; color: var(--fg-3); font-size: 11px; }
 .plan-card__step-order .link-btn { display: inline-flex; align-items: center; justify-content: center; width: 25px; height: 24px; padding: 0; border: 1px solid var(--line-soft); border-radius: 5px; }
 .plan-card__step-order .link-btn:disabled { opacity: .35; cursor: default; }
+.plan-card__dependency-editor { display: grid; gap: 6px; color: var(--fg-2); font-size: 11px; }
+.plan-card__dependency-editor > span { font-weight: 550; }
+.plan-card__dependency-editor label { display: flex; align-items: flex-start; gap: 7px; color: var(--fg-1); cursor: pointer; }
+.plan-card__dependency-editor input[type='checkbox'] { flex: none; width: 14px; height: 14px; margin: 1px 0 0; accent-color: var(--accent); }
+.plan-card__dependency-editor small { color: var(--fg-3); }
 .question-card__header > svg { flex: none; color: var(--accent); }
 .question-card__field { display: grid; gap: 8px; min-width: 0; margin: 0; padding: 11px; border: 1px solid var(--line-soft); border-radius: 8px; }
 .question-card__field legend { max-width: 100%; padding: 0 5px; color: var(--fg-0); font-size: 13px; font-weight: 550; }

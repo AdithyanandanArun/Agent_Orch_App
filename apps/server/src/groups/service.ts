@@ -5,7 +5,7 @@ import {
 import type {
   AddGroupAgent, AgentConfiguration, AutonomyConfig, ConversationGroup, CreateGroup, GroupAssignment, GroupDelivery, GroupMember, GroupMessage, GroupMode, MessageContextRef, SessionPlan,
   GroupMilestone, GroupRecoveryPolicy, GroupRecoveryState, ProviderFailure, RecoveryActionRequest, RecoveryActionResult, RecoveryCheckpoint,
-  GroupRunContext, GroupSnapshot, ProviderInfo, Session, Task, TeamArtifactSchema, TeamAssignSchema, TeamMessageSchema, TeamStatusSchema, UpdateGroupSchema,
+  GroupRunContext, GroupSnapshot, ProviderInfo, ProviderSkill, Session, Task, TeamArtifactSchema, TeamAssignSchema, TeamMessageSchema, TeamStatusSchema, UpdateGroupSchema,
 } from '@mingle/contracts';
 import type { z } from 'zod';
 import { unfinishedDeps } from '../dag.ts';
@@ -27,6 +27,11 @@ import {
   LIMITS, MODE_LABEL, assignmentText, buildInstructions, clean, deriveAcceptanceCriteria, messageDeliveryText, requestDeliveryText, resultText, type ResultLine, type RosterEntry,
 } from './prompt.ts';
 import { RESERVED_HANDLES, extractMentions, normalizeScopes, safeArtifactPath, scopesOverlap } from './routing.ts';
+
+function resolveProviderSkill(provider: Session['provider'], skills: ProviderSkill[], id: string, name: string): ProviderSkill | undefined {
+  const eligible = nativeActionSkills(provider, skills).some((skill) => skill.id === id && skill.name === name);
+  return eligible ? skills.find((skill) => skill.id === id && skill.name === name && skill.enabled) : undefined;
+}
 
 /** Matches the server's Logger; a plain (message) => void function is also accepted. */
 export type GroupLog = (level: 'info' | 'warn' | 'error', message: string, detail?: unknown) => void;
@@ -532,14 +537,27 @@ export class GroupService {
     const plan = this.store.getSessionPlan(planId);
     const member = this.repo.activeMemberOfSession(sessionId);
     if (!plan || plan.sessionId !== sessionId || !member) throw conflict('This plan is no longer attached to an active group agent.');
+    const sourceMessage = this.planInputMessage(plan.id, member.groupId, member.id);
+    if (!sourceMessage) throw conflict('The original plan inputs are no longer available. Replan with the current group agent.');
     const snapshot = await this.send(member.groupId, {
       content: prompt, recipients: [member.id], executionPlanId: plan.id,
+      ...(sourceMessage.contextRefs?.length ? { contextRefs: sourceMessage.contextRefs } : {}),
       clientMessageId: `plan-execution-${plan.id}-${plan.revision}`,
     });
     const request = snapshot.requests.find((row) => row.executionPlanId === plan.id);
     const delivery = request && snapshot.deliveries.find((row) => row.requestId === request.id && row.kind === 'request' && row.memberId === member.id);
     if (!delivery) throw conflict('The approved plan request was saved but its group delivery is unavailable. Refresh the conversation.');
     return { deliveryId: delivery.id, runId: delivery.runId };
+  }
+
+  private planInputMessage(planId: string, groupId: string, memberId: string): GroupMessage | undefined {
+    const plan = this.store.getSessionPlan(planId);
+    if (!plan) return undefined;
+    const sourceDelivery = this.repo.deliveryByRun(plan.runId);
+    if (!sourceDelivery || sourceDelivery.groupId !== groupId || sourceDelivery.memberId !== memberId || sourceDelivery.kind !== 'request') return undefined;
+    const sourceRequest = this.repo.getRequest(sourceDelivery.requestId);
+    if (!sourceRequest || sourceRequest.intent !== 'plan' || sourceRequest.messageId !== sourceDelivery.messageId) return undefined;
+    return this.repo.getMessage(sourceDelivery.messageId);
   }
 
   /** Explicit human task run preserves the existing task and follows the durable group queue. */
@@ -2074,8 +2092,15 @@ export class GroupService {
       return false;
     }
     const assignment = d.assignmentId ? this.repo.getAssignment(d.assignmentId) : undefined;
+    const recoverySource = this.repo.deliverySource(group.id, d.id);
+    const planInput = request.executionPlanId ? this.planInputMessage(request.executionPlanId, group.id, member.id) : undefined;
+    if (request.executionPlanId && !planInput) {
+      this.cancel(d, 'The original plan inputs are no longer available. Replan with the current group agent.');
+      return false;
+    }
+    const sourceMessageId = planInput?.id ?? (recoverySource ? request.messageId : d.messageId);
     let nativeInvocation: import('@mingle/contracts').NativeInvocation | undefined;
-    const invocationMessage = this.repo.getMessage(d.messageId);
+    const invocationMessage = this.repo.getMessage(sourceMessageId);
     if (invocationMessage?.invocation) {
       const saved = invocationMessage.invocation as GroupInvocation;
       if (saved.memberId !== member.id || saved.sessionId !== session.id || saved.provider !== session.provider || saved.model !== session.model) {
@@ -2084,8 +2109,10 @@ export class GroupService {
       }
       if (!this.catalog) { this.cancel(d, 'Provider command discovery is unavailable. Refresh the action catalog and retry.'); return false; }
       const current = await this.catalog(session, true);
-      const items = saved.kind === 'command' ? nativeActionCommands(session.provider, current.commands) : nativeActionSkills(session.provider, current.skills);
-      const resolved = items.find((item) => item.id === saved.id && item.name === saved.name && ('enabled' in item ? item.enabled : true));
+      const items = saved.kind === 'command' ? nativeActionCommands(session.provider, current.commands) : current.skills;
+      const resolved = saved.kind === 'skill'
+        ? resolveProviderSkill(session.provider, current.skills, saved.id, saved.name)
+        : items.find((item) => item.id === saved.id && item.name === saved.name);
       if (!resolved) { this.cancel(d, 'The provider action is no longer available. Refresh the catalog and select it again.'); return false; }
       nativeInvocation = { kind: saved.kind, name: saved.name, arguments: saved.arguments, ...(saved.kind === 'skill' ? { skill: resolved as import('@mingle/contracts').ProviderSkill } : {}) };
       const latestGroup = this.repo.getGroup(group.id);
@@ -2122,10 +2149,9 @@ export class GroupService {
     this.reserved.set(session.id, d.id);
     let runId: string;
     try {
-      const recoverySource = this.repo.deliverySource(group.id, d.id);
       // Recovery continuations have their own status/assignment prompt, but selected user inputs
       // remain owned by the original request message. Resolve them there for every recovery path.
-      const attachmentOwnerId = recoverySource ? request.messageId : d.messageId;
+      const attachmentOwnerId = sourceMessageId;
       const contextSourceMessage = this.repo.getMessage(attachmentOwnerId);
       const context = await buildMessageContext(contextSourceMessage?.contextRefs, (ref) => this.store.getSession(ref.sourceSessionId, true)?.worktreePath, (sourceSessionId, messageId) => {
         if (contextSourceMessage?.contextRefs?.some((ref) => ref.kind === 'quote' && ref.sourceSessionId === sourceSessionId && ref.sourceMessageId === messageId)) {

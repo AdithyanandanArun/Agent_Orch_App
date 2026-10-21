@@ -197,6 +197,20 @@ export function SessionPlanCard({ plan, reviewReady, speaker }: { plan: SessionP
               <label>Title<input maxLength={200} value={step.title} onChange={(event) => setSteps((current) => current.map((item) => item.id === step.id ? { ...item, title: event.target.value } : item))} /></label>
               <label>Description<textarea maxLength={4000} rows={3} value={step.description} onChange={(event) => setSteps((current) => current.map((item) => item.id === step.id ? { ...item, description: event.target.value } : item))} /></label>
               <label>Acceptance criteria<textarea maxLength={4000} rows={2} value={step.acceptanceCriteria.join('\n')} onChange={(event) => setSteps((current) => current.map((item) => item.id === step.id ? { ...item, acceptanceCriteria: event.target.value.split('\n').map((value) => value.trim()).filter(Boolean).slice(0, 20) } : item))} placeholder="One criterion per line" /></label>
+              <div className="plan-card__dependency-editor" aria-label={`Dependencies for step ${index + 1}`}>
+                <span>Depends on</span>
+                {steps.filter((candidate) => candidate.id !== step.id).length ? steps.map((candidate, candidateIndex) => candidate.id === step.id ? null : (
+                  <label key={candidate.id}>
+                    <input type="checkbox" checked={step.dependsOn.includes(candidate.id)} onChange={(event) => {
+                      const checked = event.currentTarget.checked;
+                      setSteps((current) => current.map((item) => item.id === step.id
+                        ? { ...item, dependsOn: checked ? [...item.dependsOn, candidate.id] : item.dependsOn.filter((id) => id !== candidate.id) }
+                        : item));
+                    }} />
+                    <span>Step {candidateIndex + 1}: {candidate.title.trim() || 'Untitled step'}</span>
+                  </label>
+                )) : <small>Add another step to set a prerequisite.</small>}
+              </div>
             </fieldset>
           ))}
           <Button size="sm" disabled={busy} onClick={() => setSteps((current) => [...current, { id: crypto.randomUUID(), providerId: null, title: 'New step', description: '', acceptanceCriteria: [], dependsOn: [], status: 'pending' }])}><Plus size={13} /> Add step</Button>

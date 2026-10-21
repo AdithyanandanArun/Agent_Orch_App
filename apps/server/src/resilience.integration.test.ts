@@ -129,7 +129,7 @@ describe('durable resilience API', () => {
     const file = path.join(directory, 'state.sqlite');
     try {
       const current = openDatabase(file);
-      expect(SCHEMA_VERSION).toBe(17);
+      expect(SCHEMA_VERSION).toBe(18);
       current.exec('DROP TABLE user_questions; DROP TABLE session_plans; DROP TABLE group_recovery_deliveries; ALTER TABLE group_requests DROP COLUMN execution_plan_id; ALTER TABLE group_requests DROP COLUMN intent; ALTER TABLE session_failures DROP COLUMN resolved_at; DROP INDEX conversation_groups_visible; ALTER TABLE conversation_groups DROP COLUMN archived_at; ALTER TABLE messages DROP COLUMN context_refs_json; ALTER TABLE group_messages DROP COLUMN context_refs_json; PRAGMA user_version = 11;');
       current.close();
 
@@ -147,6 +147,41 @@ describe('durable resilience API', () => {
       upgraded.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('repairs schema databases created with either shared planning migration order', () => {
+    for (const legacyVersion of [14, 16]) {
+      const directory = mkdtempSync(path.join(tmpdir(), `mingle-schema${legacyVersion}-`));
+      const file = path.join(directory, 'state.sqlite');
+      try {
+        const current = openDatabase(file);
+        current.exec(`DROP INDEX conversation_groups_visible;
+          ALTER TABLE conversation_groups DROP COLUMN archived_at;
+          ALTER TABLE messages DROP COLUMN context_refs_json;
+          ALTER TABLE group_messages DROP COLUMN context_refs_json;
+          ALTER TABLE group_requests DROP COLUMN execution_plan_id;
+          ALTER TABLE group_requests DROP COLUMN intent;
+          PRAGMA user_version = ${legacyVersion};`);
+        current.close();
+
+        const upgraded = openDatabase(file);
+        const version = upgraded.prepare('PRAGMA user_version').get() as { user_version: number };
+        const groupColumns = upgraded.prepare('PRAGMA table_info(group_requests)').all() as { name: string }[];
+        const messageColumns = upgraded.prepare('PRAGMA table_info(messages)').all() as { name: string }[];
+        const groupMessageColumns = upgraded.prepare('PRAGMA table_info(group_messages)').all() as { name: string }[];
+        const planTable = upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_plans'").get();
+        const questionTable = upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'user_questions'").get();
+        expect(version.user_version).toBe(SCHEMA_VERSION);
+        expect(groupColumns.map((column) => column.name)).toEqual(expect.arrayContaining(['intent', 'execution_plan_id']));
+        expect(messageColumns.map((column) => column.name)).toContain('context_refs_json');
+        expect(groupMessageColumns.map((column) => column.name)).toContain('context_refs_json');
+        expect(planTable).toBeDefined();
+        expect(questionTable).toBeDefined();
+        upgraded.close();
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
     }
   });
 

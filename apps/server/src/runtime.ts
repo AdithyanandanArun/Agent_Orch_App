@@ -16,6 +16,7 @@ import type { NativeInvocation, RunAttachment } from '@mingle/contracts';
 import type { RecoveryService } from './recovery/service.ts';
 import { providerFailure } from './providers/failure.ts';
 import type { DispatchAwareOptions, DispatchState } from './providers/common.ts';
+import { buildMessageContext } from './message-context.ts';
 
 export interface RuntimeOptions {
   /** Milliseconds to wait after an abort before declaring an unresponsive adapter interrupted. */
@@ -288,7 +289,16 @@ export class SessionRuntime {
       if (!executing) throw conflict('The group plan execution was queued, but its plan record is unavailable. Refresh the conversation.');
       return { accepted: true, runId: dispatch.runId, deliveryId: dispatch.deliveryId, plan: executing };
     }
-    const runId = this.start(session.id, prompt, { executionPlanId: plan.id, userMessage: { content: prompt, kind: 'plan-execution' } });
+    const sourceMessage = this.store.getMessage(generation.userMessageId);
+    if (!sourceMessage || sourceMessage.sessionId !== session.id || sourceMessage.role !== 'user') throw conflict('The original plan inputs are no longer available. Replan from this session.');
+    for (const ref of sourceMessage.contextRefs ?? []) {
+      if (ref.sourceSessionId !== session.id || (ref.kind === 'quote' && ref.sourceGroupId)) throw conflict('The original plan context is no longer scoped to this session. Replan with current context.');
+    }
+    const context = await buildMessageContext(sourceMessage.contextRefs, session.worktreePath, (_sessionId, messageId) => this.store.getMessage(messageId));
+    const runId = this.start(session.id, prompt, {
+      executionPlanId: plan.id, userMessage: { content: prompt, kind: 'plan-execution' },
+      attachmentOwnerKind: 'message', attachmentOwnerId: sourceMessage.id, contextRefs: sourceMessage.contextRefs, context,
+    });
     const executing = this.store.getSessionPlan(plan.id);
     if (!executing) throw conflict('Plan execution started, but its plan record is unavailable. Refresh the conversation.');
     return { accepted: true, runId, plan: executing };
