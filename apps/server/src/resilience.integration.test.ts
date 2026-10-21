@@ -603,14 +603,17 @@ describe('durable resilience API', () => {
     expect(requestWasPausedForReview).toBe(true);
   });
 
-  it('automatically hands a dispatched Claude worker quota failure to one configured Codex worker', async () => {
+  it.each([
+    { isolated: false, safety: 'safe' },
+    { isolated: true, safety: 'unknown' },
+  ] as const)('automatically hands a dispatched Claude worker quota failure to one configured Codex worker (isolated=$isolated)', async ({ isolated, safety }) => {
     const t = await bootWithCodexAndClaude();
-    const initial = await createGroup(t, 'current-leads', claudeConfig, claudeConfig, false);
+    const initial = await createGroup(t, 'current-leads', claudeConfig, claudeConfig, isolated);
     const groupId = initial.group.id;
     const lead = initial.members.find((member) => member.sessionId === initial.group.anchorSessionId)!;
     const source = initial.members.find((member) => member.handle === 'backup')!;
     const added = await t.api('POST', `/api/groups/${groupId}/agents`, {
-      configuration: codexConfig, handle: 'codex-fallback', isolated: false,
+      configuration: codexConfig, handle: 'codex-fallback', isolated,
     });
     expect(added.status, JSON.stringify(added.json)).toBe(201);
     const target = t.app.groups.get(groupId).members.find((member) => member.handle === 'codex-fallback')!;
@@ -644,10 +647,10 @@ describe('durable resilience API', () => {
         return;
       }
       if (options.session.id === source.sessionId) {
-        writeFileSync(path.join(options.session.worktreePath, dirtyPath), 'Uncommitted source worker changes stay in the shared worktree.');
+        writeFileSync(path.join(options.session.worktreePath, dirtyPath), 'Uncommitted source worker changes stay in the original worktree.');
         (options as typeof options & DispatchAwareOptions).onDispatchState?.('dispatched');
         throw new ProviderError('Account quota exhausted.', {
-          providerCode: 'usageLimitExceeded', outcomeKnown: true, continuationSafety: 'safe',
+          providerCode: 'usageLimitExceeded', outcomeKnown: true, continuationSafety: safety,
         });
       }
       if (options.session.id === target.sessionId) {
@@ -666,13 +669,19 @@ describe('durable resilience API', () => {
     expect(targetRun!.prompt).toContain(taskObjective);
     expect(targetRun!.prompt).toContain(acceptanceCriteria);
     expect(targetRun!.prompt).toContain(dirtyPath);
-    expect(targetRun!.session.worktreePath).toBe(sourceSession.worktreePath);
-    expect((await import('node:fs')).existsSync(path.join(targetRun!.session.worktreePath, dirtyPath))).toBe(true);
+    if (isolated) {
+      expect(targetRun!.session.worktreePath).not.toBe(sourceSession.worktreePath);
+      expect(targetRun!.prompt).toContain(sourceSession.worktreePath);
+      expect((await import('node:fs')).existsSync(path.join(targetRun!.session.worktreePath, dirtyPath))).toBe(false);
+    } else {
+      expect(targetRun!.session.worktreePath).toBe(sourceSession.worktreePath);
+      expect((await import('node:fs')).existsSync(path.join(targetRun!.session.worktreePath, dirtyPath))).toBe(true);
+    }
 
     const snapshot = t.app.groups.get(groupId);
     const original = snapshot.deliveries.find((row) => row.memberId === source.id && row.status === 'failed')!;
     const successor = snapshot.deliveries.find((row) => row.id === original.recoveredByDeliveryId);
-    expect(original.failure).toMatchObject({ kind: 'quota_exhausted', outcomeUnknown: false, continuationSafety: 'safe', dispatchState: 'dispatched' });
+    expect(original.failure).toMatchObject({ kind: 'quota_exhausted', outcomeUnknown: false, continuationSafety: safety, dispatchState: 'dispatched' });
     expect(successor).toMatchObject({ status: 'completed', kind: 'assignment', memberId: target.id, requestId: assignedRequestId });
     expect(snapshot.deliveries.filter((row) => row.memberId === target.id && row.status === 'completed')).toHaveLength(1);
     expect(snapshot.assignments).toHaveLength(1);
