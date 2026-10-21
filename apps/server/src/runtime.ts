@@ -665,16 +665,22 @@ export class SessionRuntime {
                   const detail = redactSecrets(errorMessage(outcome.error)).slice(0, 1000);
                   result = this.compactionResult(session, 'failed', startedAt, checkpointId, 'The provider could not compact this conversation.', detail);
                 } else {
-                  const providerResult = ContextCompactionResultSchema.parse(outcome.result);
-                  if (providerResult.sessionId !== session.id || providerResult.provider !== session.provider) {
-                    throw new Error('Provider compaction result did not match the selected native session.');
+                  if (lock.controller.signal.aborted) {
+                    result = this.compactionResult(session, 'failed', startedAt, checkpointId,
+                      'Compaction was interrupted, but native work may already have settled; provider-side changes cannot be rolled back.',
+                      'Native compaction settled after interruption was accepted.');
+                  } else {
+                    const providerResult = ContextCompactionResultSchema.parse(outcome.result);
+                    if (providerResult.sessionId !== session.id || providerResult.provider !== session.provider) {
+                      throw new Error('Provider compaction result did not match the selected native session.');
+                    }
+                    result = {
+                      ...providerResult,
+                      checkpointId: checkpointId ?? providerResult.checkpointId,
+                      message: redactSecrets(providerResult.message).slice(0, 1000),
+                      error: providerResult.error === null ? null : redactSecrets(providerResult.error).slice(0, 1000),
+                    };
                   }
-                  result = {
-                    ...providerResult,
-                    checkpointId: checkpointId ?? providerResult.checkpointId,
-                    message: redactSecrets(providerResult.message).slice(0, 1000),
-                    error: providerResult.error === null ? null : redactSecrets(providerResult.error).slice(0, 1000),
-                  };
                 }
               }
             }
