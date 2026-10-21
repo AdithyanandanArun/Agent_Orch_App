@@ -25,11 +25,11 @@ const claudeConfig = { provider: 'claude', model: 'claude-sonnet-5-5', effort: '
 const codexConfig = { provider: 'codex', model: 'gpt-6.1-sol', effort: 'high', policy: 'supervised', serviceTier: 'standard' } as const;
 const codexFullAccessConfig = { ...codexConfig, policy: 'full-access' } as const;
 
-async function configureQuotaFallback(t: TestApp, groupId: string, sourceId: string, targetId: string): Promise<void> {
+async function configureQuotaFallback(t: TestApp, groupId: string, targetId: string): Promise<void> {
   const response = await t.api('PATCH', `/api/groups/${groupId}`, {
     recoveryPolicy: {
       automaticFallback: true, allowUnverifiedQuotaFallback: true,
-      leadFallbackMemberId: targetId, workerFallbacks: { [sourceId]: targetId },
+      leadFallbackMemberId: targetId, workerFallbacks: {},
     },
   });
   expect(response.status, JSON.stringify(response.json)).toBe(200);
@@ -430,13 +430,13 @@ describe('durable resilience API', () => {
     expect(t.app.groups.get(initial.group.id).group.recoveryState?.acknowledgedCheckpointId).toBe(groupCheckpointId);
   });
 
-  it('gates a supervised follow-up batch once, then resumes its single planner continuation after acknowledgment', async () => {
+  it.each(['supervised', 'balanced'] as const)('gates a %s follow-up batch once, then resumes its single planner continuation after acknowledgment', async (autonomyMode) => {
     const t = await boot();
     const initial = await createGroup(t, 'current-leads');
     const groupId = initial.group.id;
     const lead = initial.members.find((member) => member.sessionId === EXAMPLE_CLIENT_SESSION_ID)!;
     const worker = initial.members.find((member) => member.id !== lead.id)!;
-    expect((await t.api('PATCH', `/api/groups/${groupId}`, { autonomy: { mode: 'supervised' } })).status).toBe(200);
+    expect((await t.api('PATCH', `/api/groups/${groupId}`, { autonomy: { mode: autonomyMode } })).status).toBe(200);
     let leadTurns = 0;
     let workerRuns = 0;
     const reviewCheckpoint = deferred<string | undefined>();
@@ -501,7 +501,7 @@ describe('durable resilience API', () => {
       expect(t.fake.runs).toHaveLength(3);
 
       const acknowledged = await t.api('POST', `/api/groups/${groupId}/recovery`, {
-        action: 'acknowledge-checkpoint', checkpointId, idempotencyKey: 'supervised-followup-batch-ack',
+        action: 'acknowledge-checkpoint', checkpointId, idempotencyKey: `${autonomyMode}-followup-batch-ack`,
       });
       expect(acknowledged.status).toBe(200);
       expect(t.app.groups.get(groupId).group.recoveryState?.acknowledgedCheckpointId).toBe(checkpointId);
@@ -752,7 +752,9 @@ describe('durable resilience API', () => {
     expect((await t.api('GET', `/api/sessions/${source.sessionId}/recovery`)).json.failure).toMatchObject({
       kind: 'quota_exhausted', outcomeUnknown: true, continuationSafety: 'unsafe', dispatchState: 'unknown',
     });
-    expect(snapshot.group.recoveryState?.status).toBe('degraded');
+    expect(snapshot.group.recoveryState).toMatchObject({ status: 'paused' });
+    expect(snapshot.group.recoveryState?.reason).toMatch(/outcome|uncertain|safety|human/i);
+    expect(snapshot.group.paused).toBe(false);
   });
 
   it.each(['current-leads', 'cowork', 'orchestrated'] as const)('makes one permission-safe configured quota handoff in %s mode', async (mode) => {
@@ -764,7 +766,7 @@ describe('durable resilience API', () => {
       ? initial.members.find((member) => member.sessionId === EXAMPLE_CLIENT_SESSION_ID)!.id
       : initial.group.orchestratorMemberId!;
     const source = initial.members.find((member) => member.id === sourceId)!;
-    await configureQuotaFallback(t, groupId, source.id, target.id);
+    await configureQuotaFallback(t, groupId, target.id);
 
     const dirtyPath = 'quota-source-dirty.txt';
     const targetRunsByRunId = new Map<string, Parameters<typeof t.fake.script>[0]>();
@@ -817,7 +819,7 @@ describe('durable resilience API', () => {
     const initial = await createGroup(t, 'current-leads');
     const source = initial.members.find((member) => member.sessionId === EXAMPLE_CLIENT_SESSION_ID)!;
     const target = initial.members.find((member) => member.id !== source.id)!;
-    await configureQuotaFallback(t, initial.group.id, source.id, target.id);
+    await configureQuotaFallback(t, initial.group.id, target.id);
     t.fake.script = async () => { throw new ProviderError('Account quota exhausted.', { providerCode: 'usageLimitExceeded', outcomeKnown: true }); };
     expect((await t.api('POST', `/api/groups/${initial.group.id}/messages`, { content: 'Do not retry against an unknown same-provider pool.' })).status).toBe(202);
     await waitFor(() => t.app.groups.get(initial.group.id).deliveries.some((row) => row.status === 'failed') && t.app.runtime.activeCount() === 0);
@@ -850,7 +852,7 @@ describe('durable resilience API', () => {
     const source = initial.members.find((member) => member.sessionId === EXAMPLE_CLIENT_SESSION_ID)!;
     const target = initial.members.find((member) => member.id !== source.id)!;
     expect((await t.api('POST', `/api/groups/${initial.group.id}/members/${target.id}/interrupt`, {})).status).toBe(200);
-    await configureQuotaFallback(t, initial.group.id, source.id, target.id);
+    await configureQuotaFallback(t, initial.group.id, target.id);
     t.fake.script = async (options) => {
       if (options.session.id === source.sessionId) throw new ProviderError('Account quota exhausted.', { providerCode: 'usageLimitExceeded', outcomeKnown: true });
     };
@@ -864,8 +866,13 @@ describe('durable resilience API', () => {
     const initial = await createGroup(t, 'current-leads', codexConfig);
     const source = initial.members.find((member) => member.sessionId === EXAMPLE_CLIENT_SESSION_ID)!;
     const target = initial.members.find((member) => member.id !== source.id)!;
-    await configureQuotaFallback(t, initial.group.id, source.id, target.id);
-    t.fake.script = async () => { throw new ProviderError('Account quota exhausted.', { providerCode: 'usageLimitExceeded', outcomeKnown: true }); };
+    await configureQuotaFallback(t, initial.group.id, target.id);
+    t.fake.script = async (options) => {
+      (options as typeof options & DispatchAwareOptions).onDispatchState?.('dispatched');
+      throw new ProviderError('Account quota exhausted.', {
+        providerCode: 'usageLimitExceeded', outcomeKnown: true, continuationSafety: 'safe',
+      });
+    };
     expect((await t.api('POST', `/api/groups/${initial.group.id}/messages`, { content: 'Bound the fallback attempt.' })).status).toBe(202);
     await waitFor(() => t.app.groups.get(initial.group.id).deliveries.filter((row) => row.status === 'failed').length >= 2 && t.app.runtime.activeCount() === 0);
     expect(t.fake.runs.filter((run) => run.session.id === target.sessionId)).toHaveLength(1);
