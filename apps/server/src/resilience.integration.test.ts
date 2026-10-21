@@ -67,10 +67,16 @@ async function bootWithCodexAndClaude(): Promise<TestApp> {
 
 async function failCurrentLead(t: TestApp, mode: 'cowork' | 'current-leads' | 'orchestrated' = 'current-leads') {
   const initial = await createGroup(t, mode);
-  t.fake.script = async () => {
+  const intendedLead = mode === 'cowork'
+    ? initial.members.find((member) => member.sessionId === EXAMPLE_CLIENT_SESSION_ID)!
+    : initial.members.find((member) => member.id === initial.group.orchestratorMemberId)!;
+  t.fake.script = async (options) => {
+    if (options.session.id !== intendedLead.sessionId) return;
     throw new ProviderError('Account quota exhausted.', { providerCode: 'usageLimitExceeded', outcomeKnown: true });
   };
-  expect((await t.api('POST', `/api/groups/${initial.group.id}/messages`, { content: 'Implement a bounded recovery fixture.' })).status).toBe(202);
+  expect((await t.api('POST', `/api/groups/${initial.group.id}/messages`, {
+    content: `@${intendedLead.handle} Implement a bounded recovery fixture.`,
+  })).status).toBe(202);
   const delivery = await waitFor(() => t.app.groups.get(initial.group.id).deliveries.find((row) => row.status === 'failed'));
   await waitFor(() => t.app.runtime.activeCount() === 0);
   return { initial, delivery, snapshot: t.app.groups.get(initial.group.id) };
@@ -761,6 +767,7 @@ describe('durable resilience API', () => {
     await configureQuotaFallback(t, groupId, source.id, target.id);
 
     const dirtyPath = 'quota-source-dirty.txt';
+    const targetRunsByRunId = new Map<string, Parameters<typeof t.fake.script>[0]>();
     t.fake.script = async (options, emit) => {
       if (options.session.id === source.sessionId) {
         writeFileSync(path.join(options.session.worktreePath, dirtyPath), 'uncommitted work stays with source');
@@ -769,23 +776,40 @@ describe('durable resilience API', () => {
         throw new ProviderError('Account quota exhausted.', { providerCode: 'usageLimitExceeded', outcomeKnown: true });
       }
       if (options.session.id === target.sessionId) {
+        const runningDelivery = t.app.groups.get(groupId).deliveries.find((delivery) => delivery.memberId === target.id
+          && delivery.status === 'running' && delivery.runId);
+        if (!runningDelivery?.runId) throw new Error('Target delivery was not bound to its provider run');
+        targetRunsByRunId.set(runningDelivery.runId, options);
         emit({ type: 'text', text: 'One bounded replacement attempt completed.' });
       }
     };
     expect((await t.api('POST', `/api/groups/${groupId}/messages`, { content: 'Recover without replaying uncertain work.' })).status).toBe(202);
-    await waitFor(() => t.fake.runs.some((run) => run.session.id === target.sessionId) && t.app.runtime.activeCount() === 0);
-
-    const targetRuns = t.fake.runs.filter((run) => run.session.id === target.sessionId);
-    expect(targetRuns).toHaveLength(1);
-    expect(targetRuns[0]!.prompt).toContain(dirtyPath);
-    expect((await import('node:fs')).existsSync(path.join(targetRuns[0]!.session.worktreePath, dirtyPath))).toBe(false);
+    const recovered = await waitFor(() => {
+      const current = t.app.groups.get(groupId);
+      const original = current.deliveries.find((delivery) => delivery.memberId === source.id && delivery.status === 'failed');
+      const successor = original?.recoveredByDeliveryId
+        ? current.deliveries.find((delivery) => delivery.id === original.recoveredByDeliveryId)
+        : undefined;
+      return original && successor?.status === 'completed' && t.app.runtime.activeCount() === 0
+        ? { original, successor } : undefined;
+    }, 4000, 'quota fallback successor to complete and provider cleanup');
+    const recoveryRun = recovered.successor.runId ? targetRunsByRunId.get(recovered.successor.runId) : undefined;
+    expect(recoveryRun).toBeDefined();
+    expect(recoveryRun!.prompt).toContain(dirtyPath);
+    expect((await import('node:fs')).existsSync(path.join(recoveryRun!.session.worktreePath, dirtyPath))).toBe(false);
     expect((await t.api('GET', '/api/bootstrap')).json.sessions.find((row: any) => row.id === source.sessionId).policy).toBe('supervised');
     expect((await t.api('GET', '/api/bootstrap')).json.sessions.find((row: any) => row.id === target.sessionId)).toMatchObject({ provider: 'codex', policy: 'supervised' });
 
     const snapshot = t.app.groups.get(groupId);
-    const original = snapshot.deliveries.find((row) => row.memberId === source.id && row.status === 'failed')!;
-    expect(original.recoveredByDeliveryId).toBeTruthy();
-    expect(snapshot.deliveries.filter((row) => row.memberId === target.id && row.status === 'completed')).toHaveLength(1);
+    const sourceFailure = snapshot.deliveries.find((row) => row.id === recovered.original.id)!;
+    expect(sourceFailure.recoveredByDeliveryId).toBe(recovered.successor.id);
+    const successors = snapshot.deliveries.filter((row) => row.id === sourceFailure.recoveredByDeliveryId);
+    expect(successors).toHaveLength(1);
+    const successor = successors[0]!;
+    expect(successor).toMatchObject({ status: 'completed', kind: 'result', memberId: target.id, requestId: sourceFailure.requestId });
+    expect(targetRunsByRunId.get(successor.runId!)).toBe(recoveryRun);
+    expect(snapshot.deliveries.filter((row) => row.kind === 'result' && row.memberId === target.id
+      && row.status === 'completed' && row.runId === successor.runId)).toHaveLength(1);
   });
 
   it('blocks unverified automatic fallback to the same provider even with explicit unknown-pool opt-in', async () => {
