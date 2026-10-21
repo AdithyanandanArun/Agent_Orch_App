@@ -106,6 +106,7 @@ function sanitizeProviderFailureInput(error: unknown, scrub: (value: string) => 
 export class SessionRuntime {
   private readonly active = new Map<string, ActiveRun>();
   private readonly compactions = new Map<string, ActiveCompaction>();
+  private readonly stopping = new Set<string>();
   private groups?: GroupService;
   private teamMcp?: TeamMcpBridge;
   private attachmentService?: AttachmentService;
@@ -147,6 +148,7 @@ export class SessionRuntime {
   start(sessionId: string, content: string, options: StartOptions = {}): string {
     const session = this.store.getSession(sessionId);
     if (!session) throw notFound('Session not found');
+    if (this.stopping.has(sessionId)) throw conflict('This session is being removed from Mingle.');
     if (this.groups?.forSession(sessionId) && !options.groupDeliveryId) throw conflict('Start grouped work through its recorded group delivery.');
     if (this.isActive(sessionId) || session.status === 'running' || session.status === 'waiting') throw conflict('Session already has active work or provider cleanup is still in progress');
     if (!existsSync(session.worktreePath) || !statSync(session.worktreePath).isDirectory()) throw conflict('The session worktree no longer exists on disk');
@@ -569,6 +571,33 @@ export class SessionRuntime {
     return true;
   }
 
+  /** Fences new provider work, interrupts current work, and runs a metadata-only action once cleanup releases. */
+  async withSessionsStopped<T>(sessionIds: string[], action: () => T): Promise<T> {
+    const ids = [...new Set(sessionIds)];
+    if (ids.some((id) => this.stopping.has(id))) throw conflict('A session removal is already in progress.');
+    for (const id of ids) this.stopping.add(id);
+    try {
+      const pending: Promise<unknown>[] = ids.flatMap((id) => {
+        const run = this.active.get(id);
+        const compaction = this.compactions.get(id);
+        const promises: Promise<unknown>[] = [];
+        if (run) promises.push(run.promise);
+        if (compaction) promises.push(compaction.promise);
+        return promises;
+      });
+      for (const id of ids) this.interrupt(id);
+      await Promise.allSettled(pending);
+      const unavailable = ids.find((id) => {
+        const session = this.store.getSession(id);
+        return this.isActive(id) || session?.status === 'running' || session?.status === 'waiting';
+      });
+      if (unavailable) throw conflict('Provider cleanup is still in progress. The session remains in Mingle; try deleting it again after cleanup finishes.');
+      return action();
+    } finally {
+      for (const id of ids) this.stopping.delete(id);
+    }
+  }
+
   /** Cancels only the compaction operation named by the caller; stale Stop requests cannot hit later work. */
   interruptCompaction(sessionId: string, operationId: string): boolean {
     const compaction = this.compactions.get(sessionId);
@@ -581,6 +610,7 @@ export class SessionRuntime {
   compact(sessionId: string, operationId = newId('cmp')): Promise<ContextCompactionResult> {
     const session = this.store.getSession(sessionId);
     if (!session) throw notFound('Session not found');
+    if (this.stopping.has(sessionId)) throw conflict('This session is being removed from Mingle.');
     const compactOperationId = operationId.trim();
     if (!compactOperationId || compactOperationId.length > 100) throw conflict('A valid compaction operation ID is required.');
     if (this.isActive(sessionId) || session.status === 'running' || session.status === 'waiting') {

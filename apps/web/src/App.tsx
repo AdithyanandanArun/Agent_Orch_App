@@ -6,7 +6,7 @@ import { Workspace } from './views/Workspace';
 import { TasksView } from './views/Tasks';
 import { ActivityView } from './views/Activity';
 import { ConnectionBanner, StartupScreen, Toasts } from './components/Shell';
-import { ArchiveDialog, HandoffDialog, ProjectDialog, RenameDialog, TaskDialog } from './components/Dialogs';
+import { DeleteGroupDialog, DeleteSessionDialog, HandoffDialog, ProjectDialog, RenameDialog, TaskDialog } from './components/Dialogs';
 import { ImportDialog } from './components/ImportDialog';
 import { SettingsPage } from './components/Settings';
 import { Palette, ShortcutsDialog } from './components/Palette';
@@ -31,7 +31,8 @@ function Dialogs() {
     case 'settings': break; // Legacy actions route to the Settings page through the store.
     case 'palette': content = <Palette />; break;
     case 'rename': content = <RenameDialog sessionId={active.sessionId} />; break;
-    case 'archive': content = <ArchiveDialog sessionId={active.sessionId} />; break;
+    case 'delete-session': content = <DeleteSessionDialog sessionId={active.sessionId} />; break;
+    case 'delete-group': content = <DeleteGroupDialog groupId={active.groupId} />; break;
     case 'import': content = <ImportDialog />; break;
     case 'shortcuts': content = <ShortcutsDialog />; break;
     case 'add-agent': content = <AddAgentDialog sessionId={active.sessionId} />; break;

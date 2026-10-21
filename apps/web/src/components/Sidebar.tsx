@@ -50,6 +50,7 @@ export function Sidebar() {
   const connectionLabel = connection === 'online' ? 'Connected' : connection === 'connecting' ? 'Connecting' : 'Disconnected';
 
   const target = sessions.find((session) => session.id === retainedMenu?.sessionId);
+  const targetGroup = target ? findGroupForSession(boot?.groups, target.id) : undefined;
   useEffect(() => { if (menuOpen && retainedMenu && !target) setMenuOpen(false); }, [menuOpen, retainedMenu, target]);
   const organize = async (session: Session, changes: Partial<Pick<Session, 'pinned' | 'unread'>>) => {
     setOrganizing((current) => new Set(current).add(session.id));
@@ -86,10 +87,10 @@ export function Sidebar() {
       { id: 'copy-path', label: target.isolated ? 'Worktree path' : 'Project path', onSelect: () => void copy(target.worktreePath, 'Folder path') },
     ] },
     { id: 'project-settings', label: 'Project settings', onSelect: () => useMingle.getState().openSettings({ section: 'project', projectId: target.projectId }) },
-    ...(!findGroupForSession(boot?.groups, target.id) ? [
-      { type: 'separator' as const, id: 'archive-section' },
-      { id: 'archive', label: 'Archive session…', disabled: connection !== 'online' || target.status === 'running' || target.status === 'waiting', onSelect: () => openDialog({ kind: 'archive', sessionId: target.id }) },
-    ] : []),
+    { type: 'separator', id: 'delete-section' },
+    targetGroup?.group.anchorSessionId === target.id
+      ? { id: 'delete-group', label: 'Delete group…', danger: true, disabled: connection !== 'online', onSelect: () => openDialog({ kind: 'delete-group', groupId: targetGroup.group.id }) }
+      : { id: 'delete-session', label: 'Delete session…', danger: true, disabled: connection !== 'online', onSelect: () => openDialog({ kind: 'delete-session', sessionId: target.id }) },
   ] : [];
 
   return <><aside className={cx('sidebar', sidebarOpen && 'is-open')} aria-label="Primary">

@@ -110,10 +110,11 @@ export class GroupRepo {
     JSON.stringify(g.autonomy ?? { mode: 'balanced' }), JSON.stringify(g.recoveryPolicy ?? { automaticFallback: false }), now, now);
   }
   getGroup(id: string): ConversationGroup | undefined {
-    const row = this.get('SELECT g.* FROM conversation_groups g JOIN projects p ON p.id = g.project_id WHERE g.id = ? AND p.archived_at IS NULL', id);
+    const row = this.get('SELECT g.* FROM conversation_groups g JOIN projects p ON p.id = g.project_id WHERE g.id = ? AND p.archived_at IS NULL AND g.archived_at IS NULL', id);
     return row ? mapGroup(row) : undefined;
   }
-  listGroups(): ConversationGroup[] { return this.all('SELECT g.* FROM conversation_groups g JOIN projects p ON p.id = g.project_id WHERE p.archived_at IS NULL ORDER BY g.created_at ASC, g.rowid ASC').map(mapGroup); }
+  listGroups(): ConversationGroup[] { return this.all('SELECT g.* FROM conversation_groups g JOIN projects p ON p.id = g.project_id WHERE p.archived_at IS NULL AND g.archived_at IS NULL ORDER BY g.created_at ASC, g.rowid ASC').map(mapGroup); }
+  archiveGroup(id: string): void { this.run('UPDATE conversation_groups SET archived_at = ?, paused = 1, updated_at = ? WHERE id = ? AND archived_at IS NULL', nowIso(), nowIso(), id); }
   updateGroup(id: string, patch: {
     mode?: GroupMode; orchestratorMemberId?: string | null; paused?: boolean; pauseReason?: string | null;
     maxParallel?: number; maxTurns?: number; maxHops?: number; autonomy?: AutonomyConfig; recoveryPolicy?: GroupRecoveryPolicy;
@@ -150,7 +151,7 @@ export class GroupRepo {
   }
   activeMemberOfSession(sessionId: string): MemberRow | undefined {
     const row = this.get(`SELECT m.* FROM group_members m JOIN conversation_groups g ON g.id = m.group_id JOIN projects p ON p.id = g.project_id JOIN sessions s ON s.id = m.session_id
-      WHERE m.session_id = ? AND m.removed_at IS NULL AND p.archived_at IS NULL AND s.archived_at IS NULL`, sessionId);
+      WHERE m.session_id = ? AND m.removed_at IS NULL AND p.archived_at IS NULL AND g.archived_at IS NULL AND s.archived_at IS NULL`, sessionId);
     return row ? mapMember(row) : undefined;
   }
   handleTaken(groupId: string, handle: string): boolean { return Boolean(this.get('SELECT 1 AS x FROM group_members WHERE group_id = ? AND handle = ?', groupId, handle)); }

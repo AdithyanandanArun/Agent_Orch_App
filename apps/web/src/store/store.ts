@@ -20,7 +20,8 @@ export type Dialog =
   | { kind: 'settings' }
   | { kind: 'palette' }
   | { kind: 'rename'; sessionId: string }
-  | { kind: 'archive'; sessionId: string }
+  | { kind: 'delete-session'; sessionId: string }
+  | { kind: 'delete-group'; groupId: string }
   | { kind: 'import' }
   | { kind: 'shortcuts' }
   | { kind: 'add-agent'; sessionId: string }
@@ -118,6 +119,8 @@ interface MingleState {
   organizeSession(id: string, changes: Partial<Pick<Session, 'pinned' | 'unread'>>): Promise<void>;
   /** Merge a group snapshot returned by a group mutation without waiting for the next bootstrap. */
   applyGroup(snapshot: GroupSnapshot): void;
+  /** Remove successfully archived records locally while the next bootstrap is pending. */
+  applyArchivedSessions(sessionIds: string[], groupId?: string): void;
   selectTask(id: string | null): void;
   setCenterTab(key: string): void;
   setMapSelection(id: string | null): void;
@@ -562,6 +565,28 @@ export const useMingle = create<MingleState>((set, get) => {
         const groups = s.boot.groups ?? [];
         const next = groups.some((g) => g.group.id === snapshot.group.id) ? groups.map((g) => (g.group.id === snapshot.group.id ? snapshot : g)) : [...groups, snapshot];
         return { boot: { ...s.boot, groups: next } };
+      });
+    },
+    applyArchivedSessions(sessionIds, groupId) {
+      const ids = new Set(sessionIds);
+      const terminalSessionId = get().terminal.sessionId;
+      if (terminalSessionId && ids.has(terminalSessionId)) get().stopTerminal();
+      set((s) => {
+        if (!s.boot) return {};
+        const boot: Bootstrap = {
+          ...s.boot,
+          sessions: s.boot.sessions.filter((session) => !ids.has(session.id)),
+          ...(groupId ? { groups: (s.boot.groups ?? []).filter((group) => group.group.id !== groupId) } : {}),
+        };
+        const streams = Object.fromEntries(Object.entries(s.streams).filter(([, stream]) => !ids.has(stream.sessionId)));
+        const drafts = { ...s.drafts };
+        for (const id of ids) delete drafts[id];
+        return {
+          boot, streams, drafts,
+          ...(groupId && s.groupMembersOpenId === groupId ? { groupMembersOpenId: null } : {}),
+          ...(groupId && s.groupActionBusyId === groupId ? { groupActionBusyId: null } : {}),
+          ...resolveSelection(s, boot),
+        };
       });
     },
     async organizeSession(id, changes) {

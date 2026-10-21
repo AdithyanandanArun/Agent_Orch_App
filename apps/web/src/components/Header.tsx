@@ -1,4 +1,4 @@
-import { ArrowLeft, Menu as MenuIcon, PanelRight, Pencil, SquareTerminal, Archive, MoreHorizontal, Square, ListPlus, UserPlus } from 'lucide-react';
+import { ArrowLeft, Menu as MenuIcon, PanelRight, Pencil, SquareTerminal, MoreHorizontal, Square, ListPlus, UserPlus, Trash2 } from 'lucide-react';
 import { useMingle, useActiveSession, useActiveGroup, useProject } from '../store/store';
 import { api, errorMessage } from '../lib/api';
 import { Button, IconButton, Menu, MenuItem, MenuSeparator } from './ui';
@@ -89,7 +89,10 @@ export function Header() {
                   why={group ? !online ? 'Reconnect to the server first' : groupActionBusy ? 'A group action is already in progress' : 'No active or queued work' : 'No active run to stop'}
                   onSelect={interrupt}
                 >{group ? 'Stop all agents' : 'Interrupt run'}</MenuItem>
-                {!group ? <><MenuSeparator /><MenuItem danger icon={<Archive size={14} />} onSelect={() => session && openDialog({ kind: 'archive', sessionId: session.id })}>Archive session…</MenuItem></> : null}
+                <MenuSeparator />
+                {group
+                  ? <MenuItem danger icon={<Trash2 size={14} />} disabled={!online} why="Reconnect to the server first" onSelect={() => openDialog({ kind: 'delete-group', groupId: group.group.id })}>Delete group…</MenuItem>
+                  : <MenuItem danger icon={<Trash2 size={14} />} disabled={!online} why="Reconnect to the server first" onSelect={() => session && openDialog({ kind: 'delete-session', sessionId: session.id })}>Delete session…</MenuItem>}
               </Menu>
             </>
           ) : null}

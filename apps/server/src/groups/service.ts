@@ -34,6 +34,7 @@ export interface GroupRuntime {
   isRunLive?(sessionId: string, runId: string): boolean;
   start(sessionId: string, content: string, options?: { taskId?: string; groupDeliveryId?: string; userMessage?: { content: string; kind?: string }; attachmentOwnerKind?: 'message' | 'group_message'; attachmentOwnerId?: string; invocation?: import('@mingle/contracts').NativeInvocation }): string;
   interrupt(sessionId: string): boolean;
+  withSessionsStopped?<T>(sessionIds: string[], action: () => T): Promise<T>;
 }
 export type GroupCatalog = (session: Session, refresh?: boolean) => Promise<ProviderCatalog>;
 export interface GroupRecoveryReader {
@@ -100,6 +101,7 @@ export class GroupService {
   private readonly unsubscribe: () => void;
   /** Deliveries whose runtime.start call is in flight, keyed by session. Closed by the same synchronous turn. */
   private readonly reserved = new Map<string, string>();
+  private readonly deletingGroups = new Set<string>();
 
   constructor(options: GroupServiceOptions) {
     this.store = options.store;
@@ -360,6 +362,53 @@ export class GroupService {
     });
     this.schedule(group.id);
     return this.get(group.id);
+  }
+
+  /** Hides a whole group only after its queue is fenced and every member runtime releases its cleanup lock. */
+  async delete(groupId: string): Promise<void> {
+    return this.exclusive(async () => {
+      this.assertOpen();
+      const group = this.requireGroup(groupId);
+      if (this.deletingGroups.has(group.id)) throw conflict('This group is already being removed.');
+      if (!this.runtime.withSessionsStopped) throw conflict('The runtime cannot safely stop every group session for deletion.');
+      this.deletingGroups.add(group.id);
+      try {
+        const deliveries = this.repo.deliveries(group.id);
+        for (const delivery of deliveries) {
+          const timer = this.safeRetryTimers.get(delivery.id);
+          if (timer) clearTimeout(timer);
+          this.safeRetryTimers.delete(delivery.id);
+        }
+        this.pending.delete(group.id);
+        this.store.tx(() => {
+          this.repo.updateGroup(group.id, { paused: true, pauseReason: 'Group deletion is stopping agents and cancelling pending work.' });
+          for (const delivery of deliveries) {
+            if (delivery.status === 'queued' || delivery.status === 'failed' || delivery.status === 'interrupted') {
+              this.repo.setDelivery(delivery.id, { status: 'cancelled', error: 'Cancelled because the group was deleted from Mingle', retryable: false });
+            }
+          }
+          for (const request of this.repo.requests(group.id, 1000)) if (request.status !== 'completed') this.refreshRequest(request.id, true);
+          this.event(group, 'group.deletion.started', `Stopping group: ${group.title}`, { memberCount: this.repo.members(group.id).length }, group.anchorSessionId);
+        });
+
+        const sessionIds = this.repo.members(group.id).map((member) => member.sessionId);
+        await this.runtime.withSessionsStopped!(sessionIds, () => this.store.tx(() => {
+          for (const delivery of this.repo.deliveries(group.id)) {
+            if (delivery.status !== 'queued' && delivery.status !== 'running' && delivery.status !== 'failed' && delivery.status !== 'interrupted') continue;
+            if (delivery.status === 'running' && delivery.taskId) this.tasks.finishRun(delivery.taskId, 'interrupted');
+            this.repo.setDelivery(delivery.id, { status: 'cancelled', error: 'Cancelled because the group was deleted from Mingle', retryable: false });
+          }
+          for (const sessionId of new Set(sessionIds)) if (this.store.getSession(sessionId)) this.workspace.archiveSession(sessionId);
+          this.repo.archiveGroup(group.id);
+          this.event(group, 'group.archived', `Group deleted from Mingle: ${group.title}`, {
+            retained: ['conversation history', 'recovery records', 'project files', 'worktrees', 'branches'],
+          }, group.anchorSessionId);
+          this.store.touch();
+        }));
+      } finally {
+        this.deletingGroups.delete(group.id);
+      }
+    });
   }
 
   // ---------------------------------------------------------------- user messages
@@ -2609,6 +2658,7 @@ export class GroupService {
   private assertOpen(): void { if (this.closed) throw conflict('Mingle is shutting down'); }
 
   private requireGroup(id: string): ConversationGroup {
+    if (this.deletingGroups.has(id)) throw conflict('This group is being removed from Mingle.');
     const group = this.repo.getGroup(id);
     if (!group) throw notFound('Group not found');
     return group;

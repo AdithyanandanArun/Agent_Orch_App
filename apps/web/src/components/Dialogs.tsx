@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { AlertTriangle } from 'lucide-react';
 import { useMingle, useActiveSession, useProject } from '../store/store';
 import { api, errorMessage } from '../lib/api';
 import { Button, Field, InlineError, Modal, PROVIDER_NAME } from './ui';
@@ -157,16 +156,45 @@ export function RenameDialog({ sessionId }: { sessionId: string }) {
   );
 }
 
-export function ArchiveDialog({ sessionId }: { sessionId: string }) {
+export function DeleteSessionDialog({ sessionId }: { sessionId: string }) {
   const close = useMingle.getState().closeDialog;
   const session = useMingle((s) => s.boot?.sessions.find((x) => x.id === sessionId));
   const { busy, error, run } = useSubmit(close);
   return (
-    <Modal title="Archive session?" onClose={close} width={460}
-      footer={<><Button variant="ghost" onClick={close}>Cancel</Button><Button variant="danger" busy={busy} onClick={() => void run(async () => { await api.archiveSession(sessionId); await useMingle.getState().refreshNow(); useMingle.getState().toast('info', 'Session archived'); })}>Archive</Button></>}>
+    <Modal title="Delete session?" onClose={close} width={480}
+      footer={<><Button variant="ghost" onClick={close}>Cancel</Button><Button variant="danger" busy={busy} onClick={() => void run(async () => {
+        const result = await api.deleteSession(sessionId);
+        const state = useMingle.getState();
+        state.applyArchivedSessions([sessionId]);
+        await state.refreshNow();
+        state.toast('info', result.notices?.length ? `Session deleted. ${result.notices.join(' ')}` : 'Session deleted. History and project files were retained.');
+      })}>Delete session</Button></>}>
       <div className="form">
-        <p>“{session?.name ?? 'This session'}” will be removed from the sidebar. Its metadata is kept, and its worktree and branch are <strong>never deleted</strong> by Mingle — clean those up with Git when you’re ready.</p>
-        {session && (session.status === 'running' || session.status === 'waiting') ? <div className="inline-warn" role="note"><AlertTriangle size={14} /> This session is active. Interrupt it first if you want the run to stop.</div> : null}
+        <p>“{session?.name ?? 'This session'}” will be removed from the session list. Any active run will be interrupted, its session terminal stopped, and its browser connection disconnected.</p>
+        <p>Conversation history and session metadata remain in Mingle. Project files, the worktree and its branch are <strong>never deleted</strong> by Mingle.</p>
+        {error ? <InlineError>{error}</InlineError> : null}
+      </div>
+    </Modal>
+  );
+}
+
+export function DeleteGroupDialog({ groupId }: { groupId: string }) {
+  const close = useMingle.getState().closeDialog;
+  const group = useMingle((s) => s.boot?.groups?.find((item) => item.group.id === groupId));
+  const { busy, error, run } = useSubmit(close);
+  const memberCount = group?.members.length ?? 0;
+  return (
+    <Modal title="Delete group?" onClose={close} width={500}
+      footer={<><Button variant="ghost" onClick={close}>Cancel</Button><Button variant="danger" busy={busy} disabled={!group} why="This group is no longer available" onClick={() => void run(async () => {
+        const result = await api.deleteGroup(groupId);
+        const state = useMingle.getState();
+        state.applyArchivedSessions(result.sessionIds, groupId);
+        await state.refreshNow();
+        state.toast('info', result.notices.length ? `Group deleted. ${result.notices.join(' ')}` : 'Group deleted. History and project files were retained.');
+      })}>Delete group</Button></>}>
+      <div className="form">
+        <p>“{group?.group.title ?? 'This group'}” and its {memberCount} member sessions will be removed from Mingle. Queued work will be cancelled and running agents interrupted.</p>
+        <p>Conversation histories, recovery records and metadata remain in Mingle. Project files, worktrees and branches are <strong>never deleted</strong>. Session terminals will be stopped and browser connections disconnected.</p>
         {error ? <InlineError>{error}</InlineError> : null}
       </div>
     </Modal>

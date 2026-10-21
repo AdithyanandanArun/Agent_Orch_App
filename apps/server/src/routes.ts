@@ -260,6 +260,15 @@ export function buildRouter(s: Services) {
 
   const emptyGroupBody = z.object({}).strict();
   add('POST', '/api/groups', async (ctx) => new Reply(201, await s.groups.create(await ctx.body(CreateGroupSchema))));
+  add('DELETE', '/api/groups/:id', async (ctx) => {
+    await ctx.body(emptyGroupBody);
+    const id = param(ctx, 'id');
+    const group = s.groups.get(id);
+    const sessionIds = [...new Set(group.members.map((member) => member.sessionId))];
+    await s.terminals.withSessionsStopped(sessionIds, () => s.groups.delete(id));
+    const disconnected = await Promise.allSettled(group.members.map((member) => s.browser.disconnect(member.sessionId)));
+    return { ok: true, sessionIds, notices: disconnected.some((result) => result.status === 'rejected') ? ['A browser connection could not be disconnected.'] : [] };
+  });
   add('GET', '/api/groups/:id/members/:memberId/catalog', async (ctx) => {
     const query = NativeActionCatalogQuerySchema.parse(Object.fromEntries(ctx.url.searchParams));
     const group = s.groups.get(param(ctx, 'id'));
@@ -341,10 +350,11 @@ export function buildRouter(s: Services) {
   });
   add('DELETE', '/api/sessions/:id', async (ctx) => {
     const id = param(ctx, 'id');
-    if (s.groups.forSession(id)) throw conflict('Remove this agent from its group before archiving it. The original conversation remains the group entry.');
-    s.workspace.archiveSession(id);
-    await s.browser.disconnect(id);
-    return { ok: true };
+    if (!s.store.getSession(id)) throw notFound('Session not found');
+    if (s.groups.forSession(id)) throw conflict('This session belongs to a group. Delete the group from its conversation entry, or remove this agent from the roster to keep the group.');
+    await s.terminals.withSessionsStopped([id], () => s.runtime.withSessionsStopped([id], () => s.workspace.archiveSession(id)));
+    const disconnected = await Promise.allSettled([s.browser.disconnect(id)]);
+    return { ok: true, ...(disconnected.some((result) => result.status === 'rejected') ? { notices: ['The session was deleted, but its browser connection could not be disconnected.'] } : {}) };
   });
   add('GET', '/api/sessions/:id/messages', (ctx) => {
     const id = param(ctx, 'id');

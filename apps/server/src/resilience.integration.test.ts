@@ -129,15 +129,15 @@ describe('durable resilience API', () => {
     const file = path.join(directory, 'state.sqlite');
     try {
       const current = openDatabase(file);
-      expect(SCHEMA_VERSION).toBe(12);
-      current.exec('DROP TABLE group_recovery_deliveries; ALTER TABLE session_failures DROP COLUMN resolved_at; PRAGMA user_version = 11;');
+      expect(SCHEMA_VERSION).toBe(13);
+      current.exec('DROP TABLE group_recovery_deliveries; ALTER TABLE session_failures DROP COLUMN resolved_at; DROP INDEX conversation_groups_visible; ALTER TABLE conversation_groups DROP COLUMN archived_at; PRAGMA user_version = 11;');
       current.close();
 
       const upgraded = openDatabase(file);
       const failureColumns = upgraded.prepare('PRAGMA table_info(session_failures)').all() as { name: string }[];
       const deliveryTable = upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'group_recovery_deliveries'").get();
       const version = upgraded.prepare('PRAGMA user_version').get() as { user_version: number };
-      expect(version.user_version).toBe(12);
+      expect(version.user_version).toBe(13);
       expect(failureColumns.some((column) => column.name === 'resolved_at')).toBe(true);
       expect(deliveryTable).toBeDefined();
       upgraded.exec('PRAGMA foreign_keys = OFF');

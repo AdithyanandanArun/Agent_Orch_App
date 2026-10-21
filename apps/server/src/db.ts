@@ -228,6 +228,8 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
       created_at TEXT NOT NULL
     );`);
   },
+  `ALTER TABLE conversation_groups ADD COLUMN archived_at TEXT;
+   CREATE INDEX conversation_groups_visible ON conversation_groups(archived_at);`,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

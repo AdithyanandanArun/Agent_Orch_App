@@ -5,7 +5,7 @@ import type { WebSocket } from 'ws';
 import type { Hub } from './hub.ts';
 import type { Store } from './store.ts';
 import type { Logger } from './types.ts';
-import { errorMessage, newId } from './util.ts';
+import { conflict, errorMessage, newId } from './util.ts';
 
 export const MAX_TERMINALS_PER_SOCKET = 8;
 export const MAX_TERMINALS_TOTAL = 32;
@@ -31,7 +31,7 @@ interface PtyHandle {
   onExit(cb: (event: { exitCode: number }) => void): void;
 }
 
-interface Terminal { id: string; projectId: string; owner: WebSocket; pty: PtyHandle; exited: boolean; backpressure: NodeJS.Timeout | null }
+interface Terminal { id: string; projectId: string; sessionId?: string; owner: WebSocket; pty: PtyHandle; exited: boolean; backpressure: NodeJS.Timeout | null }
 
 export type PtySpawner = (shell: string, args: string[], options: { cwd: string; cols: number; rows: number; env: Record<string, string> }) => Promise<PtyHandle>;
 
@@ -46,6 +46,9 @@ export interface TerminalOptions { shell?: string; spawner?: PtySpawner }
 export class TerminalManager {
   private readonly terminals = new Map<string, Terminal>();
   private readonly pending = new Map<WebSocket, number>();
+  private readonly pendingSessions = new Map<string, number>();
+  private readonly sessionStartWaiters = new Map<string, Set<() => void>>();
+  private readonly stoppingSessions = new Set<string>();
   private pendingTotal = 0;
   private readonly pendingProjects = new Map<string, number>();
   private readonly shell: string;
@@ -61,6 +64,41 @@ export class TerminalManager {
   }
   hasProject(projectId: string): boolean {
     return (this.pendingProjects.get(projectId) ?? 0) > 0 || [...this.terminals.values()].some((terminal) => terminal.projectId === projectId && !terminal.exited);
+  }
+
+  /** Stops session-scoped shells and prevents a concurrent PTY start from outliving archival. */
+  async withSessionsStopped<T>(sessionIds: string[], action: () => Promise<T> | T): Promise<T> {
+    const ids = [...new Set(sessionIds)];
+    if (ids.some((id) => this.stoppingSessions.has(id))) throw conflict('A session terminal is already being removed.');
+    for (const id of ids) this.stoppingSessions.add(id);
+    for (const terminal of this.terminals.values()) if (terminal.sessionId && ids.includes(terminal.sessionId)) this.kill(terminal);
+    try {
+      await Promise.all(ids.map((id) => this.waitForSessionStarts(id)));
+      return await action();
+    } finally {
+      for (const id of ids) this.stoppingSessions.delete(id);
+    }
+  }
+
+  private waitForSessionStarts(sessionId: string): Promise<void> {
+    if (!this.pendingSessions.has(sessionId)) return Promise.resolve();
+    return new Promise((resolve) => {
+      const waiters = this.sessionStartWaiters.get(sessionId) ?? new Set<() => void>();
+      waiters.add(resolve);
+      this.sessionStartWaiters.set(sessionId, waiters);
+    });
+  }
+
+  private releaseSessionStart(sessionId: string): void {
+    const remaining = (this.pendingSessions.get(sessionId) ?? 1) - 1;
+    if (remaining > 0) {
+      this.pendingSessions.set(sessionId, remaining);
+      return;
+    }
+    this.pendingSessions.delete(sessionId);
+    const waiters = this.sessionStartWaiters.get(sessionId);
+    this.sessionStartWaiters.delete(sessionId);
+    for (const resolve of waiters ?? []) resolve();
   }
 
   handleMessage(socket: WebSocket, raw: string): void {
@@ -110,6 +148,7 @@ export class TerminalManager {
     if (!project) return this.fail(socket, 'Unknown project');
     let cwd = project.path;
     if (request.sessionId) {
+      if (this.stoppingSessions.has(request.sessionId)) return this.fail(socket, 'This session is being removed');
       const session = this.store.getSession(request.sessionId);
       if (!session || session.projectId !== project.id) return this.fail(socket, 'Unknown session for this project');
       cwd = session.worktreePath;
@@ -125,6 +164,7 @@ export class TerminalManager {
     this.pending.set(socket, (this.pending.get(socket) ?? 0) + 1);
     this.pendingTotal++;
     this.pendingProjects.set(project.id, (this.pendingProjects.get(project.id) ?? 0) + 1);
+    if (request.sessionId) this.pendingSessions.set(request.sessionId, (this.pendingSessions.get(request.sessionId) ?? 0) + 1);
     try {
       pty = await this.spawner(this.shell, process.platform === 'win32' ? [] : ['-i'], { cwd, cols: request.cols, rows: request.rows, env });
     } catch (error) {
@@ -138,10 +178,12 @@ export class TerminalManager {
       const projectPending = (this.pendingProjects.get(project.id) ?? 1) - 1;
       if (projectPending > 0) this.pendingProjects.set(project.id, projectPending);
       else this.pendingProjects.delete(project.id);
+      if (request.sessionId) this.releaseSessionStart(request.sessionId);
     }
-    const terminal: Terminal = { id, projectId: project.id, owner: socket, pty, exited: false, backpressure: null };
-    if (socket.readyState !== socket.OPEN) {
+    const terminal: Terminal = { id, projectId: project.id, sessionId: request.sessionId, owner: socket, pty, exited: false, backpressure: null };
+    if (socket.readyState !== socket.OPEN || (request.sessionId && this.stoppingSessions.has(request.sessionId))) {
       try { pty.kill(); } catch { /* already gone */ }
+      if (socket.readyState === socket.OPEN) this.fail(socket, 'This session is being removed');
       return;
     }
     this.terminals.set(id, terminal);
