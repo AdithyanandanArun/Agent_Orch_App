@@ -227,7 +227,7 @@
 .composer__bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 10px 10px 12px; }
 .composer__meta { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
 .meta-chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 6px; background: var(--bg-hover); color: var(--fg-2); font-size: var(--text-xs); white-space: nowrap; }
-.composer__send { display: flex; align-items: center; gap: 10px; flex: none; }
+.composer__send { display: flex; align-items: center; gap: 10px; flex: none; margin-inline-start: auto; }
 .composer__hint { display: inline-flex; align-items: center; gap: 4px; font-size: var(--text-xs); color: var(--fg-3); }
 .sendbtn { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; border: 0; background: var(--accent); color: var(--fg-on-accent); transition: background var(--dur-fast), opacity var(--dur-fast), transform var(--dur-fast); }
 .sendbtn:hover:not(:disabled) { background: var(--accent-strong); }
