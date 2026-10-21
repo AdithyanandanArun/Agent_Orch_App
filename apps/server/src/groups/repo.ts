@@ -419,6 +419,9 @@ export class GroupRepo {
     const row = this.get("SELECT * FROM group_recovery_checkpoints WHERE group_id = ? AND state = 'pending' ORDER BY created_at DESC, rowid DESC LIMIT 1", groupId);
     return row ? this.mapRecoveryCheckpoint(row) : undefined;
   }
+  hasPendingRecoveryCheckpoint(groupId: string, requestId: string): boolean {
+    return Boolean(this.get("SELECT 1 FROM group_recovery_checkpoints WHERE group_id = ? AND state = 'pending' AND (request_id = ? OR request_id IS NULL) LIMIT 1", groupId, requestId));
+  }
   deliverySuccessor(groupId: string, sourceDeliveryId: string): string | undefined {
     const row = this.get(`SELECT recovery.successor_delivery_id FROM group_recovery_deliveries recovery
       JOIN group_deliveries source ON source.id = recovery.source_delivery_id WHERE source.group_id = ? AND source.id = ?`, groupId, sourceDeliveryId);
@@ -481,7 +484,7 @@ export class GroupRepo {
     this.run(`INSERT INTO group_stall_evidence(id, group_id, member_id, request_id, delivery_id, assignment_id, fingerprint, signal_class,
       consecutive_count, reason, source_run_id, source_tool_id, source_task_id, source_artifact_id, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(group_id, member_id, request_id, fingerprint) DO UPDATE SET delivery_id = excluded.delivery_id, assignment_id = excluded.assignment_id,
+      ON CONFLICT(group_id, COALESCE(member_id, ''), COALESCE(request_id, ''), fingerprint) DO UPDATE SET delivery_id = excluded.delivery_id, assignment_id = excluded.assignment_id,
       signal_class = excluded.signal_class, consecutive_count = excluded.consecutive_count, reason = excluded.reason, source_run_id = excluded.source_run_id,
       source_tool_id = excluded.source_tool_id, source_task_id = excluded.source_task_id, source_artifact_id = excluded.source_artifact_id, updated_at = excluded.updated_at`,
     id, input.groupId, input.memberId, input.requestId, input.deliveryId ?? null, input.assignmentId ?? null, input.fingerprint, input.signalClass,

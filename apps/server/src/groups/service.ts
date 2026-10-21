@@ -1143,7 +1143,18 @@ export class GroupService {
         this.recordFallbackBlocked(group.id, failure, reason);
         return false;
       }
-      if (this.closed || this.automaticFallbackFingerprint(group.id, failed.id, target.id) !== fingerprint) return false;
+      if (this.closed) return false;
+      if (this.automaticFallbackFingerprint(group.id, failed.id, target.id) !== fingerprint) {
+        const currentSource = this.repo.getMember(lead.id);
+        const currentTarget = this.repo.getMember(target.id);
+        const currentSourceSession = currentSource ? this.store.getSession(currentSource.sessionId) : undefined;
+        const currentTargetSession = currentTarget ? this.store.getSession(currentTarget.sessionId) : undefined;
+        if (currentSourceSession && currentTargetSession && currentSourceSession.policy !== currentTargetSession.policy) {
+          this.recordFallbackBlocked(group.id, failure,
+            `Automatic coordinator fallback was blocked: @${currentTarget?.handle ?? target.handle} must share @${currentSource?.handle ?? lead.handle}'s permission policy.`);
+        }
+        return false;
+      }
       let moved = false;
       try {
         this.store.tx(() => {
@@ -1240,7 +1251,18 @@ export class GroupService {
         this.recordFallbackBlocked(group.id, failure, reason);
         return false;
       }
-      if (this.closed || this.automaticFallbackFingerprint(group.id, delivery.id, target.id) !== fingerprint) return false;
+      if (this.closed) return false;
+      if (this.automaticFallbackFingerprint(group.id, delivery.id, target.id) !== fingerprint) {
+        const currentSource = this.repo.getMember(source.id);
+        const currentTarget = this.repo.getMember(target.id);
+        const currentSourceSession = currentSource ? this.store.getSession(currentSource.sessionId) : undefined;
+        const currentTargetSession = currentTarget ? this.store.getSession(currentTarget.sessionId) : undefined;
+        if (currentSourceSession && currentTargetSession && currentSourceSession.policy !== currentTargetSession.policy) {
+          this.recordFallbackBlocked(group.id, failure,
+            `Automatic reassignment for @${currentSource?.handle ?? source.handle} was blocked: @${currentTarget?.handle ?? target.handle} does not have the same permission policy.`);
+        }
+        return false;
+      }
       let moved = false;
       try {
         this.store.tx(() => {
@@ -1711,8 +1733,10 @@ export class GroupService {
       const member = delivery ? this.repo.getMember(delivery.memberId) : undefined;
       const request = delivery ? this.repo.getRequest(delivery.requestId) : undefined;
       const failure = delivery?.runId ? this.recovery?.failureForRun(delivery.runId) : null;
+      // A failed run holds its member automatically; explicit member stop cancels the delivery itself.
       if (!delivery || !group || !member || !request || delivery.status !== 'failed' || !delivery.retryable || group.paused
-        || !failure || failure.retryAt !== retryAt || group.recoveryState?.lastFailureId !== failure.id || this.repo.deliverySuccessor(group.id, delivery.id)) return;
+        || !failure || failure.runId !== delivery.runId || failure.sessionId !== member.sessionId || failure.retryAt !== retryAt
+        || this.repo.deliverySuccessor(group.id, delivery.id) || this.repo.deliverySource(group.id, delivery.id)) return;
       this.store.tx(() => {
         const successorId = deliveryId();
         this.repo.insertDelivery({ id: successorId, groupId: group.id, requestId: request.id, messageId: delivery.messageId, memberId: member.id,
@@ -1743,10 +1767,6 @@ export class GroupService {
       && /\b(test|check|lint|typecheck|build|verify|validate|compile|tsc|pytest|cargo\s+check)\b/i.test(`${tool.name} ${tool.command ?? ''}`));
     if (check) evidence.push(`successful-check:${check.id}`);
     const startedAt = run?.startedAt ?? delivery.startedAt ?? delivery.createdAt;
-    const taskTransition = this.store.listEvents({ projectId: this.repo.getGroup(delivery.groupId)?.projectId, limit: 5000 }).find((event) =>
-      event.sessionId === member.sessionId && event.type === 'group.status' && event.createdAt >= startedAt
-      && event.payload.groupId === delivery.groupId && event.payload.changed === true);
-    if (taskTransition) evidence.push(`task-transition:${taskTransition.id}`);
     const artifact = this.repo.artifactsForRequest(delivery.requestId).find((row) => row.fromMemberId === member.id && row.createdAt >= startedAt);
     if (artifact) evidence.push(`verified-artifact:${artifact.id}`);
     return evidence.slice(0, 5);
@@ -2138,7 +2158,11 @@ export class GroupService {
     const open = this.repo.requestDeliveries(id, OPEN_DELIVERY);
     const retry = this.repo.requestDeliveries(id, ['failed', 'interrupted']).some((d) => d.retryable);
     const group = this.repo.getGroup(request.groupId);
-    const status = open.length || retry ? (hold || group?.paused || retry ? 'paused' : 'active') : 'completed';
+    const unresolvedFailure = this.repo.requestDeliveries(id, ['failed', 'interrupted'])
+      .some((delivery) => !this.repo.deliverySuccessor(request.groupId, delivery.id));
+    const pendingCheckpoint = this.repo.hasPendingRecoveryCheckpoint(request.groupId, id);
+    const status = unresolvedFailure || pendingCheckpoint ? 'paused'
+      : open.length || retry ? (hold || group?.paused || retry ? 'paused' : 'active') : 'completed';
     if (status !== request.status) this.repo.updateRequest(id, { status });
   }
 
