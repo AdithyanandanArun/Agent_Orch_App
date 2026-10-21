@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { openDatabase, SCHEMA_VERSION } from './db.ts';
 import { EXAMPLE_ARTIFACT_PATH, EXAMPLE_CLIENT_SESSION_ID, EXAMPLE_CONTRACT_SESSION_ID } from './example.ts';
-import { ProviderError } from './providers/common.js';
+import { ProviderError, type DispatchAwareOptions, type DispatchState } from './providers/common.js';
 import { deferred, FakeProviders, startTestApp, waitFor, type TestApp } from './test-utils.ts';
 
 const apps: TestApp[] = [];
@@ -67,6 +67,23 @@ async function failCurrentLead(t: TestApp, mode: 'cowork' | 'current-leads' | 'o
   const delivery = await waitFor(() => t.app.groups.get(initial.group.id).deliveries.find((row) => row.status === 'failed'));
   await waitFor(() => t.app.runtime.activeCount() === 0);
   return { initial, delivery, snapshot: t.app.groups.get(initial.group.id) };
+}
+
+async function captureAndAck(t: TestApp, groupId: string, deliveryId: string): Promise<string> {
+  const paused = await t.api('POST', `/api/groups/${groupId}/recovery`, {
+    action: 'pause-for-human', deliveryId, reason: 'Review the failed delivery before recovery.',
+    idempotencyKey: `pause-for-human-${deliveryId}`,
+  });
+  expect(paused.status, JSON.stringify(paused.json)).toBe(200);
+
+  const groupCheckpointId = await waitFor(() => t.app.groups.get(groupId).group.recoveryState?.pendingCheckpointId);
+  expect(groupCheckpointId).toMatch(/^gcp_/);
+  const acknowledged = await t.api('POST', `/api/groups/${groupId}/recovery`, {
+    action: 'acknowledge-checkpoint', checkpointId: groupCheckpointId,
+    idempotencyKey: `acknowledge-${deliveryId}`,
+  });
+  expect(acknowledged.status, JSON.stringify(acknowledged.json)).toBe(200);
+  return groupCheckpointId;
 }
 
 function result(sessionId: string, provider: ContextCompactionResult['provider'], status: ContextCompactionResult['status'] = 'completed'): ContextCompactionResult {
@@ -273,17 +290,23 @@ describe('durable resilience API', () => {
     const { initial, delivery } = await failCurrentLead(t);
     const retryGate = deferred<void>();
     t.fake.script = async () => { await retryGate.promise; };
-    const body = { action: 'retry-delivery', deliveryId: delivery.id, idempotencyKey: 'retry-once' };
+    const groupId = initial.group.id;
+    const unacknowledged = await t.api('POST', `/api/groups/${groupId}/recovery`, {
+      action: 'retry-delivery', deliveryId: delivery.id, idempotencyKey: 'retry-before-ack',
+    });
+    expect(unacknowledged.status).toBe(409);
+    const checkpointId = await captureAndAck(t, groupId, delivery.id);
+    const body = { action: 'retry-delivery', deliveryId: delivery.id, checkpointId, idempotencyKey: 'retry-once' };
     try {
-      const first = await t.api('POST', `/api/groups/${initial.group.id}/recovery`, body);
+      const first = await t.api('POST', `/api/groups/${groupId}/recovery`, body);
       expect(first.status).toBe(200);
       expect(first.json).toMatchObject({ action: 'retry-delivery', status: 'applied' });
 
-      const duplicate = await t.api('POST', `/api/groups/${initial.group.id}/recovery`, body);
+      const duplicate = await t.api('POST', `/api/groups/${groupId}/recovery`, body);
       expect(duplicate.status).toBe(200);
       expect(duplicate.json).toMatchObject({ actionId: first.json.actionId, status: 'already-applied' });
 
-      const differentKey = await t.api('POST', `/api/groups/${initial.group.id}/recovery`, { ...body, idempotencyKey: 'retry-again' });
+      const differentKey = await t.api('POST', `/api/groups/${groupId}/recovery`, { ...body, idempotencyKey: 'retry-again' });
       expect([400, 409]).toContain(differentKey.status);
       const current = t.app.groups.get(initial.group.id);
       const superseded = current.deliveries.find((row) => row.id === delivery.id)!;
@@ -301,6 +324,12 @@ describe('durable resilience API', () => {
     const failedMember = initial.members.find((member) => member.id === delivery.memberId)!;
     const sessionCheckpoint = await t.api('POST', `/api/sessions/${failedMember.sessionId}/checkpoints`, { reason: 'Session context before recovery' });
     expect(sessionCheckpoint.status).toBe(201);
+    expect(t.app.groups.get(initial.group.id).group.recoveryState?.pendingCheckpointId).toBeUndefined();
+    const paused = await t.api('POST', `/api/groups/${initial.group.id}/recovery`, {
+      action: 'pause-for-human', deliveryId: delivery.id, reason: 'Capture an explicit group recovery checkpoint.',
+      idempotencyKey: 'pause-for-group-checkpoint',
+    });
+    expect(paused.status, JSON.stringify(paused.json)).toBe(200);
     const groupCheckpointId = await waitFor(() => t.app.groups.get(initial.group.id).group.recoveryState?.pendingCheckpointId);
     expect(groupCheckpointId).not.toBe(sessionCheckpoint.json.id);
     expect(groupCheckpointId).toMatch(/^gcp_/);
@@ -308,7 +337,7 @@ describe('durable resilience API', () => {
     const wrongNamespace = await t.api('POST', `/api/groups/${initial.group.id}/recovery`, {
       action: 'acknowledge-checkpoint', checkpointId: sessionCheckpoint.json.id, idempotencyKey: 'wrong-checkpoint-kind',
     });
-    expect([400, 409, 422]).toContain(wrongNamespace.status);
+    expect([400, 404, 409, 422]).toContain(wrongNamespace.status);
     expect(t.app.groups.get(initial.group.id).group.recoveryState?.acknowledgedCheckpointId).toBeUndefined();
 
     const acknowledged = await t.api('POST', `/api/groups/${initial.group.id}/recovery`, {
@@ -370,9 +399,18 @@ describe('durable resilience API', () => {
     const failedRequest = snapshot.requests.find((request) => request.id === delivery.requestId)!;
     const failedMemberId = mode === 'cowork' ? failedRequest.plannerMemberId : initial.group.orchestratorMemberId!;
     const replacement = snapshot.members.find((member) => member.id !== failedMemberId)!;
-    const response = await t.api('POST', `/api/groups/${initial.group.id}/recovery`, {
+    const groupId = initial.group.id;
+    const replace = {
       action: 'replace-coordinator', replacementMemberId: replacement.id,
-      ...(mode === 'cowork' ? { requestId: failedRequest.id } : {}), idempotencyKey: `replace-${mode}`,
+      ...(mode === 'cowork' ? { requestId: failedRequest.id } : {}),
+    };
+    const unacknowledged = await t.api('POST', `/api/groups/${groupId}/recovery`, {
+      ...replace, idempotencyKey: `replace-before-ack-${mode}`,
+    });
+    expect(unacknowledged.status).toBe(409);
+    const checkpointId = await captureAndAck(t, groupId, delivery.id);
+    const response = await t.api('POST', `/api/groups/${initial.group.id}/recovery`, {
+      ...replace, checkpointId, idempotencyKey: `replace-${mode}`,
     });
     expect(response.status).toBe(200);
     const after = t.app.groups.get(initial.group.id);
@@ -406,6 +444,8 @@ describe('durable resilience API', () => {
     t.fake.script = async (options, emit) => {
       if (options.session.id === source.sessionId) {
         writeFileSync(path.join(options.session.worktreePath, dirtyPath), 'uncommitted work stays with source');
+        const dispatched: DispatchState = 'dispatched';
+        (options as typeof options & DispatchAwareOptions).onDispatchState?.(dispatched);
         throw new ProviderError('Account quota exhausted.', { providerCode: 'usageLimitExceeded', outcomeKnown: true });
       }
       if (options.session.id === target.sessionId) {
@@ -445,7 +485,13 @@ describe('durable resilience API', () => {
     const initial = await createGroup(t, 'current-leads', codexFullAccessConfig);
     const source = initial.members.find((member) => member.sessionId === EXAMPLE_CLIENT_SESSION_ID)!;
     const target = initial.members.find((member) => member.id !== source.id)!;
-    await configureQuotaFallback(t, initial.group.id, source.id, target.id);
+    const configuration = await t.api('PATCH', `/api/groups/${initial.group.id}`, {
+      recoveryPolicy: {
+        automaticFallback: true, allowUnverifiedQuotaFallback: true,
+        leadFallbackMemberId: target.id, workerFallbacks: { [source.id]: target.id },
+      },
+    });
+    expect(configuration.status, JSON.stringify(configuration.json)).toBe(422);
     t.fake.script = async (options) => {
       if (options.session.id === source.sessionId) throw new ProviderError('Account quota exhausted.', { providerCode: 'usageLimitExceeded', outcomeKnown: true });
     };
@@ -513,8 +559,15 @@ describe('durable resilience API', () => {
       expect((await t.api('POST', `/api/groups/${groupId}/messages`, { content: 'Attempt an asynchronous artifact handoff.' })).status).toBe(202);
       await verificationStarted.promise;
       await waitFor(() => t.app.groups.get(groupId).deliveries.some((row) => row.status === 'failed') && t.app.runtime.activeCount() === 0);
+      const unacknowledged = await t.api('POST', `/api/groups/${groupId}/recovery`, {
+        action: 'replace-coordinator', replacementMemberId: replacement.id, idempotencyKey: 'takeover-before-ack',
+      });
+      expect(unacknowledged.status).toBe(409);
+      const failedDelivery = t.app.groups.get(groupId).deliveries.find((row) => row.memberId === lead.id && row.status === 'failed')!;
+      const checkpointId = await captureAndAck(t, groupId, failedDelivery.id);
       const response = await t.api('POST', `/api/groups/${groupId}/recovery`, {
-        action: 'replace-coordinator', replacementMemberId: replacement.id, idempotencyKey: 'takeover-during-artifact',
+        action: 'replace-coordinator', replacementMemberId: replacement.id, checkpointId,
+        idempotencyKey: 'takeover-during-artifact',
       });
       expect(response.status).toBe(200);
       verificationGate.resolve();
@@ -556,7 +609,10 @@ describe('durable resilience API', () => {
     const workerDelivery = await waitFor(() => t.app.groups.get(groupId).deliveries.find((row) => row.kind === 'assignment' && row.status === 'completed'));
     await waitFor(() => t.app.runtime.activeCount() === 0);
     const snapshot = t.app.groups.get(groupId);
-    expect(snapshot.group.paused).toBe(true);
+    expect(snapshot.group.paused).toBe(false);
+    expect(snapshot.group.recoveryState?.status).toBe('degraded');
+    expect(snapshot.members.find((member) => member.id === lead.id)?.held).toBe(true);
+    expect(snapshot.deliveries.some((row) => row.memberId === lead.id && row.status === 'failed')).toBe(true);
     expect(workerDelivery.status).toBe('completed');
     expect(snapshot.messages.some((message) => message.kind === 'status' && message.content.includes('Worker result retained during lead outage.'))).toBe(true);
     expect(snapshot.deliveries.some((row) => row.kind === 'result' && row.status === 'queued')).toBe(true);
