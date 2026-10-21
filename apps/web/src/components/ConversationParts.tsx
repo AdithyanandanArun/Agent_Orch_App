@@ -1,6 +1,6 @@
 import { memo, useEffect, useState, type ReactNode } from 'react';
-import { ArrowDown, ArrowUp, Check, ChevronRight, CircleHelp, Info, Pencil, Play, Plus, ShieldAlert, Terminal, Trash2, X } from 'lucide-react';
-import { Quote } from 'lucide-react';
+import { ArrowDown, ArrowUp, Check, ChevronRight, CircleHelp, Info, Pencil, Play, Plus, Quote, ShieldAlert, Terminal, Trash2, X } from 'lucide-react';
+import { SessionPlanStepsSchema } from '@mingle/contracts';
 import type { Approval, Provider, SessionPlan, UserQuestion, UserInputAnswers } from '@mingle/contracts';
 import { useMingle } from '../store/store';
 import { api, errorMessage } from '../lib/api';
@@ -153,13 +153,24 @@ export function SessionPlanCard({ plan, reviewReady, speaker }: { plan: SessionP
   const [editing, setEditing] = useState(false);
   const [explanation, setExplanation] = useState(plan.explanation);
   const [steps, setSteps] = useState(plan.steps);
+  const [editBase, setEditBase] = useState({ id: plan.id, revision: plan.revision });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const canReview = plan.status === 'review' && reviewReady;
-  const canRevise = canReview || plan.status === 'failed' || plan.status === 'interrupted';
-  useEffect(() => {
-    setEditing(false); setExplanation(plan.explanation); setSteps(plan.steps); setError(null);
-  }, [plan.id, plan.revision, plan.updatedAt]);
+  const canRevise = canReview || plan.status === 'approved' || plan.status === 'failed' || plan.status === 'interrupted';
+  const staleEditor = editing && (editBase.id !== plan.id || editBase.revision !== plan.revision);
+  const executionLocked = plan.status === 'executing';
+  const structure = SessionPlanStepsSchema.safeParse(steps);
+  const validationErrors = structure.success ? [] : [...new Set(structure.error.issues.map((issue) => {
+    const stepIndex = typeof issue.path[0] === 'number' ? issue.path[0] + 1 : null;
+    return `${stepIndex === null ? '' : `Step ${stepIndex}: `}${issue.message}`;
+  }))];
+  const loadLatest = () => {
+    setEditing(false); setExplanation(plan.explanation); setSteps(plan.steps); setEditBase({ id: plan.id, revision: plan.revision }); setError(null);
+  };
+  const startEditing = () => {
+    setExplanation(plan.explanation); setSteps(plan.steps); setEditBase({ id: plan.id, revision: plan.revision }); setError(null); setEditing(true);
+  };
   const mutate = async (action: () => Promise<unknown>, success: string) => {
     setBusy(true); setError(null);
     try {
@@ -172,7 +183,7 @@ export function SessionPlanCard({ plan, reviewReady, speaker }: { plan: SessionP
       void useMingle.getState().refreshNow();
     } finally { setBusy(false); }
   };
-  const save = () => mutate(() => api.editPlan(plan.id, { explanation: explanation.trim(), steps }), 'Plan saved. Review the revised steps before approving.');
+  const save = () => mutate(() => api.editPlan(plan.id, { expectedRevision: editBase.revision, explanation: explanation.trim(), steps }), 'Plan saved. Review the revised steps before approving.');
   const approve = () => mutate(() => api.approvePlan(plan.id, plan.revision), 'Plan approved.');
   const execute = () => mutate(() => api.executePlan(plan.id), 'Approved plan execution started.');
   return (
@@ -184,39 +195,44 @@ export function SessionPlanCard({ plan, reviewReady, speaker }: { plan: SessionP
       </header>
       {editing ? (
         <div className="plan-card__editor">
-          <label>Plan context<textarea maxLength={4000} rows={3} value={explanation} onChange={(event) => setExplanation(event.target.value)} /></label>
+          {staleEditor || executionLocked ? <div className="plan-card__stale" role="alert">
+            <span>{staleEditor ? `This plan changed to revision ${plan.revision} elsewhere. Your draft cannot overwrite it.` : 'This plan started executing elsewhere, so editing is locked.'}</span>
+            <Button size="sm" disabled={busy} onClick={loadLatest}>Load latest plan</Button>
+          </div> : null}
+          <label>Plan context<textarea disabled={busy || staleEditor || executionLocked} maxLength={4000} rows={3} value={explanation} onChange={(event) => setExplanation(event.target.value)} /></label>
+          <p className="plan-card__hint">List order does not create dependencies. Removing a step clears references to it.</p>
           {steps.map((step, index) => (
-            <fieldset key={step.id} className="plan-card__step-editor" disabled={busy}>
+            <fieldset key={step.id} className="plan-card__step-editor" disabled={busy || staleEditor || executionLocked}>
               <legend>Step {index + 1}</legend>
               <div className="plan-card__step-order">
-                <span>Execution order</span>
+                <span>List order</span>
                 <button type="button" className="link-btn" aria-label={`Move step ${index + 1} up`} title="Move up" disabled={index === 0} onClick={() => setSteps((current) => { const next = [...current]; [next[index - 1], next[index]] = [next[index]!, next[index - 1]!]; return next; })}><ArrowUp size={13} /></button>
                 <button type="button" className="link-btn" aria-label={`Move step ${index + 1} down`} title="Move down" disabled={index === steps.length - 1} onClick={() => setSteps((current) => { const next = [...current]; [next[index], next[index + 1]] = [next[index + 1]!, next[index]!]; return next; })}><ArrowDown size={13} /></button>
-                <button type="button" className="link-btn plan-card__remove-step" aria-label={`Remove step ${index + 1}`} title="Remove step" onClick={() => setSteps((current) => current.filter((item) => item.id !== step.id).map((item) => ({ ...item, dependsOn: item.dependsOn.filter((id) => id !== step.id) })))}><Trash2 size={13} /></button>
+                <button type="button" className="link-btn plan-card__remove-step" aria-label={`Remove step ${index + 1}; clear it from dependencies`} title="Remove step and clear dependent references" onClick={() => setSteps((current) => current.filter((item) => item.id !== step.id).map((item) => ({ ...item, dependsOn: item.dependsOn.filter((id) => id !== step.id) })))}><Trash2 size={13} /></button>
               </div>
               <label>Title<input maxLength={200} value={step.title} onChange={(event) => setSteps((current) => current.map((item) => item.id === step.id ? { ...item, title: event.target.value } : item))} /></label>
               <label>Description<textarea maxLength={4000} rows={3} value={step.description} onChange={(event) => setSteps((current) => current.map((item) => item.id === step.id ? { ...item, description: event.target.value } : item))} /></label>
-              <label>Acceptance criteria<textarea maxLength={4000} rows={2} value={step.acceptanceCriteria.join('\n')} onChange={(event) => setSteps((current) => current.map((item) => item.id === step.id ? { ...item, acceptanceCriteria: event.target.value.split('\n').map((value) => value.trim()).filter(Boolean).slice(0, 20) } : item))} placeholder="One criterion per line" /></label>
-              <div className="plan-card__dependency-editor" aria-label={`Dependencies for step ${index + 1}`}>
-                <span>Depends on</span>
-                {steps.filter((candidate) => candidate.id !== step.id).length ? steps.map((candidate, candidateIndex) => candidate.id === step.id ? null : (
-                  <label key={candidate.id}>
-                    <input type="checkbox" checked={step.dependsOn.includes(candidate.id)} onChange={(event) => {
-                      const checked = event.currentTarget.checked;
-                      setSteps((current) => current.map((item) => item.id === step.id
-                        ? { ...item, dependsOn: checked ? [...item.dependsOn, candidate.id] : item.dependsOn.filter((id) => id !== candidate.id) }
-                        : item));
-                    }} />
-                    <span>Step {candidateIndex + 1}: {candidate.title.trim() || 'Untitled step'}</span>
-                  </label>
-                )) : <small>Add another step to set a prerequisite.</small>}
-              </div>
+              <label>Acceptance criteria<textarea maxLength={20_000} rows={2} value={step.acceptanceCriteria.join('\n')} onChange={(event) => setSteps((current) => current.map((item) => item.id === step.id ? { ...item, acceptanceCriteria: event.target.value.split('\n').map((value) => value.trim()).filter(Boolean) } : item))} placeholder="One criterion per line" /></label>
+              <fieldset className="plan-card__dependencies" disabled={busy || staleEditor || executionLocked}>
+                <legend>Depends on</legend>
+                {steps.filter((candidate) => candidate.id !== step.id).map((candidate) => {
+                  const candidateIndex = steps.findIndex((item) => item.id === candidate.id);
+                  return <label className="plan-card__dependency" key={candidate.id}>
+                    <input type="checkbox" checked={step.dependsOn.includes(candidate.id)} onChange={(event) => setSteps((current) => current.map((item) => item.id !== step.id ? item : {
+                      ...item, dependsOn: event.target.checked ? [...item.dependsOn, candidate.id] : item.dependsOn.filter((id) => id !== candidate.id),
+                    }))} />
+                    <span>{candidateIndex + 1}. {candidate.title.trim() || 'Untitled step'}</span>
+                  </label>;
+                })}
+                {steps.length === 1 ? <small>This plan has no other steps to depend on.</small> : null}
+              </fieldset>
             </fieldset>
           ))}
-          <Button size="sm" disabled={busy} onClick={() => setSteps((current) => [...current, { id: crypto.randomUUID(), providerId: null, title: 'New step', description: '', acceptanceCriteria: [], dependsOn: [], status: 'pending' }])}><Plus size={13} /> Add step</Button>
+          <Button size="sm" disabled={busy || staleEditor || executionLocked || steps.length >= 100} onClick={() => setSteps((current) => [...current, { id: crypto.randomUUID(), providerId: null, title: 'New step', description: '', acceptanceCriteria: [], dependsOn: [], status: 'pending' }])}><Plus size={13} /> Add step</Button>
+          {validationErrors.length ? <ul className="plan-card__validation" role="alert" aria-label="Plan validation errors">{validationErrors.map((message, index) => <li key={`${index}:${message}`}>{message}</li>)}</ul> : null}
           <div className="plan-card__actions">
-            <Button variant="primary" size="sm" busy={busy} disabled={busy || steps.some((step) => !step.title.trim())} onClick={save}><Check size={13} /> Save revision</Button>
-            <Button size="sm" disabled={busy} onClick={() => { setExplanation(plan.explanation); setSteps(plan.steps); setEditing(false); setError(null); }}>Cancel</Button>
+            <Button variant="primary" size="sm" busy={busy} disabled={busy || staleEditor || executionLocked || !structure.success} onClick={save}><Check size={13} /> Save revision</Button>
+            <Button size="sm" disabled={busy} onClick={loadLatest}>Cancel</Button>
           </div>
         </div>
       ) : (
@@ -234,7 +250,7 @@ export function SessionPlanCard({ plan, reviewReady, speaker }: { plan: SessionP
           </ol>
           <div className="plan-card__actions">
             {canRevise ? <>
-              <Button size="sm" disabled={busy} onClick={() => { setExplanation(plan.explanation); setSteps(plan.steps); setEditing(true); }}><Pencil size={13} /> {canReview ? 'Edit' : 'Revise plan'}</Button>
+              <Button size="sm" disabled={busy} onClick={startEditing}><Pencil size={13} /> {canReview ? 'Edit' : 'Revise plan'}</Button>
             </> : null}
             {canReview ? <>
               <Button variant="primary" size="sm" busy={busy} disabled={busy || !plan.steps.length} onClick={approve}><Check size={13} /> Approve plan</Button>

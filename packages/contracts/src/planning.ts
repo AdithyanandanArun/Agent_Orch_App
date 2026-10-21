@@ -18,10 +18,46 @@ export const SessionPlanStepSchema = z.object({
 }).strict();
 export type SessionPlanStep = z.infer<typeof SessionPlanStepSchema>;
 
+export const SessionPlanStepsSchema = z.array(SessionPlanStepSchema).max(100).superRefine((steps, ctx) => {
+  const indexes = new Map<string, number>();
+  steps.forEach((step, index) => {
+    const previous = indexes.get(step.id);
+    if (previous !== undefined) ctx.addIssue({ code: 'custom', path: [index, 'id'], message: `Step ID duplicates step ${previous + 1}.` });
+    else indexes.set(step.id, index);
+  });
+
+  const ids = new Set(indexes.keys());
+  steps.forEach((step, index) => {
+    const seen = new Set<string>();
+    step.dependsOn.forEach((dependency, dependencyIndex) => {
+      if (seen.has(dependency)) ctx.addIssue({ code: 'custom', path: [index, 'dependsOn', dependencyIndex], message: 'A dependency may only be listed once.' });
+      seen.add(dependency);
+      if (dependency === step.id) ctx.addIssue({ code: 'custom', path: [index, 'dependsOn', dependencyIndex], message: 'A step cannot depend on itself.' });
+      else if (!ids.has(dependency)) ctx.addIssue({ code: 'custom', path: [index, 'dependsOn', dependencyIndex], message: 'A dependency must reference a step in this plan.' });
+    });
+  });
+
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (id: string): boolean => {
+    if (visiting.has(id)) return true;
+    if (visited.has(id)) return false;
+    visiting.add(id);
+    const step = steps[indexes.get(id) ?? -1];
+    for (const dependency of step?.dependsOn ?? []) {
+      if (dependency !== id && ids.has(dependency) && visit(dependency)) return true;
+    }
+    visiting.delete(id);
+    visited.add(id);
+    return false;
+  };
+  if ([...ids].some(visit)) ctx.addIssue({ code: 'custom', message: 'Step dependencies must not contain a cycle.' });
+});
+
 export const SessionPlanSchema = z.object({
   id: z.string().min(1).max(100), sessionId: z.string().min(1).max(100), runId: z.string().min(1).max(100),
   provider: ProviderSchema, providerPlanId: z.string().min(1).max(200), explanation: z.string().max(4000),
-  steps: z.array(SessionPlanStepSchema).max(100), revision: z.number().int().positive(), approvedRevision: z.number().int().positive().nullable(),
+  steps: SessionPlanStepsSchema, revision: z.number().int().positive(), approvedRevision: z.number().int().positive().nullable(),
   status: SessionPlanStatusSchema, executionRunId: z.string().max(100).nullable(), createdAt: z.string(), updatedAt: z.string(),
 }).strict();
 export type SessionPlan = z.infer<typeof SessionPlanSchema>;
@@ -29,13 +65,14 @@ export type SessionPlan = z.infer<typeof SessionPlanSchema>;
 export const SessionPlanProposalSchema = z.object({
   providerPlanId: z.string().min(1).max(200),
   explanation: z.string().max(4000),
-  steps: z.array(SessionPlanStepSchema).max(100),
+  steps: SessionPlanStepsSchema,
 }).strict();
 export type SessionPlanProposal = z.infer<typeof SessionPlanProposalSchema>;
 
 export const EditSessionPlanSchema = z.object({
+  expectedRevision: z.number().int().positive(),
   explanation: z.string().max(4000).optional(),
-  steps: z.array(SessionPlanStepSchema).max(100),
+  steps: SessionPlanStepsSchema,
 }).strict();
 export type EditSessionPlan = z.infer<typeof EditSessionPlanSchema>;
 

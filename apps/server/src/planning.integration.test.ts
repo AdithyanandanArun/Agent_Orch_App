@@ -72,11 +72,13 @@ describe('native plans and questions', () => {
     expect(planAttachmentBytes).toEqual(Buffer.from('Keep page tokens stable.'));
 
     const cycle = await t.api('PATCH', `/api/plans/${plan.id}`, {
+      expectedRevision: 1,
       steps: [step('a', 'First', ['b']), step('b', 'Second', ['a'])],
     });
-    expect(cycle.status).toBe(409);
+    expect(cycle.status).toBe(400);
 
     const revised = await t.api<SessionPlan>('PATCH', `/api/plans/${plan.id}`, {
+      expectedRevision: 1,
       explanation: 'Keep the existing client contract.',
       steps: [step('b', 'Update client handling', ['a']), step('a', 'Define cursor rules'), step('c', 'Document compatibility', ['b'])],
     });
@@ -84,7 +86,14 @@ describe('native plans and questions', () => {
     expect(revised.json).toMatchObject({ revision: 2, status: 'review', approvedRevision: null });
     expect(revised.json.steps.map((item) => item.id)).toEqual(['b', 'a', 'c']);
 
+    const staleEdit = await t.api('PATCH', `/api/plans/${plan.id}`, {
+      expectedRevision: 1,
+      steps: [step('a', 'An outdated edit')],
+    });
+    expect(staleEdit.status).toBe(409);
+
     const withoutRemovedStep = await t.api<SessionPlan>('PATCH', `/api/plans/${plan.id}`, {
+      expectedRevision: 2,
       steps: [step('a', 'Define cursor rules'), step('b', 'Update client handling', ['a'])],
     });
     expect(withoutRemovedStep.status).toBe(200);

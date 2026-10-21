@@ -1,7 +1,7 @@
-import { ContextCompactionResultSchema, NativeUserInputRequestSchema, ProviderTaskPlanSchema, SessionPlanProposalSchema, UserInputAnswersSchema } from '@mingle/contracts';
+import { ContextCompactionResultSchema, EditSessionPlanSchema, NativeUserInputRequestSchema, ProviderTaskPlanSchema, SessionPlanProposalSchema, SessionPlanStepsSchema, UserInputAnswersSchema } from '@mingle/contracts';
 import type { ProjectIntelligenceService } from './project-intelligence/service.ts';
 import { existsSync, statSync } from 'node:fs';
-import type { ProviderTaskPlan, AdapterEvent, Approval, ContextCompactionResult, Message, ProviderFailure, ProviderSkill, RunChanges, RunOptions, Session, SessionPlan, SessionPlanStep, UserInputAnswers, UserQuestion, ToolActivity, ToolCall } from '@mingle/contracts';
+import type { ProviderTaskPlan, AdapterEvent, Approval, ContextCompactionResult, EditSessionPlan, Message, ProviderFailure, ProviderSkill, RunChanges, RunOptions, Session, SessionPlan, UserInputAnswers, UserQuestion, ToolActivity, ToolCall } from '@mingle/contracts';
 import type { Hub } from './hub.ts';
 import type { Store } from './store.ts';
 import type { TaskService } from './tasks.ts';
@@ -79,21 +79,6 @@ export interface StartOptions { groupDeliveryId?: string; taskId?: string; userM
 const MAX_TOOL_CHARS = 20_000;
 const MAX_APPROVAL_INPUT_CHARS = 20_000;
 
-function hasPlanDependencyCycle(steps: readonly SessionPlanStep[]): boolean {
-  const dependencies = new Map(steps.map((step) => [step.id, step.dependsOn]));
-  const visiting = new Set<string>();
-  const visited = new Set<string>();
-  const visit = (id: string): boolean => {
-    if (visiting.has(id)) return true;
-    if (visited.has(id)) return false;
-    visiting.add(id);
-    for (const dependency of dependencies.get(id) ?? []) if (visit(dependency)) return true;
-    visiting.delete(id);
-    visited.add(id);
-    return false;
-  };
-  return [...dependencies.keys()].some(visit);
-}
 const FAILURE_SCALAR_FIELDS = new Set([
   'message', 'code', 'providerCode', 'provider_code', 'errorCode', 'error_code', 'type', 'subtype',
   'status', 'statusCode', 'status_code', 'httpStatus', 'httpStatusCode', 'retryAt', 'retry_at',
@@ -244,14 +229,14 @@ export class SessionRuntime {
     return approved;
   }
 
-  editPlan(planId: string, input: { explanation?: string; steps: SessionPlan['steps'] }): SessionPlan {
+  editPlan(planId: string, rawInput: unknown): SessionPlan {
+    const parsed = EditSessionPlanSchema.safeParse(rawInput);
+    if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Plan structure is invalid.');
+    const input: EditSessionPlan = parsed.data;
     const plan = this.store.getSessionPlan(planId);
     if (!plan) throw notFound('Plan not found');
+    if (input.expectedRevision !== plan.revision) throw conflict('This plan changed while you were editing it. Load the latest revision before saving.');
     if (plan.status === 'executing') throw conflict('An executing plan cannot be edited. Interrupt its run first.');
-    const ids = new Set(input.steps.map((step) => step.id));
-    if (ids.size !== input.steps.length) throw conflict('Plan step IDs must be unique.');
-    if (input.steps.some((step) => step.dependsOn.some((id) => id === step.id || !ids.has(id)))) throw conflict('Plan dependencies must refer to other steps in this plan.');
-    if (hasPlanDependencyCycle(input.steps)) throw conflict('Plan dependencies must not contain a cycle.');
     const sourceRun = this.store.getRun(plan.runId);
     if (!sourceRun || sourceRun.status !== 'completed') throw conflict('Wait for plan generation to finish before editing it.');
     const prior = new Map(plan.steps.map((step) => [step.id, step]));
@@ -273,7 +258,8 @@ export class SessionRuntime {
     if (!plan) throw notFound('Plan not found');
     if (plan.status !== 'approved' || plan.approvedRevision !== plan.revision) throw conflict('Approve the current plan revision before executing it.');
     if (!plan.steps.length) throw conflict('Add at least one step before executing this plan.');
-    if (hasPlanDependencyCycle(plan.steps)) throw conflict('Plan dependencies contain a cycle. Revise and approve the plan again.');
+    const steps = SessionPlanStepsSchema.safeParse(plan.steps);
+    if (!steps.success) throw conflict('This plan structure is invalid. Revise and approve it again before execution.');
     const generation = this.store.getRun(plan.runId);
     if (!generation || generation.status !== 'completed') throw conflict('Plan generation has not completed.');
     const session = this.store.getSession(plan.sessionId);
@@ -281,7 +267,7 @@ export class SessionRuntime {
     const prompt = [
       'Execute this user-approved Mingle plan. Work only on its listed steps, respect the dependencies and acceptance criteria, and report any blocked work instead of inventing approval.',
       plan.explanation ? `Plan context:\n${plan.explanation}` : '',
-      ...plan.steps.map((step, index) => `${index + 1}. ${step.title}${step.description ? `\n   ${step.description}` : ''}${step.acceptanceCriteria.length ? `\n   Acceptance criteria: ${step.acceptanceCriteria.join('; ')}` : ''}${step.dependsOn.length ? `\n   Depends on: ${step.dependsOn.map((id) => plan.steps.find((candidate) => candidate.id === id)?.title ?? id).join(', ')}` : ''}`),
+      ...steps.data.map((step, index) => `${index + 1}. ${step.title}${step.description ? `\n   ${step.description}` : ''}${step.acceptanceCriteria.length ? `\n   Acceptance criteria: ${step.acceptanceCriteria.join('; ')}` : ''}${step.dependsOn.length ? `\n   Depends on: ${step.dependsOn.map((id) => steps.data.find((candidate) => candidate.id === id)?.title ?? id).join(', ')}` : ''}`),
     ].filter(Boolean).join('\n\n');
     if (this.groups?.forSession(session.id)) {
       const dispatch = await this.groups.executePlan(session.id, plan.id, prompt);
@@ -510,8 +496,7 @@ export class SessionRuntime {
           if (run.intent !== 'plan') break;
           const { type: _type, ...raw } = event;
           const parsed = SessionPlanProposalSchema.safeParse(JSON.parse(redactSecrets(JSON.stringify(raw))));
-          const ids = new Set(parsed.success ? parsed.data.steps.map((step) => step.id) : []);
-          if (!parsed.success || ids.size !== parsed.data.steps.length || parsed.data.steps.some((step) => step.dependsOn.some((id) => id === step.id || !ids.has(id))) || hasPlanDependencyCycle(parsed.data.steps)) break;
+          if (!parsed.success) break;
           this.persistSessionPlan(run, parsed.data);
           break;
         }
