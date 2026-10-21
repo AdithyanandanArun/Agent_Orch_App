@@ -405,7 +405,9 @@ export class ClaudeMessageMapper {
       : errors.join('; ') || str(message.result);
     const label = message.subtype === 'success' ? 'Claude reported an error' : `Claude run ended with ${String(message.subtype)}`;
     const assistantHint = this.lastAssistantError ? ` (${this.lastAssistantError})` : '';
-    throw new ProviderError(truncate(`${label}${assistantHint}${detail ? `: ${detail}` : ''}`, 1_500), { code: `claude_${String(message.subtype)}` });
+    throw new ProviderError(truncate(`${label}${assistantHint}${detail ? `: ${detail}` : ''}`, 1_500), {
+      code: `claude_${String(message.subtype)}`, outcomeKnown: true, cause: message,
+    });
   }
 
   private emitUsage(message: Record<string, unknown>): void {

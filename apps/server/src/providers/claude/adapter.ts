@@ -1,7 +1,7 @@
 import path from 'node:path';
-import { ATTACHMENT_LIMITS, type AdapterEvent, type AgentAdapter, type AppSettings, type RunOptions } from '@mingle/contracts';
+import { ATTACHMENT_LIMITS, type AdapterEvent, type AgentAdapter, type AppSettings, type ContextCompactionResult, type RunOptions } from '@mingle/contracts';
 import type { Options, PermissionResult, Query, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
-import { ProviderError, TextTail, abortError, errorMessage, isAbortError, isRecord, redactSecrets } from '../common.js';
+import { ProviderError, TextTail, abortError, errorMessage, isAbortError, isRecord, markDispatched, markNotDispatched, redactSecrets, truncate } from '../common.js';
 import { bundledClaudeCandidates, resolveExecutableCached, type ResolveResult } from '../discovery.js';
 import { ClaudeMessageMapper, claudePermissionMode, describeToolUse, previewInput } from './messages.js';
 import { claudeEnvironment } from './auth.js';
@@ -44,6 +44,7 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): AgentAdapter 
   const resolveBinary = deps.resolveExecutable ?? resolveClaudeExecutable;
   return {
     async run(run: RunOptions): Promise<void> {
+      markNotDispatched(run);
       const { session, signal, onEvent, requestApproval, settings } = run;
       if (signal.aborted) throw abortError();
       const selectedSkills = run.invocation?.kind === 'skill' && run.invocation.skill ? [run.invocation.skill] : run.skills ?? [];
@@ -149,12 +150,15 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): AgentAdapter 
           for (const image of images) content.push({ type: 'image', source: { type: 'base64', media_type: imageMime(image, ATTACHMENT_LIMITS.claudeImageBytes), data: await base64Of(image) } });
           if (signal.aborted) throw abortError();
           const input = (async function* (): AsyncGenerator<SDKUserMessage> {
+            markDispatched(run);
             yield { type: 'user', message: { role: 'user', content }, parent_tool_use_id: null, ...(session.providerSessionId ? { session_id: session.providerSessionId } : {}) };
           })();
           const query = deps.queryWithContent ?? await loadSdkQuery();
           stream = query({ prompt: input, options });
         } else {
           const query = deps.query ?? deps.queryWithContent ?? await loadSdkQuery();
+          // The SDK owns the native request after query() receives text; failures from this point are not replay-safe.
+          markDispatched(run);
           stream = query({ prompt, options });
         }
         if (session.serviceTier === 'fast' && typeof (stream as Query).initializationResult === 'function') {
@@ -187,6 +191,93 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): AgentAdapter 
         throw new ProviderError(`${redactSecrets(errorMessage(error), secrets)}${detail ? ` — stderr: ${detail}` : ''}`, { code: 'claude_failed', cause: error });
       } finally {
         signal.removeEventListener('abort', onAbort);
+        try { (stream as Query | undefined)?.close?.(); } catch { /* process already closed */ }
+      }
+    },
+    async compact({ session, settings, signal }): Promise<ContextCompactionResult> {
+      const startedAt = new Date().toISOString();
+      const result = (status: ContextCompactionResult['status'], message: string, error: string | null): ContextCompactionResult => ({
+        sessionId: session.id, provider: 'claude', status, startedAt, finishedAt: new Date().toISOString(), checkpointId: null,
+        message: truncate(redactSecrets(message), 1_000), error: error ? truncate(redactSecrets(error), 1_000) : null,
+      });
+      if (!session.providerSessionId) return result('unsupported', 'Claude has no native conversation to compact yet.', null);
+      if (signal.aborted) return result('failed', 'Claude compaction was interrupted before it started.', 'interrupted');
+      if (session.effort !== 'none' && !['low', 'medium', 'high', 'xhigh', 'max'].includes(session.effort)) {
+        return result('failed', `Claude does not support reasoning effort "${session.effort}".`, 'unsupported_effort');
+      }
+      if (session.serviceTier && !['standard', 'fast'].includes(session.serviceTier)) return result('failed', 'Claude does not support this service tier.', 'unsupported_service_tier');
+      const env = deps.env ?? process.env;
+      const resolved = await resolveBinary(settings, env);
+      if (!resolved.ok) return result('failed', resolved.reason, resolved.reason);
+      const childEnv = { ...claudeEnvironment(env), ...claudeCompactEnv(autoCompactPercent(settings)) };
+      const secrets = [childEnv.ANTHROPIC_API_KEY, childEnv.CLAUDE_CODE_OAUTH_TOKEN, childEnv.ANTHROPIC_AUTH_TOKEN];
+      const controller = new AbortController();
+      let releaseInput!: (send: boolean) => void;
+      let released = false;
+      const gate = new Promise<boolean>((resolve) => { releaseInput = resolve; });
+      const sendCommand = (send: boolean): void => { if (!released) { released = true; releaseInput(send); } };
+      const onAbort = (): void => { sendCommand(false); controller.abort(); };
+      signal.addEventListener('abort', onAbort, { once: true });
+      if (signal.aborted) onAbort();
+      const mcpServers: NonNullable<Options['mcpServers']> = {};
+      const options: Options = {
+        cwd: session.worktreePath, model: session.model,
+        ...(session.effort !== 'none' ? { effort: session.effort as NonNullable<Options['effort']> } : {}),
+        // Native compaction only needs the command/control channel. Narrow permissions and disable model tools entirely.
+        permissionMode: 'default', tools: [],
+        canUseTool: async () => ({ behavior: 'deny', message: 'Compaction does not execute tools.' }),
+        includePartialMessages: true, abortController: controller, pathToClaudeCodeExecutable: resolved.executable.path,
+        systemPrompt: { type: 'preset', preset: 'claude_code', snapshot: false },
+        settingSources: ['project'], settings: { disableAllHooks: true, fastMode: session.serviceTier === 'fast' },
+        env: { ...childEnv, CLAUDE_AGENT_SDK_CLIENT_APP: 'mingle/0.1.0' },
+        stderr: () => undefined, resume: session.providerSessionId,
+        ...(Object.keys(mcpServers).length ? { mcpServers } : {}),
+      };
+      const input = async function* (): AsyncGenerator<SDKUserMessage> {
+        if (!await gate || signal.aborted) return;
+        yield { type: 'user', message: { role: 'user', content: '/compact' }, parent_tool_use_id: null, session_id: session.providerSessionId! };
+      };
+      let stream: Query | AsyncGenerator<unknown, void> | undefined;
+      let boundary = false;
+      let compactFailed: string | null = null;
+      let completed = false;
+      try {
+        const query = deps.queryWithContent ?? await loadSdkQuery();
+        stream = query({ prompt: input(), options });
+        const sdkQuery = stream as Query;
+        if (typeof sdkQuery.supportedCommands !== 'function') {
+          sendCommand(false);
+          return result('unsupported', 'This Claude SDK does not expose a native command catalog for safe compaction.', null);
+        }
+        await sdkQuery.initializationResult();
+        const commands = await sdkQuery.supportedCommands();
+        const nativeCompact = commands.some((command) => command.name === 'compact' && command.builtin === true);
+        if (!nativeCompact) {
+          sendCommand(false);
+          return result('unsupported', 'This Claude runtime does not advertise its built-in /compact command.', null);
+        }
+        if (signal.aborted) throw abortError('Claude compaction was interrupted');
+        sendCommand(true);
+        for await (const message of stream) {
+          if (signal.aborted) throw abortError('Claude compaction was interrupted');
+          if (!isRecord(message)) continue;
+          if (message.type === 'system' && message.subtype === 'init' && message.session_id !== session.providerSessionId) {
+            throw new ProviderError('Claude resumed a different conversation. Mingle stopped compaction to preserve the selected native conversation.', { code: 'resume_failed' });
+          }
+          if (message.type === 'system' && message.subtype === 'compact_boundary') boundary = true;
+          if (message.type === 'system' && message.subtype === 'status' && message.compact_result === 'failed') compactFailed = typeof message.compact_error === 'string' ? message.compact_error : 'Claude reported that native compaction failed.';
+          if (message.type === 'result') completed = message.subtype === 'success' && message.is_error !== true;
+        }
+        if (signal.aborted) throw abortError('Claude compaction was interrupted');
+        if (compactFailed) return result('failed', 'Claude could not compact the native conversation.', compactFailed);
+        if (!completed || !boundary) return result('failed', 'Claude did not confirm successful native compaction; the selected conversation remains unchanged.', 'compaction_unconfirmed');
+        return result('completed', 'Claude compacted the native conversation.', null);
+      } catch (error) {
+        const detail = truncate(redactSecrets(errorMessage(error), secrets), 1_000);
+        return result('failed', signal.aborted ? 'Claude compaction was interrupted; the native conversation remains selected.' : `Claude could not compact the native conversation: ${detail}`, detail);
+      } finally {
+        signal.removeEventListener('abort', onAbort);
+        sendCommand(false);
         try { (stream as Query | undefined)?.close?.(); } catch { /* process already closed */ }
       }
     },

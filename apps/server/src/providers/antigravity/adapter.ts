@@ -1,5 +1,5 @@
-import type { AdapterEvent, AgentAdapter, RunOptions, ToolActivity, ToolCategory } from '@mingle/contracts';
-import { ProviderError, abortError, isRecord, truncate } from '../common.js';
+import type { AdapterEvent, AgentAdapter, ContextCompactionResult, RunOptions, ToolActivity, ToolCategory } from '@mingle/contracts';
+import { ProviderError, abortError, isRecord, markDispatched, markNotDispatched, redactSecrets, truncate } from '../common.js';
 import { nativePlanSteps } from '../plans.js';
 import {
   cachedAntigravityMetadata, closeAntigravity, markAntigravityAuthenticated, rememberAntigravityMetadata,
@@ -19,6 +19,7 @@ const json = (value: unknown, max = 20_000): string => { try { return truncate(t
 
 export function createAntigravityAdapter(deps: AntigravityAdapterDeps = {}): AgentAdapter {
   return { async run(options) {
+    markNotDispatched(options);
     if (options.signal.aborted) throw abortError();
     if (options.session.serviceTier && options.session.serviceTier !== 'standard') throw new ProviderError('Antigravity ACP does not expose Mingle service tiers. Choose Standard.', { code: 'unsupported_service_tier' });
     if ((options.skills ?? []).length || options.invocation?.kind === 'skill') throw new ProviderError('Mingle-selected Antigravity skills are unavailable. Native provider skills remain provider-owned.', { code: 'unsupported_skills' });
@@ -27,6 +28,15 @@ export function createAntigravityAdapter(deps: AntigravityAdapterDeps = {}): Age
     const resolved = await resolveAntigravity(options.settings, env);
     if (!resolved.ok) throw new ProviderError(resolved.reason, { code: 'executable_unavailable' });
     await new AntigravityRun(options, env, resolved.executable.path, resolved.executable.companion, deps).execute();
+  }, async compact({ session }): Promise<ContextCompactionResult> {
+    const startedAt = new Date().toISOString();
+    const message = session.providerSessionId
+      ? 'Antigravity ACP does not expose a client-requested native compaction operation. Mingle will not treat a generic prompt or session update as compaction.'
+      : 'Antigravity has no native conversation to compact yet.';
+    return {
+      sessionId: session.id, provider: 'antigravity', status: 'unsupported', startedAt, finishedAt: new Date().toISOString(),
+      checkpointId: null, message: truncate(redactSecrets(message), 1_000), error: null,
+    };
   } };
 }
 
@@ -110,12 +120,13 @@ class AntigravityRun {
         attachments: this.options.attachments, capabilities: acpPromptCapabilities(capabilities), agent: 'Antigravity', context: this.options.context });
       if (this.signal.aborted) throw abortError();
       this.phase = 'prompt';
+      markDispatched(this.options);
       const response: unknown = await this.race(conn.request('session/prompt', { sessionId: this.sessionId, prompt }, PROMPT_TIMEOUT));
       if (this.violation) throw this.violation;
       if (this.signal.aborted) throw abortError();
       const reason = object(response).stopReason;
       if (reason === 'cancelled') throw new ProviderError('Antigravity canceled the turn without a Mingle interruption.', { code: 'turn_interrupted' });
-      if (reason === 'max_tokens' || reason === 'max_turn_requests') throw new ProviderError(`Antigravity stopped at its ${reason === 'max_tokens' ? 'token' : 'turn'} limit. Partial output was retained.`, { code: 'turn_limit' });
+      if (reason === 'max_tokens' || reason === 'max_turn_requests') throw new ProviderError(`Antigravity stopped at its ${reason === 'max_tokens' ? 'token' : 'turn'} limit. Partial output was retained.`, { code: 'turn_limit', outcomeKnown: true });
       if (reason !== 'end_turn' && reason !== 'refusal') throw new ProviderError('Antigravity returned an unrecognized completion state.', { code: 'protocol_error' });
     } catch (error) {
       if (this.violation) throw this.violation;

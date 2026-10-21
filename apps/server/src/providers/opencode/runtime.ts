@@ -51,6 +51,10 @@ export interface OpencodeRuntime {
   capabilities: Record<string, unknown>;
   stderr: TextTail;
   secrets: string[];
+  /** Ephemeral authenticated loopback listener for native OpenCode APIs used by this child only. */
+  serverPort?: number;
+  serverUsername?: string;
+  serverPassword?: string;
 }
 export interface StartOptions {
   env: Record<string, string>;
@@ -101,10 +105,13 @@ export async function startOpencode(executable: string, options: StartOptions): 
   const stderr = new TextTail();
   const spawnFn: OpencodeSpawn = options.spawn ?? ((file, args, spawnOptions) => spawn(file, args, spawnOptions) as unknown as ChildLike);
   let child: ChildLike;
+  let port: number;
+  let childEnv: Record<string, string>;
   try {
-    const port = await freeLoopbackPort();
+    port = await freeLoopbackPort();
     if (options.signal?.aborted || shuttingDown) throw abortError();
-    child = spawnFn(executable, ['acp', '--hostname', '127.0.0.1', '--port', String(port), '--no-mdns'], { cwd: options.cwd, env: options.env, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsHide: true });
+    childEnv = { ...options.env };
+    child = spawnFn(executable, ['acp', '--hostname', '127.0.0.1', '--port', String(port), '--no-mdns'], { cwd: options.cwd, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsHide: true });
   } catch (error) {
     throw new ProviderError(`OpenCode could not be started: ${safeOpencodeError(error, secrets)}`, { code: 'spawn_failed', cause: error });
   }
@@ -114,7 +121,10 @@ export async function startOpencode(executable: string, options: StartOptions): 
     request: (method, params) => options.request ? options.request(method, params) : Promise.reject(new ProviderError(`Mingle does not provide ACP client method ${method}.`)),
     closeMessage: (info: AcpCloseInfo) => `OpenCode ACP ${info.error ? `could not run (${safeOpencodeError(info.error, secrets, 200)})` : `exited with ${info.signal ?? `code ${info.exitCode}`}`}${stderr.isEmpty ? '' : `: ${stderr.summary(500, secrets)}`}`,
   });
-  const runtime: OpencodeRuntime = { child, conn, version: '', capabilities: {}, stderr, secrets };
+  const runtime: OpencodeRuntime = {
+    child, conn, version: '', capabilities: {}, stderr, secrets, serverPort: port,
+    serverUsername: childEnv.OPENCODE_SERVER_USERNAME ?? 'opencode', serverPassword: childEnv.OPENCODE_SERVER_PASSWORD,
+  };
   live.add(runtime);
   const onAbort = (): void => { void closeOpencode(runtime).catch(() => undefined); };
   options.signal?.addEventListener('abort', onAbort, { once: true });
@@ -141,6 +151,41 @@ export async function startOpencode(executable: string, options: StartOptions): 
   } finally {
     if (!options.killOnAbort) options.signal?.removeEventListener('abort', onAbort);
   }
+}
+
+/** Explicit native OpenCode conversation summarization through the authenticated loopback server. */
+export async function summarizeOpencodeSession(runtime: OpencodeRuntime, input: {
+  sessionId: string; providerID: string; modelID: string; signal: AbortSignal; timeoutMs?: number;
+}): Promise<void> {
+  if (!runtime.serverPort || !runtime.serverPassword || !SESSION_ID.test(input.sessionId)) {
+    throw new ProviderError('OpenCode native session summarization is unavailable for this runtime.', { code: 'compaction_unsupported' });
+  }
+  const signal = AbortSignal.any([input.signal, AbortSignal.timeout(input.timeoutMs ?? 10 * 60_000)]);
+  const auth = Buffer.from(`${runtime.serverUsername ?? 'opencode'}:${runtime.serverPassword}`).toString('base64');
+  let response: Response;
+  try {
+    response = await fetch(`http://127.0.0.1:${runtime.serverPort}/session/${encodeURIComponent(input.sessionId)}/summarize`, {
+      method: 'POST', signal, headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ providerID: input.providerID, modelID: input.modelID }),
+    });
+  } catch (error) {
+    if (input.signal.aborted) throw abortError('OpenCode compaction was interrupted');
+    throw new ProviderError(`OpenCode native summarization could not be reached: ${safeOpencodeError(error, [runtime.serverPassword])}`, { code: 'compaction_transport_failed', cause: error });
+  }
+  if (response.status === 404 || response.status === 405) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new ProviderError('This OpenCode runtime does not expose native session summarization.', { code: 'compaction_unsupported', statusCode: response.status });
+  }
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    const safe = safeOpencodeText(detail, [runtime.serverPassword]);
+    throw new ProviderError(`OpenCode native summarization failed (HTTP ${response.status})${safe ? `: ${truncate(safe, 500)}` : '.'}`, {
+      code: 'compaction_failed', statusCode: response.status, cause: detail,
+    });
+  }
+  let result: unknown;
+  try { result = await response.json(); } catch { result = undefined; }
+  if (result !== true) throw new ProviderError('OpenCode did not confirm native session summarization.', { code: 'compaction_unconfirmed' });
 }
 
 /** Escalating stop for the child and its process group. Resolves only once the process has actually closed. */

@@ -1,13 +1,53 @@
-export interface ProviderErrorOptions { code?: string; cause?: unknown }
+export type DispatchState = 'not-dispatched' | 'dispatched' | 'unknown';
+
+export interface ProviderErrorOptions {
+  /** Mingle's stable adapter-level error tag. */
+  code?: string;
+  /** Native provider error code/type when the transport exposes one. */
+  providerCode?: string | number;
+  /** Structured HTTP status/Retry-After data, when present on the native error. */
+  statusCode?: number;
+  retryAfterMs?: number;
+  retryAt?: string;
+  /** True only when a terminal provider result establishes the outcome. */
+  outcomeKnown?: boolean;
+  continuationSafety?: 'safe' | 'unsafe' | 'unknown';
+  cause?: unknown;
+}
 
 /** Error raised by provider adapters; `code` is a stable machine-readable tag. */
 export class ProviderError extends Error {
   readonly code: string;
+  readonly providerCode?: string;
+  readonly statusCode?: number;
+  readonly retryAfterMs?: number;
+  readonly retryAt?: string;
+  readonly outcomeKnown?: boolean;
+  readonly continuationSafety?: 'safe' | 'unsafe' | 'unknown';
   constructor(message: string, options: ProviderErrorOptions = {}) {
     super(message, options.cause === undefined ? undefined : { cause: options.cause });
     this.name = 'ProviderError';
     this.code = options.code ?? 'provider_error';
+    if (options.providerCode !== undefined) this.providerCode = String(options.providerCode).slice(0, 100);
+    if (Number.isInteger(options.statusCode)) this.statusCode = options.statusCode;
+    if (Number.isFinite(options.retryAfterMs) && options.retryAfterMs! >= 0) this.retryAfterMs = Math.min(86_400_000, Math.floor(options.retryAfterMs!));
+    if (options.retryAt) this.retryAt = options.retryAt;
+    if (options.outcomeKnown !== undefined) this.outcomeKnown = options.outcomeKnown;
+    if (options.continuationSafety) this.continuationSafety = options.continuationSafety;
   }
+}
+
+/** Internal adapter extension used by SessionRuntime to prove the provider prompt dispatch boundary. */
+export interface DispatchAwareOptions { onDispatchState?: (state: DispatchState) => void }
+
+export function markNotDispatched(options: unknown): void {
+  const callback = isRecord(options) ? options.onDispatchState : undefined;
+  if (typeof callback === 'function') callback('not-dispatched');
+}
+
+export function markDispatched(options: unknown): void {
+  const callback = isRecord(options) ? options.onDispatchState : undefined;
+  if (typeof callback === 'function') callback('dispatched');
 }
 
 /** Rejection used when a run ends because its AbortSignal fired. */

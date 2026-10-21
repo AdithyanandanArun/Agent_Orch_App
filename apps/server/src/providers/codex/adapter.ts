@@ -1,8 +1,8 @@
 import { nativePlanSteps } from '../plans.js';
 import { spawn, type SpawnOptions } from 'node:child_process';
 import path from 'node:path';
-import type { AdapterEvent, AgentAdapter, AppSettings, RunOptions } from '@mingle/contracts';
-import { ProviderError, TextTail, abortError, cleanEnv, isRecord, truncate } from '../common.js';
+import type { AdapterEvent, AgentAdapter, AppSettings, ContextCompactionResult, RunOptions } from '@mingle/contracts';
+import { ProviderError, TextTail, abortError, cleanEnv, errorMessage, isRecord, markDispatched, markNotDispatched, redactSecrets, truncate } from '../common.js';
 import { resolveExecutableCached, type ResolveResult } from '../discovery.js';
 import { shutdownChild, type ChildLike } from '../process.js';
 import {
@@ -73,12 +73,32 @@ export function createCodexAdapter(deps: CodexAdapterDeps = {}): AgentAdapter {
   const resolveBinary = deps.resolveExecutable ?? ((settings, e) => resolveExecutableCached({ name: 'codex', override: settings.codexExecutable, env: e }));
   return {
     async run(options: RunOptions): Promise<void> {
+      markNotDispatched(options);
       if (options.signal.aborted) throw abortError();
       if (options.invocation?.kind === 'command') throw new ProviderError('Codex app-server does not expose prompt-style slash commands. Choose a native skill instead.', { code: 'unsupported_command' });
       const resolved = await resolveBinary(options.settings, env);
       if (!resolved.ok) throw new ProviderError(resolved.reason, { code: 'executable_unavailable' });
       if (options.signal.aborted) throw abortError();
       await new CodexRun(options, resolved.executable.path, { env, timeouts, spawn: deps.spawn ?? defaultSpawn, version: deps.clientVersion ?? CODEX_CLIENT_INFO.version }).execute();
+    },
+    async compact({ session, settings, signal }): Promise<ContextCompactionResult> {
+      const startedAt = new Date().toISOString();
+      const result = (status: ContextCompactionResult['status'], message: string, error: string | null): ContextCompactionResult => ({
+        sessionId: session.id, provider: 'codex', status, startedAt, finishedAt: new Date().toISOString(), checkpointId: null,
+        message: truncate(redactSecrets(message), 1_000), error: error ? truncate(redactSecrets(error), 1_000) : null,
+      });
+      if (!session.providerSessionId) return result('unsupported', 'Codex has no native conversation to compact yet.', null);
+      if (signal.aborted) return result('failed', 'Codex compaction was interrupted before it started.', 'interrupted');
+      const resolved = await resolveBinary(settings, env);
+      if (!resolved.ok) return result('failed', resolved.reason, resolved.reason);
+      const options: RunOptions = { session, prompt: '', settings, signal, onEvent: () => undefined, requestApproval: async () => false };
+      try {
+        await new CodexRun(options, resolved.executable.path, { env, timeouts, spawn: deps.spawn ?? defaultSpawn, version: deps.clientVersion ?? CODEX_CLIENT_INFO.version }).execute('compact');
+        return result('completed', 'Codex compacted the native conversation.', null);
+      } catch (error) {
+        const detail = truncate(redactSecrets(errorMessage(error)), 1_000);
+        return result('failed', signal.aborted ? 'Codex compaction was interrupted; the native conversation remains selected.' : `Codex could not compact the native conversation: ${detail}`, detail);
+      }
     },
   };
 }
@@ -98,7 +118,12 @@ class CodexRun {
   private omitEffort = false;
   private compaction: CodexCompactionPlan | null = null;
   private windowChecked = false;
-  private phase: 'setup' | 'turn' | 'done' = 'setup';
+  private compactRequestSent = false;
+  private compactRequestAccepted = false;
+  private readonly compactItemsStarted = new Map<string, string | null>();
+  private readonly compactItemsCompleted = new Set<string>();
+  private readonly compactTurnIds = new Set<string>();
+  private phase: 'setup' | 'turn' | 'compact' | 'done' = 'setup';
   private abortRequested = false;
   private interruptSent = false;
   private violation: Error | null = null;
@@ -130,7 +155,7 @@ class CodexRun {
     return `Codex app-server ${how}.${detail ? ` stderr: ${detail}` : ''}`;
   }
 
-  async execute(): Promise<void> {
+  async execute(operation: 'run' | 'compact' = 'run'): Promise<void> {
     const { session, signal } = this.options;
     const env = cleanEnv(this.ctx.env, ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN', 'MINGLE_TEAM_MCP_TOKEN', 'MINGLE_BROWSER_MCP_TOKEN', 'RELAY_TEAM_MCP_TOKEN', 'RELAY_BROWSER_MCP_TOKEN']);
     if (this.options.browserMcp) env.MINGLE_BROWSER_MCP_TOKEN = this.options.browserMcp.token;
@@ -147,7 +172,7 @@ class CodexRun {
     });
     // If the process dies while we are between awaits, surface it on the turn as well.
     void this.conn.closed.then((info) => {
-      if (this.phase === 'turn') {
+      if (this.phase === 'turn' || this.phase === 'compact') {
         this.turnDone.reject(this.abortRequested ? abortError() : new ProviderError(this.describeClose(info), { code: 'process_exited' }));
       }
     });
@@ -159,7 +184,8 @@ class CodexRun {
     try {
       await this.guard(this.initialize());
       await this.guard(this.openThread());
-      await this.startTurn();
+      if (operation === 'compact') await this.startCompaction();
+      else await this.startTurn();
       await this.turnDone.promise;
       if (this.violation) throw this.violation;
     } catch (error) {
@@ -192,6 +218,7 @@ class CodexRun {
       return;
     }
     if (this.phase === 'turn') this.stopTurn();
+    else if (this.phase === 'compact') this.turnDone.reject(abortError('Compaction interrupted'));
   }
 
   /** Asks Codex to stop and starts the clock after which the process is terminated regardless. */
@@ -308,11 +335,32 @@ class CodexRun {
       threadId: this.threadId, input, cwd: session.worktreePath,
       model: session.model, ...(!this.omitEffort ? { effort: session.effort } : {}), serviceTier, serviceTierForTurn, approvalPolicy: policy.approvalPolicy, approvalsReviewer: policy.approvalsReviewer, sandboxPolicy: policy.sandboxPolicy,
     }, this.ctx.timeouts.turnStartMs);
+    markDispatched(this.options);
     request.then((result) => {
       const turn = isRecord(result) && isRecord(result.turn) ? result.turn : null;
       if (turn && typeof turn.id === 'string') this.turnId ??= turn.id;
       if (this.abortRequested || this.violation) this.interrupt();
     }, (error: unknown) => this.turnDone.reject(error instanceof Error ? error : new ProviderError(String(error))));
+  }
+
+  /** Uses Codex's app-server compaction RPC; the immediate acknowledgement is not success until the native item completes. */
+  private async startCompaction(): Promise<void> {
+    if (!this.threadId) throw new ProviderError('Codex did not resume the selected native thread.', { code: 'resume_failed' });
+    this.phase = 'compact';
+    this.compactRequestSent = true;
+    await this.conn.request('thread/compact/start', { threadId: this.threadId }, 30_000);
+    this.compactRequestAccepted = true;
+    this.confirmCompaction();
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        this.turnDone.promise,
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new ProviderError('Codex did not confirm native compaction completion.', { code: 'compaction_unconfirmed' })), 10 * 60_000);
+          timer.unref();
+        }),
+      ]);
+    } finally { if (timer) clearTimeout(timer); }
   }
 
   // ---- notifications -------------------------------------------------------------------------------------------
@@ -329,7 +377,11 @@ class CodexRun {
       if (text) this.info(`Codex warning: ${text}`);
       return;
     }
-    if (!this.isOurThread(params) || this.phase === 'setup') return;
+    if (this.phase === 'setup') return;
+    if (this.phase === 'compact') {
+      // Compact success must be tied to this exact resumed thread; legacy broadcasts without identity are not evidence.
+      if (!this.compactRequestSent || typeof params.threadId !== 'string' || params.threadId !== this.threadId) return;
+    } else if (!this.isOurThread(params)) return;
     switch (method) {
       case 'turn/plan/updated': {
         if (typeof params.turnId !== 'string' || (this.turnId && params.turnId !== this.turnId)) break;
@@ -339,7 +391,10 @@ class CodexRun {
       }
       case 'turn/started': {
         const turn = isRecord(params.turn) ? params.turn : null;
-        if (turn && typeof turn.id === 'string') this.turnId ??= turn.id;
+        if (turn && typeof turn.id === 'string') {
+          if (this.phase === 'compact') this.compactTurnIds.add(turn.id);
+          else this.turnId ??= turn.id;
+        }
         if (this.abortRequested || this.violation) this.interrupt();
         break;
       }
@@ -348,7 +403,7 @@ class CodexRun {
         break;
       case 'item/started':
       case 'item/completed':
-        if (isRecord(params.item)) this.onItem(params.item, method === 'item/started' ? 'started' : 'completed');
+        if (isRecord(params.item)) this.onItem(params.item, method === 'item/started' ? 'started' : 'completed', typeof params.turnId === 'string' ? params.turnId : null);
         break;
       case 'item/commandExecution/outputDelta': {
         const id = typeof params.itemId === 'string' ? params.itemId : null;
@@ -385,10 +440,23 @@ class CodexRun {
     this.emit({ type: 'text', text: separator + delta });
   }
 
-  private onItem(item: Record<string, unknown>, phase: 'started' | 'completed'): void {
+  private onItem(item: Record<string, unknown>, phase: 'started' | 'completed', turnId: string | null = null): void {
     const id = typeof item.id === 'string' ? item.id : null;
     if (item.type === 'contextCompaction') {
-      if (phase === 'completed') this.emit({ type: 'info', content: describeCodexCompaction(this.compaction) });
+      if (this.phase === 'compact') {
+        if (!id || !this.compactRequestSent) return;
+        if (phase === 'started') {
+          this.compactItemsStarted.set(id, turnId);
+          this.info('Codex is compacting the native conversation.');
+        } else {
+          const startedTurnId = this.compactItemsStarted.get(id);
+          if (!this.compactItemsStarted.has(id)
+            || (startedTurnId !== null && turnId !== null && startedTurnId !== turnId)
+            || (turnId !== null && this.compactTurnIds.size > 0 && !this.compactTurnIds.has(turnId))) return;
+          this.compactItemsCompleted.add(id);
+          this.confirmCompaction();
+        }
+      } else if (phase === 'completed') this.emit({ type: 'info', content: describeCodexCompaction(this.compaction) });
       return;
     }
     if (item.type === 'agentMessage') {
@@ -407,6 +475,10 @@ class CodexRun {
     }
     const activity = itemToolActivity(item, phase);
     if (activity) this.emit({ type: 'tool.activity', activity });
+  }
+
+  private confirmCompaction(): void {
+    if (this.phase === 'compact' && this.compactRequestAccepted && this.compactItemsCompleted.size > 0) this.turnDone.resolve();
   }
 
   /** Learns Codex's own effective window and tells the user if the threshold was derived from a different capacity. */
@@ -433,16 +505,17 @@ class CodexRun {
   private onTurnCompleted(params: Record<string, unknown>): void {
     const turn = isRecord(params.turn) ? params.turn : null;
     if (!turn) return;
+    if (this.phase === 'compact' && (typeof turn.id !== 'string' || !this.compactTurnIds.has(turn.id))) return;
     if (this.turnId && typeof turn.id === 'string' && turn.id !== this.turnId) return;
     switch (turn.status) {
       case 'completed':
-        this.turnDone.resolve();
+        if (this.phase !== 'compact') this.turnDone.resolve();
         break;
       case 'failed':
-        this.turnDone.reject(new ProviderError(describeTurnError(turn.error, this.lastError ?? 'Codex turn failed'), { code: 'turn_failed' }));
+        this.turnDone.reject(new ProviderError(describeTurnError(turn.error, this.lastError ?? 'Codex turn failed'), { code: 'turn_failed', outcomeKnown: true, cause: turn.error }));
         break;
       case 'interrupted':
-        this.turnDone.reject(this.violation ?? (this.abortRequested ? abortError() : new ProviderError('Codex ended the turn as interrupted without a request from Mingle.', { code: 'turn_interrupted' })));
+        this.turnDone.reject(this.violation ?? (this.abortRequested ? abortError() : new ProviderError('Codex ended the turn as interrupted without a request from Mingle.', { code: 'turn_interrupted', outcomeKnown: true })));
         break;
       default:
         break; // inProgress is not a terminal status

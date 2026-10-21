@@ -1,12 +1,12 @@
-import type { AdapterEvent, AgentAdapter, Policy, RunOptions, ToolActivity, ToolCategory } from '@mingle/contracts';
-import { ProviderError, abortError, isRecord, truncate } from '../common.js';
+import type { AdapterEvent, AgentAdapter, ContextCompactionResult, Policy, RunOptions, ToolActivity, ToolCategory } from '@mingle/contracts';
+import { ProviderError, abortError, errorMessage, isRecord, markDispatched, markNotDispatched, redactSecrets, truncate } from '../common.js';
 import { nativePlanSteps } from '../plans.js';
 import { AcpRpcError, ACP_INVALID_PARAMS, ACP_METHOD_NOT_FOUND } from './rpc.js';
 import {
   NATIVE_EFFORT, NATIVE_VARIANT_DEFAULT, OPENCODE_DEFAULT_MODEL, OPENCODE_POLICIES, choices, configuration, currentValue, nativeEfforts, object, parseNativeCommands,
 } from './metadata.js';
 import {
-  SESSION_ID, closeOpencode, environmentSecrets, opencodeEnvironment, resolveOpencode, safeOpencodeError, safeOpencodeText, startOpencode,
+  SESSION_ID, closeOpencode, environmentSecrets, opencodeEnvironment, resolveOpencode, safeOpencodeError, safeOpencodeText, startOpencode, summarizeOpencodeSession,
   type OpencodeRuntime, type OpencodeSpawn,
 } from './runtime.js';
 import { acpPrompt, acpPromptCapabilities, invocationText } from '../attachments.js';
@@ -46,6 +46,7 @@ export function permissionRules(policy: Policy, relay: { browser: boolean; team:
 
 export function createOpencodeAdapter(deps: OpencodeAdapterDeps = {}): AgentAdapter {
   return { async run(options) {
+    markNotDispatched(options);
     if (options.signal.aborted) throw abortError();
     if (options.session.serviceTier && options.session.serviceTier !== 'standard') throw new ProviderError('OpenCode does not expose Mingle service tiers. Choose Standard.', { code: 'unsupported_service_tier' });
     if ((options.skills ?? []).length || options.invocation?.kind === 'skill') throw new ProviderError('Mingle-selected skills are unavailable for OpenCode. Its native skills appear as slash commands.', { code: 'unsupported_skills' });
@@ -57,13 +58,33 @@ export function createOpencodeAdapter(deps: OpencodeAdapterDeps = {}): AgentAdap
     const resolved = await resolveOpencode(options.settings, env);
     if (!resolved.ok) throw new ProviderError(resolved.reason, { code: 'executable_unavailable' });
     await new OpencodeRun(options, env, resolved.executable.path, deps).execute();
+  }, async compact({ session, settings, signal }): Promise<ContextCompactionResult> {
+    const startedAt = new Date().toISOString();
+    const result = (status: ContextCompactionResult['status'], message: string, error: string | null): ContextCompactionResult => ({
+      sessionId: session.id, provider: 'opencode', status, startedAt, finishedAt: new Date().toISOString(), checkpointId: null,
+      message: truncate(redactSecrets(message), 1_000), error: error ? truncate(redactSecrets(error), 1_000) : null,
+    });
+    if (!session.providerSessionId) return result('unsupported', 'OpenCode has no native conversation to compact yet.', null);
+    if (signal.aborted) return result('failed', 'OpenCode compaction was interrupted before it started.', 'interrupted');
+    const env = deps.env ?? process.env;
+    const resolved = await resolveOpencode(settings, env);
+    if (!resolved.ok) return result('failed', resolved.reason, resolved.reason);
+    const options: RunOptions = { session, prompt: '', settings, signal, onEvent: () => undefined, requestApproval: async () => false };
+    try {
+      await new OpencodeRun(options, env, resolved.executable.path, deps).execute('compact');
+      return result('completed', 'OpenCode compacted the native conversation.', null);
+    } catch (error) {
+      if (error instanceof ProviderError && error.code === 'compaction_unsupported') return result('unsupported', error.message, null);
+      const detail = truncate(redactSecrets(errorMessage(error)), 1_000);
+      return result('failed', signal.aborted ? 'OpenCode compaction was interrupted; the native conversation remains selected.' : `OpenCode could not compact the native conversation: ${detail}`, detail);
+    }
   } };
 }
 
 class OpencodeRun {
   private runtime?: OpencodeRuntime;
   private sessionId: string | null = null;
-  private phase: 'setup' | 'prompt' | 'done' = 'setup';
+  private phase: 'setup' | 'prompt' | 'compact' | 'done' = 'setup';
   private selected: unknown;
   private expectedModel: string | null = null;
   /** Native variant that was explicitly applied (`default` for Native default); null when the model has no effort selector. */
@@ -104,7 +125,7 @@ class OpencodeRun {
     this.cancellation.abort();
   }
 
-  async execute(): Promise<void> {
+  async execute(operation: 'run' | 'compact' = 'run'): Promise<void> {
     const { session, browserMcp, teamMcp } = this.options;
     this.options.signal.addEventListener('abort', this.onAbort, { once: true });
     try {
@@ -152,13 +173,24 @@ class OpencodeRun {
       if (session.model === OPENCODE_DEFAULT_MODEL) this.info(`OpenCode selected its native default model: ${this.expectedModel}.`);
       const mode = currentValue(this.selected, 'mode');
       if (mode && mode !== 'build') this.info(`OpenCode is using its "${mode}" agent mode from your OpenCode configuration.`);
-       if (this.options.settings.autoCompactPercent != null) this.info('Mingle’s automatic compaction threshold is not exposed by OpenCode ACP. OpenCode’s native compaction remains in effect.');
+      if (this.options.settings.autoCompactPercent != null) this.info('Mingle’s automatic compaction threshold is not exposed by OpenCode ACP. OpenCode’s native compaction remains in effect.');
+      if (operation === 'compact') {
+        if (!this.sessionId || !this.expectedModel) throw new ProviderError('OpenCode did not confirm the selected native session/model.', { code: 'protocol_error' });
+        const slash = this.expectedModel.indexOf('/');
+        if (slash <= 0 || slash === this.expectedModel.length - 1) throw new ProviderError('OpenCode did not report a provider/model pair required for native summarization.', { code: 'compaction_unsupported' });
+        this.phase = 'compact';
+        await summarizeOpencodeSession(this.runtime, {
+          sessionId: this.sessionId, providerID: this.expectedModel.slice(0, slash), modelID: this.expectedModel.slice(slash + 1), signal: this.signal,
+        });
+        return;
+      }
       this.announceSlashCommand();
       const content = await acpPrompt({ text: this.options.invocation ? invocationText(this.options.invocation) : this.options.prompt,
         attachments: this.options.attachments, capabilities: acpPromptCapabilities(capabilities), agent: 'OpenCode', context: this.options.context });
       if (this.signal.aborted) throw abortError();
       this.phase = 'prompt';
       const prompt = conn.request('session/prompt', { sessionId: this.sessionId, prompt: content }, PROMPT_TIMEOUT);
+      markDispatched(this.options);
       prompt.catch(() => undefined);
       this.promptPromise = prompt;
       const response: unknown = await this.race(prompt);
@@ -167,7 +199,7 @@ class OpencodeRun {
       this.reportUsage(response);
       const reason = object(response).stopReason;
        if (reason === 'cancelled') throw new ProviderError('OpenCode canceled the turn without a Mingle interruption.', { code: 'turn_interrupted' });
-      if (reason === 'max_tokens' || reason === 'max_turn_requests') throw new ProviderError(`OpenCode stopped at its ${reason === 'max_tokens' ? 'token' : 'turn'} limit. Partial output was retained.`, { code: 'turn_limit' });
+       if (reason === 'max_tokens' || reason === 'max_turn_requests') throw new ProviderError(`OpenCode stopped at its ${reason === 'max_tokens' ? 'token' : 'turn'} limit. Partial output was retained.`, { code: 'turn_limit', outcomeKnown: true });
       if (reason !== 'end_turn' && reason !== 'refusal') throw new ProviderError('OpenCode returned an unrecognized completion state.', { code: 'protocol_error' });
     } catch (error) {
       if (this.violation) throw this.violation;
@@ -186,7 +218,7 @@ class OpencodeRun {
       this.phase = 'done';
       this.options.signal.removeEventListener('abort', this.onAbort);
       if (this.runtime) {
-        if (finishing === 'prompt' && this.sessionId && !this.signal.aborted) {
+        if ((finishing === 'prompt' || finishing === 'compact') && this.sessionId && !this.signal.aborted) {
           await this.runtime.conn.request('session/close', { sessionId: this.sessionId }, 3_000).catch(() => undefined);
         }
         await closeOpencode(this.runtime);

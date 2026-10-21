@@ -1,4 +1,10 @@
-import type { AgentAdapter, AppSettings, ConversationListOptions, ExternalConversationDetails, ExternalConversationList, Provider, ProviderCatalog, ProviderInfo, ProviderUsage, Session } from '@mingle/contracts';
+import type { AgentAdapter, AppSettings, ConversationListOptions, ExternalConversationDetails, ExternalConversationList, Provider, ProviderCatalog, ProviderFailure, ProviderInfo, ProviderUsage, RecoveryCheckpoint, Session } from '@mingle/contracts';
+
+/** Runtime dependency implemented by RecoveryService; setup owns its construction and wiring. */
+export interface RecoveryRuntime {
+  capture(sessionId: string, reason: string, runId?: string): Promise<RecoveryCheckpoint>;
+  recordFailure(sessionId: string, runId: string, failure: ProviderFailure): void;
+}
 
 /** The provider module surface (apps/server/src/providers/index.ts) as consumed by the runtime. */
 export interface ProviderRuntime {
