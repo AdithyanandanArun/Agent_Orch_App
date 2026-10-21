@@ -19,7 +19,7 @@ import type { WorkspaceService } from '../workspace.ts';
 import type { AttachmentService } from '../attachments/service.ts';
 import type { GroupInvocation, NativeInvocationInput, ProviderCatalog } from '@mingle/contracts';
 import {
-  GroupRepo, OPEN_DELIVERY, artifactId, assignmentId, deliveryId, groupId as newGroupId, memberId as newMemberId, requestId as newRequestId,
+  GroupRepo, OPEN_DELIVERY, artifactId, assignmentId, deliveryId, recoveryCheckpointId, groupId as newGroupId, memberId as newMemberId, requestId as newRequestId,
   type ArtifactRow, type AssignmentRow, type DeliveryRow, type GroupRecoveryCheckpointRow, type MemberRow,
 } from './repo.ts';
 import {
@@ -542,14 +542,34 @@ export class GroupService {
       };
       const plannerRequestId = 'requestId' in action && typeof action.requestId === 'string' ? action.requestId : undefined;
       this.store.tx(() => {
+        let reviewedCheckpointId: string | undefined;
+        let reviewedRequestId: string | undefined;
         switch (action.action) {
-          case 'retry-delivery': this.applyRetryAction(currentGroup, action, result.actionId); break;
-          case 'fallback-delivery': this.applyFallbackAction(currentGroup, action, result.actionId); break;
-          case 'replace-coordinator': this.applyCoordinatorReplacement(currentGroup, action.replacementMemberId, false, action.checkpointId, plannerRequestId); break;
+          case 'retry-delivery': {
+            const delivery = this.recoveryDelivery(currentGroup, action.deliveryId);
+            this.applyRetryAction(currentGroup, action, result.actionId);
+            reviewedCheckpointId = action.checkpointId;
+            reviewedRequestId = delivery.requestId;
+            break;
+          }
+          case 'fallback-delivery': {
+            const delivery = this.recoveryDelivery(currentGroup, action.deliveryId);
+            this.applyFallbackAction(currentGroup, action, result.actionId);
+            reviewedCheckpointId = action.checkpointId;
+            reviewedRequestId = delivery.requestId;
+            break;
+          }
+          case 'replace-coordinator': {
+            this.applyCoordinatorReplacement(currentGroup, action.replacementMemberId, false, action.checkpointId, plannerRequestId);
+            reviewedCheckpointId = action.checkpointId;
+            reviewedRequestId = plannerRequestId ?? (action.checkpointId ? this.repo.getRecoveryCheckpoint(currentGroup.id, action.checkpointId)?.requestId ?? undefined : undefined);
+            break;
+          }
           case 'pause-for-human': this.applyPauseForHuman(currentGroup, action.deliveryId ?? null, action.reason, captured!, action.idempotencyKey); break;
           case 'acknowledge-checkpoint': this.acknowledgeCheckpoint(currentGroup, action.checkpointId); break;
           case 'resume': this.applyRecoveryResume(currentGroup); break;
         }
+        if (reviewedCheckpointId && reviewedRequestId) this.releaseReviewedRecoveryHold(currentGroup, reviewedCheckpointId, reviewedRequestId);
         result.coordinatorEpoch = this.repo.getGroup(currentGroup.id)?.coordinatorEpoch ?? result.coordinatorEpoch;
         this.repo.insertRecoveryAction({ id: result.actionId, groupId, idempotencyKey: action.idempotencyKey, action: action.action, result });
       });
@@ -760,7 +780,7 @@ export class GroupService {
     const delivery = deliveryIdArg ? this.recoveryDelivery(group, deliveryIdArg) : undefined;
     const requestIdArg = delivery?.requestId ?? null;
     const checkpoint = this.repo.insertRecoveryCheckpoint({
-      id: newId('msg'), groupId: group.id, requestId: requestIdArg, batchId: delivery?.id ?? null, kind: 'pause-for-human',
+      id: recoveryCheckpointId(), groupId: group.id, requestId: requestIdArg, batchId: delivery?.id ?? null, kind: 'pause-for-human',
       reason: clean(reason, 1000), payload: { deliveryId: delivery?.id ?? null, providerCheckpointId: captured.id }, idempotencyKey,
     });
     this.repo.updateGroup(group.id, { paused: true, pauseReason: clean(reason, 1000), recoveryState: {
@@ -1057,11 +1077,19 @@ export class GroupService {
   private acknowledgeCheckpoint(group: ConversationGroup, checkpointId: string): void {
     const checkpoint = this.repo.getRecoveryCheckpoint(group.id, checkpointId);
     if (!checkpoint) throw notFound('Recovery checkpoint not found in this group');
-    if (checkpoint.state === 'pending') this.repo.acknowledgeRecoveryCheckpoint(group.id, checkpoint.id);
+    if (checkpoint.state !== 'pending' || !this.repo.acknowledgeRecoveryCheckpoint(group.id, checkpoint.id)) return;
     const acknowledged = this.repo.getRecoveryCheckpoint(group.id, checkpoint.id)!;
     const prior = this.repo.getGroup(group.id)?.recoveryState;
-    const deliveryIds = Array.isArray(acknowledged.payload.deliveryIds) ? acknowledged.payload.deliveryIds.filter((id): id is string => typeof id === 'string') : [];
-    const merged = [...new Set([...(prior?.acknowledgedDeliveryIds ?? []), ...deliveryIds])].slice(-100);
+    const candidateDeliveryIds = [
+      acknowledged.payload.deliveryId,
+      ...(Array.isArray(acknowledged.payload.deliveryIds) ? acknowledged.payload.deliveryIds : []),
+    ].filter((id): id is string => typeof id === 'string');
+    const deliveryIds = [...new Set(candidateDeliveryIds)].filter((id) => {
+      const delivery = this.repo.getDelivery(id);
+      return Boolean(delivery && delivery.groupId === group.id && acknowledged.requestId && delivery.requestId === acknowledged.requestId);
+    });
+    const priorDeliveryIds = (prior?.acknowledgedDeliveryIds ?? []).filter((id) => this.repo.getDelivery(id)?.groupId === group.id);
+    const merged = [...new Set([...priorDeliveryIds, ...deliveryIds])].slice(-100);
     const pending = this.repo.latestPendingRecoveryCheckpoint(group.id);
     const unresolved = this.repo.deliveries(group.id, ['failed', 'interrupted']).some((row) => !row.retryable && !this.repo.deliverySuccessor(group.id, row.id));
     const status = unresolved ? 'degraded' : pending ? 'paused' : 'healthy';
@@ -1072,6 +1100,76 @@ export class GroupService {
       acknowledgedDeliveryIds: merged, acknowledgedCheckpointId: checkpoint.id, updatedAt: nowIso(),
     } as GroupRecoveryState });
     this.event(group, 'group.checkpoint.acknowledged', 'Recovery checkpoint acknowledged', { checkpointId, kind: checkpoint.kind, deliveryIds: deliveryIds.slice(0, 20) });
+    if (acknowledged.kind === 'supervised-batch' && acknowledged.payload.mode === 'supervised') {
+      this.queueSupervisedBatchContinuation(group, acknowledged);
+    }
+  }
+
+  private releaseReviewedRecoveryHold(group: ConversationGroup, checkpointId: string, requestIdArg: string): void {
+    const checkpoint = this.repo.getRecoveryCheckpoint(group.id, checkpointId);
+    const request = this.repo.getRequest(requestIdArg);
+    const current = this.repo.getGroup(group.id);
+    if (!checkpoint || checkpoint.state !== 'acknowledged' || checkpoint.kind !== 'pause-for-human'
+      || checkpoint.requestId !== requestIdArg || !request || request.groupId !== group.id
+      || !current?.paused || current.pauseReason !== checkpoint.reason || this.repo.latestPendingRecoveryCheckpoint(group.id)) return;
+    this.repo.updateGroup(group.id, { paused: false, pauseReason: null });
+  }
+
+  private queueSupervisedBatchContinuation(group: ConversationGroup, checkpoint: GroupRecoveryCheckpointRow): boolean {
+    const requestIdArg = checkpoint.requestId;
+    const request = requestIdArg ? this.repo.getRequest(requestIdArg) : undefined;
+    if (!request || request.groupId !== group.id || request.status === 'completed') return false;
+    const planner = this.repo.getMember(request.plannerMemberId);
+    if (!planner || planner.groupId !== group.id || planner.removedAt) return false;
+    const existing = this.repo.requestDeliveries(request.id, OPEN_DELIVERY).some((delivery) => delivery.groupId === group.id && delivery.memberId === planner.id
+      && (delivery.kind === 'request' || delivery.kind === 'result'));
+    if (existing) return true;
+
+    const sourceDeliveryIds = Array.isArray(checkpoint.payload.deliveryIds)
+      ? checkpoint.payload.deliveryIds.filter((id): id is string => typeof id === 'string').slice(0, 100) : [];
+    const sourceAssignmentIds = Array.isArray(checkpoint.payload.assignmentIds)
+      ? checkpoint.payload.assignmentIds.filter((id): id is string => typeof id === 'string').slice(0, 100) : [];
+    const sourceDeliveries = new Map<string, DeliveryRow>();
+    for (const id of sourceDeliveryIds) {
+      const delivery = this.repo.getDelivery(id);
+      if (delivery?.groupId === group.id && delivery.requestId === request.id) sourceDeliveries.set(delivery.id, delivery);
+    }
+    const assignments = sourceAssignmentIds.map((id) => this.repo.getAssignment(id))
+      .filter((assignment): assignment is AssignmentRow => Boolean(assignment && assignment.groupId === group.id && assignment.requestId === request.id));
+    for (const assignment of assignments) {
+      const delivery = this.repo.getDelivery(assignment.deliveryId);
+      if (delivery?.groupId === group.id && delivery.requestId === request.id) sourceDeliveries.set(delivery.id, delivery);
+    }
+    const nextScope = Array.isArray(checkpoint.payload.nextScope)
+      ? checkpoint.payload.nextScope.filter((scope): scope is string => typeof scope === 'string').slice(0, 40).map((scope) => clean(scope, 300)) : [];
+    const hop = Math.max(0, ...[...sourceDeliveries.values()].map((delivery) => delivery.hop)) + 1;
+    const turnLimit = effectiveTurnLimit(group);
+    const committed = request.turnsUsed + this.repo.requestDeliveries(request.id, ['queued']).length;
+    if (hop > group.maxHops || (turnLimit !== null && committed >= turnLimit)) {
+      const reason = 'The supervised delegation batch was acknowledged, but its next planner turn exceeds the current request limit. Raise the applicable limit and resume; the objective and source scope are retained.';
+      this.holdBudgetRecord(group, request.id, reason);
+      return false;
+    }
+
+    const original = this.repo.getMessage(request.messageId)?.content ?? '';
+    const batchContext = assignments.slice(0, 20).map((assignment) => {
+      const task = this.store.getTask(assignment.taskId);
+      return `- ${assignment.taskId} [${task?.status ?? 'missing'}] ${clean(task?.title ?? 'Task unavailable', 160)}; source scope: ${assignment.scope.slice(0, 20).map((scope) => clean(scope, 200)).join(', ') || 'none'}`;
+    });
+    const content = truncate(`Continue request ${request.id} after the acknowledged supervised delegation batch. Rebuild the plan from the original objective and current source scope; inspect recorded task and artifact state before acting, and do not repeat assignments or side effects already recorded.\nAcknowledged checkpoint: ${checkpoint.id}\n\nOriginal objective:\n${clean(original, 4000)}\n\nNext source scope:\n${nextScope.map((scope) => `- ${scope}`).join('\n') || '- Re-evaluate from the original objective and completed batch.'}\n\nSource batch assignments:\n${batchContext.join('\n') || '- No source assignments remain available.'}`, 12_000);
+    const message = this.repo.insertMessage({ groupId: group.id, senderMemberId: null, recipients: [planner.id], kind: 'status', requestId: request.id, content });
+    const deliveryIdValue = deliveryId();
+    this.repo.insertDelivery({ id: deliveryIdValue, groupId: group.id, requestId: request.id, messageId: message.id, memberId: planner.id, kind: 'result', hop, coordinatorEpoch: group.coordinatorEpoch });
+    this.repo.updateRequest(request.id, { status: 'active' });
+    const current = this.repo.getGroup(group.id);
+    const recoveryState = current?.recoveryState;
+    this.repo.updateGroup(group.id, { recoveryState: {
+      ...(recoveryState ?? {}), status: this.repo.latestPendingRecoveryCheckpoint(group.id) ? 'paused' : 'recovering', activeRequestId: request.id, updatedAt: nowIso(),
+    } as GroupRecoveryState });
+    this.event(group, 'group.checkpoint.continuation', 'Supervised batch continuation queued for the planner', {
+      checkpointId: checkpoint.id, requestId: request.id, deliveryId: deliveryIdValue, sourceScope: nextScope.slice(0, 20),
+    });
+    return true;
   }
 
   private applyRecoveryResume(group: ConversationGroup): void {
@@ -2134,7 +2232,7 @@ export class GroupService {
     let checkpoint!: GroupRecoveryCheckpointRow;
     this.store.tx(() => {
       checkpoint = this.repo.insertRecoveryCheckpoint({
-        id: newId('msg'), groupId: group.id, requestId: requestIdArg, batchId: batchIds[0] ?? null,
+        id: recoveryCheckpointId(), groupId: group.id, requestId: requestIdArg, batchId: batchIds[0] ?? null,
         kind: 'supervised-batch', reason, idempotencyKey,
         payload: { mode, deliveryIds: batchIds.slice(0, 100), assignmentIds: latest.map((row) => row.id).slice(0, 100), nextScope: nextScope.slice(0, 40) },
       });

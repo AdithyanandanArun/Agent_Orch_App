@@ -39,6 +39,7 @@ export const memberId = () => newGroupId('mem');
 export const messageId = () => newGroupId('gms');
 export const requestId = () => newGroupId('req');
 export const deliveryId = () => newGroupId('dlv');
+export const recoveryCheckpointId = () => newGroupId('gcp');
 export const assignmentId = () => newGroupId('asg');
 export const artifactId = () => newGroupId('art');
 
