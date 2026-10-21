@@ -285,6 +285,76 @@ describe('durable resilience API', () => {
     expect(t.app.groups.get(initial.group.id).deliveries.filter((row) => row.status === 'queued' || row.status === 'running')).toHaveLength(0);
   });
 
+  it('retries a pre-dispatch temporary rate limit once and links one historical successor', async () => {
+    const t = await boot();
+    const initial = await createGroup(t, 'current-leads');
+    let attempts = 0;
+    t.fake.script = async (options, emit) => {
+      if (++attempts === 1) {
+        (options as typeof options & DispatchAwareOptions).onDispatchState?.('not-dispatched');
+        throw new ProviderError('Rate limit reached.', {
+          code: 'rate_limit', providerCode: 'rate_limit_exceeded', statusCode: 429, retryAfterMs: 100, outcomeKnown: true,
+        });
+      }
+      emit({ type: 'text', text: 'The single safe retry completed.' });
+    };
+
+    expect((await t.api('POST', `/api/groups/${initial.group.id}/messages`, { content: 'Retry only if dispatch never began.' })).status).toBe(202);
+    await waitFor(() => t.fake.runs.length === 2 && t.app.runtime.activeCount() === 0);
+
+    const snapshot = t.app.groups.get(initial.group.id);
+    const original = snapshot.deliveries.find((row) => row.status === 'failed')!;
+    const successor = snapshot.deliveries.find((row) => row.id === original.recoveredByDeliveryId);
+    expect(attempts).toBe(2);
+    expect(t.fake.runs).toHaveLength(2);
+    expect(snapshot.requests).toHaveLength(1);
+    expect(snapshot.deliveries).toHaveLength(2);
+    expect(original.recoveredByDeliveryId).toBeTruthy();
+    expect(successor).toMatchObject({ status: 'completed', memberId: original.memberId, requestId: original.requestId });
+    expect(snapshot.deliveries.filter((row) => row.status === 'queued' || row.status === 'running')).toHaveLength(0);
+    expect(snapshot.deliveries.filter((row) => row.status === 'completed')).toHaveLength(1);
+  });
+
+  it('keeps an uncertain dispatched rate limit held and visible without automatic replay', async () => {
+    const t = await boot();
+    const initial = await createGroup(t, 'current-leads');
+    const lead = initial.members.find((member) => member.sessionId === EXAMPLE_CLIENT_SESSION_ID)!;
+    t.fake.script = async (options) => {
+      (options as typeof options & DispatchAwareOptions).onDispatchState?.('unknown');
+      throw new ProviderError('Rate limit reached after dispatch became uncertain.', {
+        code: 'rate_limit', providerCode: 'rate_limit_exceeded', statusCode: 429, retryAfterMs: 100,
+      });
+    };
+
+    expect((await t.api('POST', `/api/groups/${initial.group.id}/messages`, { content: 'Do not replay an uncertain provider side effect.' })).status).toBe(202);
+    const failed = await waitFor(() => t.app.groups.get(initial.group.id).deliveries.find((row) => row.status === 'failed')
+      && t.app.runtime.activeCount() === 0
+      ? t.app.groups.get(initial.group.id).deliveries.find((row) => row.status === 'failed')
+      : undefined);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    expect(t.fake.runs).toHaveLength(1);
+    const failure = (await t.api('GET', `/api/sessions/${lead.sessionId}/recovery`)).json.failure;
+    expect(failure).toMatchObject({
+      kind: 'temporary_rate_limit', retryable: true, safeToRetry: false, outcomeUnknown: true, dispatchState: 'unknown',
+    });
+    const beforeCheckpoint = t.app.groups.get(initial.group.id);
+    expect(beforeCheckpoint.deliveries.find((row) => row.id === failed.id)?.status).toBe('failed');
+    expect(beforeCheckpoint.members.find((member) => member.id === lead.id)?.held).toBe(true);
+    expect(beforeCheckpoint.deliveries.some((row) => row.recoveredByDeliveryId)).toBe(false);
+
+    const paused = await t.api('POST', `/api/groups/${initial.group.id}/recovery`, {
+      action: 'pause-for-human', deliveryId: failed.id, reason: 'Review the uncertain provider outcome before recovery.',
+      idempotencyKey: `pause-uncertain-${failed.id}`,
+    });
+    expect(paused.status, JSON.stringify(paused.json)).toBe(200);
+    const checkpointId = await waitFor(() => t.app.groups.get(initial.group.id).group.recoveryState?.pendingCheckpointId);
+    expect(checkpointId).toMatch(/^gcp_/);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(t.fake.runs).toHaveLength(1);
+    expect(t.app.groups.get(initial.group.id).deliveries.find((row) => row.id === failed.id)?.recoveredByDeliveryId).toBeUndefined();
+  });
+
   it('deduplicates retry by action key and refuses a second successor for a new key', async () => {
     const t = await boot();
     const { initial, delivery } = await failCurrentLead(t);
@@ -347,7 +417,7 @@ describe('durable resilience API', () => {
     expect(t.app.groups.get(initial.group.id).group.recoveryState?.acknowledgedCheckpointId).toBe(groupCheckpointId);
   });
 
-  it('resumes a supervised batch after its group checkpoint is acknowledged instead of immediately pausing again', async () => {
+  it('gates a supervised follow-up batch once, then resumes its single planner continuation after acknowledgment', async () => {
     const t = await boot();
     const initial = await createGroup(t, 'current-leads');
     const groupId = initial.group.id;
@@ -355,42 +425,87 @@ describe('durable resilience API', () => {
     const worker = initial.members.find((member) => member.id !== lead.id)!;
     expect((await t.api('PATCH', `/api/groups/${groupId}`, { autonomy: { mode: 'supervised' } })).status).toBe(200);
     let leadTurns = 0;
+    let workerRuns = 0;
+    const reviewCheckpoint = deferred<string | undefined>();
+    let firstAssignmentResponse: unknown;
+    let blockedAssignmentResponse: unknown;
+    let queuedSecondAssignmentResponse: unknown;
+    let secondWorkerWasStarted = false;
+    const secondWorkerGate = deferred<void>();
     t.fake.script = async (options, emit) => {
       if (options.session.id === lead.sessionId) {
-        if (leadTurns++ > 0) {
+        const turn = leadTurns++;
+        if (turn >= 3) {
           emit({ type: 'text', text: 'Reviewed the acknowledged worker report.' });
           return;
         }
-      }
-      if (options.session.id === worker.sessionId) {
-        emit({ type: 'text', text: 'Completed the supervised component assignment.' });
+        const current = t.app.groups.get(groupId);
+        const active = current.deliveries.find((row) => row.status === 'running' && row.memberId === lead.id);
+        if (!active?.runId) throw new Error('Lead delivery was not bound to its run');
+        const context = t.app.groups.contextForRun(options.session.id, active.runId);
+        if (!context) throw new Error('Lead group context is unavailable');
+        if (turn === 1) reviewCheckpoint.resolve(current.group.recoveryState?.pendingCheckpointId);
+        const assignment = t.app.groups.assign(context, turn === 0 ? {
+          recipient: 'backup', title: 'Supervised first batch', objective: 'Implement the first component.',
+          acceptanceCriteria: 'The first component renders the requested content.', scope: ['src/supervised-component.tsx'], dependsOn: [], inputArtifacts: [],
+        } : {
+          recipient: 'backup', title: 'Supervised follow-up batch', objective: 'Implement the follow-up component.',
+          acceptanceCriteria: 'The follow-up component renders the requested content.', scope: ['src/supervised-followup.tsx'], dependsOn: [], inputArtifacts: [],
+        });
+        if (turn === 0) {
+          firstAssignmentResponse = assignment;
+        } else if (turn === 1) {
+          blockedAssignmentResponse = assignment;
+          expect(assignment).toMatchObject({ status: 'awaiting-human-ack', queued: false });
+        } else {
+          queuedSecondAssignmentResponse = assignment;
+        }
+        emit({ type: 'text', text: turn === 0 ? 'Delegated the first supervised batch.' : 'Reviewed and planned the supervised follow-up.' });
         return;
       }
-      const current = t.app.groups.get(groupId);
-      const active = current.deliveries.find((row) => row.status === 'running' && row.memberId === lead.id);
-      if (!active?.runId) throw new Error('Lead delivery was not bound to its run');
-      const context = t.app.groups.contextForRun(options.session.id, active.runId);
-      if (!context) throw new Error('Lead group context is unavailable');
-      t.app.groups.assign(context, {
-        recipient: 'backup', title: 'Supervised component batch', objective: 'Implement one component.',
-        acceptanceCriteria: 'The component renders the requested content.', scope: ['src/supervised-component.tsx'], dependsOn: [], inputArtifacts: [],
-      });
-      emit({ type: 'text', text: 'Delegated the supervised component batch.' });
+      if (options.session.id === worker.sessionId) {
+        if (++workerRuns === 2) {
+          secondWorkerWasStarted = true;
+          await secondWorkerGate.promise;
+        }
+        emit({ type: 'text', text: workerRuns === 1 ? 'Completed the first supervised component.' : 'Completed the follow-up supervised component.' });
+        return;
+      }
     };
 
-    expect((await t.api('POST', `/api/groups/${groupId}/messages`, { content: 'Implement a supervised component.' })).status).toBe(202);
-    const checkpointId = await waitFor(() => t.app.groups.get(groupId).group.recoveryState?.pendingCheckpointId);
-    expect(checkpointId).toMatch(/^gcp_/);
-    await waitFor(() => t.app.groups.get(groupId).deliveries.some((row) => row.kind === 'result' && row.status === 'queued'));
-    const acknowledged = await t.api('POST', `/api/groups/${groupId}/recovery`, {
-      action: 'acknowledge-checkpoint', checkpointId, idempotencyKey: 'supervised-batch-ack',
-    });
-    expect(acknowledged.status).toBe(200);
-    await waitFor(() => t.fake.runs.length === 3 && t.app.runtime.activeCount() === 0);
-    const recovered = t.app.groups.get(groupId);
-    expect(recovered.group.paused).toBe(false);
-    expect(recovered.group.recoveryState?.status).not.toBe('paused');
-    expect(recovered.deliveries.some((row) => row.kind === 'result' && row.status === 'completed')).toBe(true);
+    try {
+      expect((await t.api('POST', `/api/groups/${groupId}/messages`, { content: 'Implement two supervised components in separate batches.' })).status).toBe(202);
+      const first = await waitFor(() => firstAssignmentResponse, 1500, 'first supervised assignment to queue');
+      expect(first).toMatchObject({ status: 'queued' });
+      const blocked = await waitFor(() => blockedAssignmentResponse, 2000, 'first worker result to wake the lead review');
+      expect(await reviewCheckpoint.promise).toBeUndefined();
+      expect(blocked).toMatchObject({ status: 'awaiting-human-ack', queued: false });
+      await waitFor(() => t.fake.runs.length === 3 && t.app.runtime.activeCount() === 0, 1500, 'lead review to settle at the supervised checkpoint');
+      const checkpointId = await waitFor(() => t.app.groups.get(groupId).group.recoveryState?.pendingCheckpointId);
+      expect(checkpointId).toMatch(/^gcp_/);
+      const beforeAck = t.app.groups.get(groupId);
+      expect(beforeAck.deliveries.filter((row) => row.kind === 'assignment')).toHaveLength(1);
+      expect(t.fake.runs).toHaveLength(3);
+
+      const acknowledged = await t.api('POST', `/api/groups/${groupId}/recovery`, {
+        action: 'acknowledge-checkpoint', checkpointId, idempotencyKey: 'supervised-followup-batch-ack',
+      });
+      expect(acknowledged.status).toBe(200);
+      expect(t.app.groups.get(groupId).group.recoveryState?.acknowledgedCheckpointId).toBe(checkpointId);
+      const secondAssignment = await waitFor(() => queuedSecondAssignmentResponse, 2000, 'acknowledged continuation to queue the second batch');
+      expect(secondAssignment).toMatchObject({ status: 'queued' });
+      await waitFor(() => secondWorkerWasStarted, 1500, 'second supervised worker to start');
+      expect(t.fake.runs).toHaveLength(5);
+      expect(leadTurns).toBe(3);
+      const resumed = t.app.groups.get(groupId);
+      expect(resumed.group.recoveryState?.pendingCheckpointId).toBeUndefined();
+      expect(resumed.deliveries.filter((row) => row.kind === 'assignment')).toHaveLength(2);
+      expect(resumed.deliveries.filter((row) => row.kind === 'assignment' && (row.status === 'queued' || row.status === 'running'))).toHaveLength(1);
+      expect(resumed.deliveries.some((row) => row.kind === 'result' && row.status === 'completed')).toBe(true);
+    } finally {
+      secondWorkerGate.resolve();
+    }
+    await waitFor(() => t.fake.runs.length >= 5 && t.app.runtime.activeCount() === 0);
   });
 
   it.each(['current-leads', 'cowork', 'orchestrated'] as const)('replaces only the failed lead/planner in %s mode', async (mode) => {
