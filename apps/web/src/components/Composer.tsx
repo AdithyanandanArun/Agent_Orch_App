@@ -11,7 +11,10 @@ import { GitBar } from './git/GitBar';
 import { providerModelChoices } from '../lib/providers';
 import { AttachmentDrafts, AttachmentTray, useAttachmentDraft } from './AttachmentDrafts';
 import { usePresence } from '../lib/motion';
-import { appendContextReference, ContextReferenceChips, EMPTY_CONTEXT_REFS, FileContextPicker } from './MessageContextControls';
+import {
+  appendContextReference, ContextReferenceChips, EMPTY_CONTEXT_REFS, FileContextPicker,
+  findFileMentionTrigger, removeFileMentionTrigger, type FileMentionTrigger,
+} from './MessageContextControls';
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const hasSkillMarker = (text: string, name: string) => new RegExp(`(?:^|\\s)\\$${escapeRegExp(name)}(?=\\s|$)`).test(text);
@@ -42,6 +45,8 @@ export function Composer({ session }: { session: Session }) {
   const [attachments, setAttachments] = useState<AttachmentRef[]>([]);
   const [filePickerOpen, setFilePickerOpen] = useState(false);
   const [filePickerQuery, setFilePickerQuery] = useState('');
+  const fileMentionTrigger = useRef<FileMentionTrigger | null>(null);
+  const filePickerRestoreCaret = useRef<number | null>(null);
   useEffect(() => { setAttachments([]); }, [session.id]);
   const [usageOpen, setUsageOpen] = useState(false);
   const usageOpenRef = useRef(usageOpen);
@@ -59,6 +64,26 @@ export function Composer({ session }: { session: Session }) {
   const modelControl = useRef<HTMLButtonElement>(null);
   const reasoningControl = useRef<HTMLButtonElement>(null);
   const policyControl = useRef<HTMLButtonElement>(null);
+
+  const closeFilePicker = () => {
+    const position = filePickerRestoreCaret.current ?? fileMentionTrigger.current?.end ?? caret.current;
+    filePickerRestoreCaret.current = null;
+    fileMentionTrigger.current = null;
+    setFilePickerOpen(false);
+    requestAnimationFrame(() => {
+      const input = ref.current;
+      if (!input) return;
+      const caretAt = Math.min(position, input.value.length);
+      input.focus();
+      input.setSelectionRange(caretAt, caretAt);
+    });
+  };
+  const openFilePicker = (query = '') => {
+    fileMentionTrigger.current = null;
+    filePickerRestoreCaret.current = null;
+    setFilePickerQuery(query);
+    setFilePickerOpen(true);
+  };
 
   const catalogKey = `${session.id}:${session.provider}:${session.model}:${session.providerSessionId ?? ''}`;
   useEffect(() => {
@@ -399,17 +424,26 @@ export function Composer({ session }: { session: Session }) {
           role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded={Boolean(suggestion && suggestions.length)}
           aria-controls={suggestion && suggestions.length ? pickerId : undefined}
           aria-activedescendant={suggestion && suggestions.length ? `${pickerId}-option-${activeSuggestion}` : undefined}
-          placeholder={planningMode ? 'Describe what to plan…' : 'Ask anything, or describe a task…'}
+          placeholder={planningMode ? 'Describe what to plan… or type @/path to add file context' : 'Ask anything, or type @/path to add file context…'}
           onChange={(e) => {
             const nextDraft = e.target.value;
             caret.current = e.target.selectionStart ?? nextDraft.length;
-            const fileMarker = nextDraft.slice(0, caret.current).match(/(^|\s)@files?$/i);
+            const pathTrigger = findFileMentionTrigger(nextDraft, caret.current);
+            if (pathTrigger && project) {
+              fileMentionTrigger.current = pathTrigger;
+              filePickerRestoreCaret.current = null;
+              setFilePickerQuery(pathTrigger.query);
+              setFilePickerOpen(true);
+            }
+            const fileMarker = project ? nextDraft.slice(0, caret.current).match(/(^|\s)@files?$/i) : null;
             if (fileMarker) {
               const markerStart = caret.current - fileMarker[0].length + fileMarker[1].length;
               const cleaned = `${nextDraft.slice(0, markerStart)}${nextDraft.slice(caret.current)}`;
+              fileMentionTrigger.current = null;
+              filePickerRestoreCaret.current = null;
               caret.current = markerStart; setCaretPosition(markerStart);
               useMingle.getState().setDraft(session.id, cleaned);
-              setFilePickerQuery(''); setFilePickerOpen(true);
+              openFilePicker();
               return;
             }
             setCaretPosition(caret.current);
@@ -425,6 +459,10 @@ export function Composer({ session }: { session: Session }) {
           onPaste={attachmentDraft.onPaste}
           onBlur={() => { setFocused(false); setSuggestion(null); }}
           onKeyDown={(e) => {
+            if (filePickerOpen) {
+              if (e.key === 'Escape') { e.preventDefault(); closeFilePicker(); }
+              return;
+            }
             if (suggestion && suggestions.length && !e.nativeEvent.isComposing) {
               if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); setActiveSuggestion((i) => (i + (e.key === 'ArrowDown' ? 1 : -1) + suggestions.length) % suggestions.length); return; }
               if ((e.key === 'Enter' || e.key === 'Tab') && !e.shiftKey) { e.preventDefault(); chooseSuggestion(activeSuggestion); return; }
@@ -463,7 +501,7 @@ export function Composer({ session }: { session: Session }) {
               onChange={(value) => void configure({ policy: value as Session['policy'] })} placement="top" />
           </div>
           <div className="composer__send">
-            <button type="button" className="composer__context-button" onClick={() => { setFilePickerQuery(''); setFilePickerOpen(true); }} disabled={!project || disabled} aria-label="Add workspace file context" title="Add a file from this session worktree"><FilePlus2 size={15} /></button>
+            <button type="button" className="composer__context-button" onClick={() => openFilePicker()} disabled={!project || disabled} aria-label="Add workspace file context" title="Add a file from this worktree, or type @/path"><FilePlus2 size={15} /></button>
             <AttachmentDrafts scope={{ kind: 'session', id: session.id }} busy={attachmentDraft.busy} onFiles={attachmentDraft.addFiles} disabled={sending || updating || Boolean(blocker)} />
             {compactStatus?.status === 'running' ? (
               <button type="button" className="sendbtn sendbtn--stop" onClick={stopCompaction} aria-label="Request cancellation of this compaction" title="Stop waiting and send a cancellation request"><Square size={12} fill="currentColor" /></button>
@@ -486,8 +524,22 @@ export function Composer({ session }: { session: Session }) {
       {catalog?.warnings.length && (suggestion || trigger.startsWith('/') || trigger.startsWith('$')) ? <details className="composer__catalog-note"><summary>Command and skill details · {catalog.warnings.length} notice{catalog.warnings.length === 1 ? '' : 's'}</summary><ul>{catalog.warnings.map((warning, index) => <li key={`${index}:${warning}`}>{warning}</li>)}</ul><button type="button" className="link-btn" onClick={() => setCatalogRevision((value) => value + 1)}>Refresh</button></details> : null}
       <UsagePanel session={usageOpen ? session : null} onClose={closeUsage} />
       {project ? <FileContextPicker open={filePickerOpen} projectId={project.id} sessionId={session.id} initialQuery={filePickerQuery}
-        onClose={() => { setFilePickerOpen(false); requestAnimationFrame(() => ref.current?.focus()); }}
-        onSelect={(file) => appendContextReference(session.id, file)} /> : null}
+        onClose={closeFilePicker}
+        onSelect={(file) => {
+          const trigger = fileMentionTrigger.current;
+          const currentDraft = useMingle.getState().drafts[session.id] ?? '';
+          const replacement = trigger ? removeFileMentionTrigger(currentDraft, trigger) : null;
+          if (replacement) {
+            useMingle.getState().setDraft(session.id, replacement.draft);
+            caret.current = replacement.caret;
+            setCaretPosition(replacement.caret);
+            filePickerRestoreCaret.current = replacement.caret;
+          } else {
+            filePickerRestoreCaret.current = caret.current;
+          }
+          fileMentionTrigger.current = null;
+          appendContextReference(session.id, file);
+        }} /> : null}
     </div>
   );
 }

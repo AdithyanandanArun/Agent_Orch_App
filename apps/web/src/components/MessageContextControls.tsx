@@ -1,10 +1,37 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronLeft, File, FileCode2, FileSearch, Folder, Quote, Search, X } from 'lucide-react';
 import { MESSAGE_CONTEXT_LIMITS, type FileContextRef, type FileEntry, type MessageContextRef, type QuoteCitation } from '@mingle/contracts';
 import { api, errorMessage } from '../lib/api';
 import { useMingle } from '../store/store';
 
 export const EMPTY_CONTEXT_REFS: MessageContextRef[] = [];
+
+export interface FileMentionTrigger {
+  draft: string;
+  start: number;
+  end: number;
+  text: string;
+  query: string;
+}
+
+export function findFileMentionTrigger(draft: string, caret: number): FileMentionTrigger | null {
+  const beforeCaret = draft.slice(0, caret);
+  const match = beforeCaret.match(/(^|[\s([{"'“‘,;:!?])(@\/[^\s]*)$/);
+  if (!match) return null;
+  const text = match[2]!;
+  return {
+    draft,
+    start: caret - match[0].length + match[1]!.length,
+    end: caret,
+    text,
+    query: text.slice(2),
+  };
+}
+
+export function removeFileMentionTrigger(draft: string, trigger: FileMentionTrigger): { draft: string; caret: number } | null {
+  if (draft !== trigger.draft || draft.slice(trigger.start, trigger.end) !== trigger.text) return null;
+  return { draft: `${draft.slice(0, trigger.start)}${draft.slice(trigger.end)}`, caret: trigger.start };
+}
 
 export function FileContextPicker({ open, projectId, sessionId, initialQuery = '', onClose, onSelect }: {
   open: boolean; projectId: string; sessionId: string; initialQuery?: string; onClose: () => void; onSelect: (ref: FileContextRef) => void;
@@ -18,6 +45,12 @@ export function FileContextPicker({ open, projectId, sessionId, initialQuery = '
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const titleId = useId();
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    setPath('');
+    setQuery(initialQuery);
+  }, [open, initialQuery]);
 
   useEffect(() => {
     if (!open) return;
@@ -34,11 +67,11 @@ export function FileContextPicker({ open, projectId, sessionId, initialQuery = '
     return () => { window.clearTimeout(timer); controller.abort(); };
   }, [open, projectId, sessionId, path, query]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) return;
     searchRef.current?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { event.preventDefault(); onCloseRef.current(); }
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onCloseRef.current(); }
       if (event.key !== 'Tab') return;
       const dialog = document.getElementById(titleId)?.closest<HTMLElement>('[role="dialog"]');
       const focusable = dialog ? Array.from(dialog.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)')) : [];

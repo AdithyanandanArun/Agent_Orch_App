@@ -14,7 +14,10 @@ import { UsagePanel } from '../UsagePanel';
 import { AgentIdentity } from './AgentIdentity';
 import { AttachmentDrafts, AttachmentTray, useAttachmentDraft } from '../AttachmentDrafts';
 import { usePresence } from '../../lib/motion';
-import { appendContextReference, ContextReferenceChips, EMPTY_CONTEXT_REFS, FileContextPicker } from '../MessageContextControls';
+import {
+  appendContextReference, ContextReferenceChips, EMPTY_CONTEXT_REFS, FileContextPicker,
+  findFileMentionTrigger, removeFileMentionTrigger, type FileMentionTrigger,
+} from '../MessageContextControls';
 
 const COMMANDS = [
   { name: 'new', description: 'Create a new session' },
@@ -56,6 +59,10 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
   const [attachments, setAttachments] = useState<AttachmentRef[]>([]);
   const [filePickerOpen, setFilePickerOpen] = useState(false);
   useEffect(() => { setAttachments([]); setCompactStatus(null); setPlanningMode(false); }, [snapshot.group.id]);
+  const [filePickerQuery, setFilePickerQuery] = useState('');
+  const [filePickerSessionId, setFilePickerSessionId] = useState(anchor.id);
+  const fileMentionTrigger = useRef<FileMentionTrigger | null>(null);
+  const filePickerRestoreCaret = useRef<number | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -112,6 +119,31 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
   const actionCatalogKey = `${actionTargetId ?? ''}:${actionTargetSession?.provider ?? ''}:${actionTargetSession?.model ?? ''}:${actionTargetSession?.providerSessionId ?? ''}`;
   const defaults = useMemo(() => defaultRecipients(snapshot), [snapshot]);
   const recipients = direct.length ? direct : defaults;
+  const fileContextSource = (text: string) => {
+    const targetIds = new Set([...pickedActive, ...resolveMentions(text, candidates, retired).ids]);
+    const targets = members.filter((member) => targetIds.has(member.id));
+    return targets.length === 1 ? targets[0]!.sessionId : anchor.id;
+  };
+  const openFilePicker = (query = '', sourceDraft = draft, trigger: FileMentionTrigger | null = null) => {
+    fileMentionTrigger.current = trigger;
+    filePickerRestoreCaret.current = null;
+    setFilePickerQuery(query);
+    setFilePickerSessionId(fileContextSource(sourceDraft));
+    setFilePickerOpen(true);
+  };
+  const closeFilePicker = () => {
+    const position = filePickerRestoreCaret.current ?? fileMentionTrigger.current?.end ?? caret;
+    filePickerRestoreCaret.current = null;
+    fileMentionTrigger.current = null;
+    setFilePickerOpen(false);
+    requestAnimationFrame(() => {
+      const input = ref.current;
+      if (!input) return;
+      const caretAt = Math.min(position, input.value.length);
+      input.focus();
+      input.setSelectionRange(caretAt, caretAt);
+    });
+  };
   const anyBusy = members.some((member) => isBusy(sessionOf(member.sessionId)));
 
   const empty = draft.trim().length === 0 && attachments.length === 0 && attachmentDraft.uploads.length === 0;
@@ -188,7 +220,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
         seen.add(id);
         return true;
       });
-      const fileChoice: Suggestion[] = 'files'.startsWith(query) ? [{ key: 'browse-files', token: '@files', description: 'Choose files from this session worktree', group: 'Workspace context', browseFiles: true }] : [];
+      const fileChoice: Suggestion[] = 'files'.startsWith(query) ? [{ key: 'browse-files', token: '@files', description: 'Choose files from the targeted worktree', group: 'Workspace context', browseFiles: true }] : [];
       return [...fileChoice, ...choices.slice(0, 8).map((member) => {
         if ('token' in member) return member;
         const session = sessionOf(member.sessionId);
@@ -212,8 +244,8 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
     if (!item) return;
     if (item.browseFiles) {
       const text = `${draft.slice(0, triggerStart)}${draft.slice(caretIndex)}`;
-      setDraft(text); setCaret(triggerStart); setDismissed(null); setFilePickerOpen(true);
-      requestAnimationFrame(() => { ref.current?.focus(); ref.current?.setSelectionRange(triggerStart, triggerStart); });
+      setDraft(text); setCaret(triggerStart); setDismissed(null);
+      openFilePicker('', text);
       return;
     }
     setSelectedNativeAction(item.action ?? null);
@@ -432,11 +464,14 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
           id={`composer-${anchor.id}`} ref={ref} className="composer__input" rows={1} value={draft}
           role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded={open}
           aria-controls={open ? pickerId : undefined} aria-activedescendant={open ? `${pickerId}-option-${active}` : undefined}
-          placeholder="Message the group — use @handle to address one agent…"
+          placeholder="Message the group — @handle targets one agent; @/path adds file context…"
           onChange={(event) => {
             const next = event.target.value;
-            setCaret(event.target.selectionStart ?? next.length); setDraft(next);
+            const nextCaret = event.target.selectionStart ?? next.length;
+            setCaret(nextCaret); setDraft(next);
             if (compactStatus?.status !== 'running') setCompactStatus(null);
+            const pathTrigger = findFileMentionTrigger(next, nextCaret);
+            if (pathTrigger) openFilePicker(pathTrigger.query, next, pathTrigger);
             if (selectedNativeAction) {
               const escaped = selectedNativeAction.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
               const marker = selectedNativeAction.kind === 'skill' ? '\\$' : '/';
@@ -448,6 +483,10 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
           onPaste={attachmentDraft.onPaste}
           onBlur={(event) => { if (!(event.relatedTarget instanceof Element && event.relatedTarget.closest('.composer-picker-empty'))) setFocused(false); }}
           onKeyDown={(event) => {
+            if (filePickerOpen) {
+              if (event.key === 'Escape') { event.preventDefault(); closeFilePicker(); }
+              return;
+            }
             if (open && !event.nativeEvent.isComposing) {
               if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setActive((i) => (i + (event.key === 'ArrowDown' ? 1 : -1) + suggestions.length) % suggestions.length); return; }
               if ((event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey) { event.preventDefault(); choose(active); return; }
@@ -484,7 +523,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
             </button>
           </div>
           <div className="composer__send">
-            <button type="button" className="composer__context-button" onClick={() => setFilePickerOpen(true)} disabled={sending || connection !== 'online'} aria-label="Add workspace file context" title="Add a file from this session worktree"><FilePlus2 size={15} /></button>
+            <button type="button" className="composer__context-button" onClick={() => openFilePicker()} disabled={sending || connection !== 'online'} aria-label="Add workspace file context" title="Add a file from the targeted worktree, or type @/path"><FilePlus2 size={15} /></button>
             <AttachmentDrafts scope={{ kind: 'group', id: snapshot.group.id }} busy={attachmentDraft.busy} onFiles={attachmentDraft.addFiles} disabled={sending || Boolean(blocker)} />
             {compactStatus?.status === 'running' ? <button type="button" className="sendbtn sendbtn--stop" onClick={stopCompaction} aria-label="Request cancellation of this compaction" title="Stop waiting and send a cancellation request"><Square size={12} fill="currentColor" /></button> :
               <button type="button" className="sendbtn" onClick={() => void submit()} disabled={sendDisabled}
@@ -522,9 +561,22 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
       ) : null}
       {compactStatus ? <p className={cx('composer__note', compactStatus.status === 'failed' && 'is-error')} role={compactStatus.status === 'failed' ? 'alert' : 'status'} aria-live="polite" aria-busy={compactStatus.status === 'running'}>{compactStatus.status === 'running' ? `Compacting @${compactStatus.handle}…` : compactStatus.status === 'completed' ? `@${compactStatus.handle}: ${compactStatus.message}` : compactStatus.status === 'unsupported' ? `Manual compaction unavailable for @${compactStatus.handle}: ${compactStatus.message}` : compactStatus.message}</p> : null}
       <UsagePanel session={usageSession} onClose={closeUsage} />
-      <FileContextPicker open={filePickerOpen} projectId={anchor.projectId} sessionId={anchor.id}
-        onClose={() => { setFilePickerOpen(false); requestAnimationFrame(() => ref.current?.focus()); }}
-        onSelect={(file) => appendContextReference(anchor.id, file)} />
+      <FileContextPicker open={filePickerOpen} projectId={anchor.projectId} sessionId={filePickerSessionId} initialQuery={filePickerQuery}
+        onClose={closeFilePicker}
+        onSelect={(file) => {
+          const trigger = fileMentionTrigger.current;
+          const currentDraft = useMingle.getState().drafts[anchor.id] ?? '';
+          const replacement = trigger ? removeFileMentionTrigger(currentDraft, trigger) : null;
+          if (replacement) {
+            setDraft(replacement.draft);
+            setCaret(replacement.caret);
+            filePickerRestoreCaret.current = replacement.caret;
+          } else {
+            filePickerRestoreCaret.current = caret;
+          }
+          fileMentionTrigger.current = null;
+          appendContextReference(anchor.id, file);
+        }} />
     </div>
   );
 }
