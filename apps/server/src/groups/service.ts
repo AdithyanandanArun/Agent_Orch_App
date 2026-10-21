@@ -449,9 +449,6 @@ export class GroupService {
     }
     if (input.attachmentIds?.length && !this.attachments) throw conflict('Attachments are unavailable in this Mingle session.');
     const attachmentRows = this.attachments?.validate({ kind: 'group', id: groupId }, input.attachmentIds ?? []) ?? [];
-    const route = invocation
-      ? { recipients: [members.find((m) => m.id === invocation!.memberId)!], runners: [members.find((m) => m.id === invocation!.memberId)!], planner: members.find((m) => m.id === invocation!.memberId)! }
-      : this.route(group, members, requested, sendContent);
     for (const ref of input.contextRefs ?? []) {
       if (ref.kind === 'file') {
         if (!this.repo.members(group.id, true).some((candidate) => candidate.sessionId === ref.sourceSessionId)) throw unprocessable('A file reference must come from a session in this group.');
@@ -461,6 +458,21 @@ export class GroupService {
       if (ref.sourceGroupId !== group.id || !sourceMember) throw unprocessable('A quoted source must be an assistant message from this group.');
       validateQuoteCitation(ref, this.store.getMessage(ref.sourceMessageId));
     }
+    // Reject missing, binary, oversized, denied, or escaped file refs before accepting a durable queued delivery.
+    await buildMessageContext(input.contextRefs, (ref) => this.store.getSession(ref.sourceSessionId, true)?.worktreePath,
+      (_sessionId, messageId) => this.store.getMessage(messageId));
+    group = this.requireGroup(groupId);
+    members = this.repo.members(group.id, false);
+    if (invocation) {
+      const member = members.find((candidate) => candidate.id === invocation!.memberId);
+      const session = member ? this.store.getSession(member.sessionId) : undefined;
+      if (!member || !session || member.sessionId !== invocation.sessionId || session.provider !== invocation.provider || session.model !== invocation.model) {
+        throw conflict('The selected group agent or its settings changed while validating message context. Refresh and send again.');
+      }
+    }
+    const route = invocation
+      ? { recipients: [members.find((m) => m.id === invocation!.memberId)!], runners: [members.find((m) => m.id === invocation!.memberId)!], planner: members.find((m) => m.id === invocation!.memberId)! }
+      : this.route(group, members, requested, sendContent);
     if (attachmentRows.some((row) => row.kind === 'image')) {
       for (const member of route.recipients) {
         const recipient = this.store.getSession(member.sessionId);
@@ -2067,11 +2079,10 @@ export class GroupService {
     this.reserved.set(session.id, d.id);
     let runId: string;
     try {
-      const recoverySource = d.kind === 'result' ? this.repo.deliverySource(group.id, d.id) : undefined;
-      const authoritativeCoordinator = group.mode === 'cowork'
-        ? request.plannerMemberId === member.id
-        : group.orchestratorMemberId === member.id;
-      const attachmentOwnerId = recoverySource && authoritativeCoordinator ? request.messageId : d.messageId;
+      const recoverySource = this.repo.deliverySource(group.id, d.id);
+      // Recovery continuations have their own status/assignment prompt, but selected user inputs
+      // remain owned by the original request message. Resolve them there for every recovery path.
+      const attachmentOwnerId = recoverySource ? request.messageId : d.messageId;
       const contextSourceMessage = this.repo.getMessage(attachmentOwnerId);
       const context = await buildMessageContext(contextSourceMessage?.contextRefs, (ref) => this.store.getSession(ref.sourceSessionId, true)?.worktreePath, (sourceSessionId, messageId) => {
         if (contextSourceMessage?.contextRefs?.some((ref) => ref.kind === 'quote' && ref.sourceSessionId === sourceSessionId && ref.sourceMessageId === messageId)) {

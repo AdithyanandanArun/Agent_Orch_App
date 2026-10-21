@@ -353,7 +353,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
       if (!actionTargetId) { setError('Address a provider command or skill to one agent, for example @claude1 /review or @codex1 $skill-name.'); return; }
       if (!invocation || invocation.name !== actionName || (kind === '$' ? invocation.kind !== 'skill' : invocation.kind !== 'command')) { setError(nativeCatalogError ?? 'That action is unavailable or ambiguous. Refresh the menu and choose the listed action.'); return; }
     }
-    const key = `${targets.length ? 'direct' : 'default'}\u0000${content}\u0000${ids.join(',')}\u0000${attachments.map((item) => item.id).join(',')}\u0000${invocation ? `${invocation.kind}:${invocation.id}:${invocation.arguments}` : ''}`;
+    const key = `${targets.length ? 'direct' : 'default'}\u0000${content}\u0000${ids.join(',')}\u0000${attachments.map((item) => item.id).join(',')}\u0000${JSON.stringify(contextRefs)}\u0000${invocation ? `${invocation.kind}:${invocation.id}:${invocation.arguments}` : ''}`;
     const clientMessageId = pendingId.current?.key === key ? pendingId.current.id : crypto.randomUUID();
     pendingId.current = { key, id: clientMessageId };
     setSending(true);

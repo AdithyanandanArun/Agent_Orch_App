@@ -583,9 +583,11 @@ export const useMingle = create<MingleState>((set, get) => {
         };
         const streams = Object.fromEntries(Object.entries(s.streams).filter(([, stream]) => !ids.has(stream.sessionId)));
         const drafts = { ...s.drafts };
+        const contextDrafts = { ...s.contextDrafts };
         for (const id of ids) delete drafts[id];
+        for (const id of ids) delete contextDrafts[id];
         return {
-          boot, streams, drafts,
+          boot, streams, drafts, contextDrafts,
           ...(groupId && s.groupMembersOpenId === groupId ? { groupMembersOpenId: null } : {}),
           ...(groupId && s.groupActionBusyId === groupId ? { groupActionBusyId: null } : {}),
           ...resolveSelection(s, boot),
