@@ -139,6 +139,57 @@ function boundedError(error: string): string {
   return flat.length > 240 ? `${flat.slice(0, 240).trimEnd()}…` : flat;
 }
 
+function recoveredFailureIds(
+  snapshot: GroupSnapshot,
+  request: GroupRequest,
+  deliveries: readonly GroupDelivery[],
+  memberById: ReadonlyMap<string, GroupMember>,
+  runById: ReadonlyMap<string, SessionRun>,
+): Set<string> {
+  const deliveryById = new Map<string, GroupDelivery>();
+  const seenIds = new Set<string>();
+  const duplicateIds = new Set<string>();
+  for (const delivery of snapshot.deliveries) {
+    if (seenIds.has(delivery.id)) duplicateIds.add(delivery.id);
+    else {
+      seenIds.add(delivery.id);
+      if (delivery.groupId === snapshot.group.id) deliveryById.set(delivery.id, delivery);
+    }
+  }
+
+  const successorBySource = new Map<string, string>();
+  for (const source of deliveries) {
+    const successorId = source.recoveredByDeliveryId;
+    const successor = successorId ? deliveryById.get(successorId) : undefined;
+    if (source.status !== 'failed' || !successorId || duplicateIds.has(source.id) || duplicateIds.has(successorId)
+      || source.groupId !== snapshot.group.id || source.requestId !== request.id || !successor
+      || successor.id === source.id || successor.groupId !== source.groupId || successor.requestId !== source.requestId
+      || !memberById.has(source.memberId) || !memberById.has(successor.memberId)) continue;
+
+    // A completed replacement is only a known outcome when its own, correctly-owned run is present.
+    if (successor.status === 'completed') {
+      const run = successor.runId ? runById.get(successor.runId) : undefined;
+      const member = memberById.get(successor.memberId);
+      if (!run || run.status !== 'completed' || !member || run.sessionId !== member.sessionId) continue;
+    }
+    successorBySource.set(source.id, successor.id);
+  }
+
+  const recovered = new Set<string>();
+  for (const sourceId of successorBySource.keys()) {
+    const visited = new Set<string>();
+    let current = sourceId;
+    let cyclic = false;
+    while (successorBySource.has(current)) {
+      if (visited.has(current)) { cyclic = true; break; }
+      visited.add(current);
+      current = successorBySource.get(current)!;
+    }
+    if (!cyclic) recovered.add(sourceId);
+  }
+  return recovered;
+}
+
 /** Returns null when the group has no human request yet, so nothing earlier can be mistaken for a result. */
 export function buildGroupResultModel({ snapshot, sessions, messages, runs, tasks }: GroupResultInput): GroupResultModel | null {
   const { group } = snapshot;
@@ -157,6 +208,8 @@ export function buildGroupResultModel({ snapshot, sessions, messages, runs, task
   const sessionById = new Map(sessions.map((session) => [session.id, session]));
   const runById = new Map(runs.map((run) => [run.id, run]));
   const deliveries = snapshot.deliveries.filter((delivery) => delivery.requestId === request.id && delivery.groupId === group.id);
+  const recoveredDeliveries = recoveredFailureIds(snapshot, request, deliveries, memberById, runById);
+  const outcomeDeliveries = deliveries.filter((delivery) => !recoveredDeliveries.has(delivery.id));
   const assignments = snapshot.assignments.filter((assignment) => assignment.requestId === request.id && assignment.groupId === group.id);
   const assignedDeliveryIds = new Set(assignments.map((assignment) => assignment.deliveryId));
   const kindOf = (delivery: GroupDelivery): DeliveryKind =>
@@ -172,9 +225,9 @@ export function buildGroupResultModel({ snapshot, sessions, messages, runs, task
   };
   const allTasks = unique(assignments.map((assignment) => assignment.taskId)).map(taskFor);
 
-  const linkedRuns = unique(deliveries.flatMap((delivery) => (delivery.runId ? [delivery.runId] : [])))
+  const linkedRuns = unique(outcomeDeliveries.flatMap((delivery) => (delivery.runId ? [delivery.runId] : [])))
     .flatMap((id) => runById.get(id) ?? [])
-    .filter((run) => deliveries.some((delivery) => delivery.runId === run.id && memberById.get(delivery.memberId)?.sessionId === run.sessionId));
+    .filter((run) => outcomeDeliveries.some((delivery) => delivery.runId === run.id && memberById.get(delivery.memberId)?.sessionId === run.sessionId));
   const activeDeliveries = deliveries.filter(isActive);
   const runningRuns = linkedRuns.filter((run) => run.status === 'running');
   const activeTurns = Math.max(activeDeliveries.length, runningRuns.length);
@@ -310,7 +363,7 @@ export function buildGroupResultModel({ snapshot, sessions, messages, runs, task
   const unfinished = count('backlog') + count('ready') + count('running');
   const inReview = count('review');
   const missingTasks = allTasks.filter((task) => task.status === null).length;
-  const failed = deliveries.some((delivery) => delivery.status === 'failed') || anyFailedRun;
+  const failed = outcomeDeliveries.some((delivery) => delivery.status === 'failed') || anyFailedRun;
   const stopped = deliveries.some((delivery) => delivery.status === 'interrupted' || delivery.status === 'cancelled') || anyInterruptedRun;
   const paused = group.paused || request.status === 'paused';
   const pauseReason = group.pauseReason?.trim() || null;
@@ -364,6 +417,7 @@ export function buildGroupResultModel({ snapshot, sessions, messages, runs, task
   const facts = [
     agents.length || lead ? plural(unique([...agents.map((agent) => agent.memberId), ...(lead ? [lead.memberId] : [])]).length, 'agent') : null,
     allTasks.length ? plural(allTasks.length, 'task') : null,
+    recoveredDeliveries.size ? `${plural(recoveredDeliveries.size, 'earlier failed turn')} superseded by recovery` : null,
     inReview ? `${inReview} need review` : null,
     count('done') ? `${count('done')} accepted` : null,
   ].filter((fact): fact is string => Boolean(fact));
