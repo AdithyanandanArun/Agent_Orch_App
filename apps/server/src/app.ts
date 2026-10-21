@@ -84,6 +84,8 @@ export function recoverInterruptedState(store: Store, log: Logger, recovery?: Re
   const result = store.tx(() => {
     const sessionsWithActiveRuns = new Set(store.activeRunSessionIds());
     store.recoverRuns();
+    store.cancelPendingUserQuestions('The server restarted while the provider was waiting for input.');
+    store.interruptExecutingPlans();
     const approvals = store.pendingApprovals();
     const sessionsWithPendingApprovals = new Set(approvals.map((approval) => approval.sessionId));
     for (const approval of approvals) {

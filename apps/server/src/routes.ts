@@ -171,7 +171,7 @@ export function buildRouter(s: Services) {
     const body: Bootstrap = {
       groups: s.groups.snapshots(), runs, toolCalls: s.store.bootstrapToolCalls(runs.map((run) => run.id)),
       projects: s.store.listProjects(), sessions: s.store.listSessions(), messages: s.store.bootstrapMessages(300), tasks: s.store.listTasks(),
-      events: s.store.recentEvents(500), approvals: s.store.bootstrapApprovals(50), providers, settings: s.store.getSettings(), version: s.config.version,
+      events: s.store.recentEvents(500), approvals: s.store.bootstrapApprovals(50), plans: s.store.bootstrapPlans(), questions: s.store.bootstrapQuestions(), providers, settings: s.store.getSettings(), version: s.config.version,
     };
     return body;
   });

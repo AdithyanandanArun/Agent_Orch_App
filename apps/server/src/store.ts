@@ -1,5 +1,5 @@
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
-import type { TaskSource, ProjectContext, AppSettings, Approval, Message, Policy, Project, Provider, ProviderFailure, RecoveryCheckpoint, RunChanges, RunChangesSummary, Session, SessionStatus, SessionRun, ToolCall, ToolCategory, RunStatus, Task, TaskStatus, WorkspaceEvent } from '@mingle/contracts';
+import type { TaskSource, ProjectContext, AppSettings, Approval, Message, Policy, Project, Provider, ProviderFailure, RecoveryCheckpoint, RunChanges, RunChangesSummary, Session, SessionStatus, SessionRun, ToolCall, ToolCategory, RunStatus, Task, TaskStatus, WorkspaceEvent, SessionPlan, UserQuestion, UserInputAnswers } from '@mingle/contracts';
 import { SCHEMA_VERSION } from './db.ts';
 import { newId, nowIso } from './util.ts';
 import { AttachmentRepo } from './attachments/repo.ts';
@@ -238,6 +238,83 @@ export class Store {
       WHERE t.run_id IN (${runIds.map(() => '?').join(',')}) ORDER BY (r.status = 'running') DESC, t.rowid DESC LIMIT ?`, ...runIds, limit);
     // Full bounded output is loaded on demand when a tool disclosure opens.
     return rows.reverse().map((row) => { const call = JSON.parse(row.data as string) as ToolCall; return { ...call, input: call.input.slice(0, 4000), output: call.output.slice(-2000), outputTruncated: Boolean(call.outputTruncated || call.output.length > 2000) }; });
+  }
+
+  // Durable native plans and interactive questions.
+  getSessionPlan(id: string): SessionPlan | undefined {
+    const row = this.get(`SELECT p.data FROM session_plans p JOIN sessions s ON s.id = p.session_id WHERE p.id = ? AND s.id IN (${VISIBLE_SESSIONS})`, id);
+    return row ? JSON.parse(row.data as string) as SessionPlan : undefined;
+  }
+  getRunPlan(runId: string, providerPlanId: string): SessionPlan | undefined {
+    const row = this.get('SELECT data FROM session_plans WHERE run_id = ? AND provider_plan_id = ?', runId, providerPlanId);
+    return row ? JSON.parse(row.data as string) as SessionPlan : undefined;
+  }
+  saveSessionPlan(plan: SessionPlan): SessionPlan {
+    this.run(`INSERT INTO session_plans(id, session_id, run_id, provider_plan_id, status, data, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(run_id, provider_plan_id) DO UPDATE SET status = excluded.status, data = excluded.data, updated_at = excluded.updated_at`,
+      plan.id, plan.sessionId, plan.runId, plan.providerPlanId, plan.status, JSON.stringify(plan), plan.createdAt, plan.updatedAt);
+    this.touch();
+    return plan;
+  }
+  updateSessionPlan(plan: SessionPlan): SessionPlan { return this.saveSessionPlan(plan); }
+  listSessionPlans(sessionId: string, limit = 100): SessionPlan[] {
+    return this.all(`SELECT p.data FROM session_plans p JOIN sessions s ON s.id = p.session_id
+      WHERE p.session_id = ? AND s.id IN (${VISIBLE_SESSIONS}) ORDER BY p.rowid DESC LIMIT ?`, sessionId, Math.min(Math.max(limit, 1), 500))
+      .reverse().map((row) => JSON.parse(row.data as string) as SessionPlan);
+  }
+  bootstrapPlans(limit = 300): SessionPlan[] {
+    return this.all(`SELECT p.data FROM session_plans p JOIN sessions s ON s.id = p.session_id
+      WHERE s.id IN (${VISIBLE_SESSIONS}) ORDER BY (p.status IN ('review', 'approved', 'executing')) DESC, p.rowid DESC LIMIT ?`, Math.min(Math.max(limit, 1), 1000))
+      .reverse().map((row) => JSON.parse(row.data as string) as SessionPlan);
+  }
+  interruptExecutingPlans(): void {
+    const plans = this.all("SELECT data FROM session_plans WHERE status = 'executing'");
+    for (const row of plans) {
+      const plan = JSON.parse(row.data as string) as SessionPlan;
+      this.saveSessionPlan({ ...plan, status: 'interrupted', updatedAt: nowIso() });
+    }
+  }
+
+  insertUserQuestion(input: { question: UserQuestion; nativeRequestId: string }): UserQuestion {
+    const existing = this.get('SELECT data FROM user_questions WHERE run_id = ? AND native_request_id = ?', input.question.runId, input.nativeRequestId);
+    if (existing) return JSON.parse(existing.data as string) as UserQuestion;
+    this.run(`INSERT INTO user_questions(id, session_id, run_id, native_request_id, status, data, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`, input.question.id, input.question.sessionId, input.question.runId, input.nativeRequestId,
+      input.question.status, JSON.stringify(input.question), input.question.createdAt);
+    this.touch();
+    return input.question;
+  }
+  getUserQuestion(id: string): UserQuestion | undefined {
+    const row = this.get(`SELECT q.data FROM user_questions q JOIN sessions s ON s.id = q.session_id WHERE q.id = ? AND s.id IN (${VISIBLE_SESSIONS})`, id);
+    return row ? JSON.parse(row.data as string) as UserQuestion : undefined;
+  }
+  listSessionQuestions(sessionId: string, limit = 100): UserQuestion[] {
+    return this.all(`SELECT q.data FROM user_questions q JOIN sessions s ON s.id = q.session_id
+      WHERE q.session_id = ? AND s.id IN (${VISIBLE_SESSIONS}) ORDER BY q.rowid DESC LIMIT ?`, sessionId, Math.min(Math.max(limit, 1), 500))
+      .reverse().map((row) => JSON.parse(row.data as string) as UserQuestion);
+  }
+  bootstrapQuestions(limit = 300): UserQuestion[] {
+    return this.all(`SELECT q.data FROM user_questions q JOIN sessions s ON s.id = q.session_id
+      WHERE s.id IN (${VISIBLE_SESSIONS}) ORDER BY (q.status = 'pending') DESC, q.rowid DESC LIMIT ?`, Math.min(Math.max(limit, 1), 1000))
+      .reverse().map((row) => JSON.parse(row.data as string) as UserQuestion);
+  }
+  resolveUserQuestion(id: string, status: 'answered' | 'cancelled', answers?: UserInputAnswers, reason?: string): UserQuestion {
+    const question = this.getUserQuestion(id);
+    if (!question) throw new Error('Question not found');
+    const resolvedAt = nowIso();
+    const safeAnswers = answers ? Object.fromEntries(Object.entries(answers).filter(([fieldId]) => !question.questions.find((field) => field.id === fieldId)?.secret)) : undefined;
+    const updated: UserQuestion = { ...question, status, resolvedAt, ...(safeAnswers ? { answers: safeAnswers } : {}), ...(reason ? { reason } : {}) };
+    this.run("UPDATE user_questions SET status = ?, data = ?, resolved_at = ? WHERE id = ? AND status = 'pending'", status, JSON.stringify(updated), resolvedAt, id);
+    this.touch();
+    return updated;
+  }
+  cancelPendingUserQuestions(reason: string, sessionId?: string, runId?: string): UserQuestion[] {
+    const clauses = ["status = 'pending'"]; const values: SQLInputValue[] = [];
+    if (sessionId) { clauses.push('session_id = ?'); values.push(sessionId); }
+    if (runId) { clauses.push('run_id = ?'); values.push(runId); }
+    const rows = this.all(`SELECT id FROM user_questions WHERE ${clauses.join(' AND ')}`, ...values);
+    return rows.map((row) => this.resolveUserQuestion(row.id as string, 'cancelled', undefined, reason));
   }
 
   // Bounded recovery metadata. Callers persist only redacted public summaries/references.

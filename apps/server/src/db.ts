@@ -228,13 +228,29 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
       created_at TEXT NOT NULL
     );`);
   },
-  // Migration 13 archives group conversations without deleting their retained history.
-  `ALTER TABLE conversation_groups ADD COLUMN archived_at TEXT;
-   CREATE INDEX conversation_groups_visible ON conversation_groups(archived_at);`,
-  // Migration 14 is reserved for durable planning and native questions.
-  () => {},
-  `ALTER TABLE messages ADD COLUMN context_refs_json TEXT;
-   ALTER TABLE group_messages ADD COLUMN context_refs_json TEXT;`,
+   // Migration 13 archives group conversations without deleting their retained history.
+   `ALTER TABLE conversation_groups ADD COLUMN archived_at TEXT;
+    CREATE INDEX conversation_groups_visible ON conversation_groups(archived_at);`,
+   // Keep the reserved migration slot stable for databases already opened on this shared sequence.
+   () => {},
+   `ALTER TABLE messages ADD COLUMN context_refs_json TEXT;
+    ALTER TABLE group_messages ADD COLUMN context_refs_json TEXT;`,
+   // Migration 16 adds durable native plans and run-scoped user questions after shared migration 15.
+   `CREATE TABLE session_plans (
+       id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), run_id TEXT NOT NULL REFERENCES session_runs(id),
+       provider_plan_id TEXT NOT NULL, status TEXT NOT NULL CHECK (status IN ('review', 'approved', 'executing', 'completed', 'interrupted', 'failed')),
+      data TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+     UNIQUE(run_id, provider_plan_id)
+   );
+   CREATE INDEX session_plans_session ON session_plans(session_id, created_at DESC);
+   CREATE TABLE user_questions (
+      id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), run_id TEXT NOT NULL REFERENCES session_runs(id),
+      native_request_id TEXT NOT NULL, status TEXT NOT NULL CHECK (status IN ('pending', 'answered', 'cancelled')),
+      data TEXT NOT NULL, created_at TEXT NOT NULL, resolved_at TEXT,
+     UNIQUE(run_id, native_request_id)
+    );
+    CREATE INDEX user_questions_session ON user_questions(session_id, created_at DESC);
+    CREATE INDEX user_questions_pending ON user_questions(status, session_id);`,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

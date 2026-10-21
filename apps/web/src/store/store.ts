@@ -188,6 +188,8 @@ function reconcileBootstrap(prev: Bootstrap | null, next: Bootstrap): Bootstrap 
     tasks: reconcile<Task>(prev.tasks, next.tasks),
     events: reconcile<WorkspaceEvent>(prev.events, next.events),
     approvals: reconcile<Approval>(prev.approvals, next.approvals),
+    plans: reconcile(prev.plans, next.plans),
+    questions: reconcile(prev.questions, next.questions),
     providers: reconcile(prev.providers, next.providers),
     settings: sameItem(prev.settings, next.settings) ? prev.settings : next.settings,
     ...(next.groups ? { groups: reconcileGroups(prev.groups, next.groups) } : {}),

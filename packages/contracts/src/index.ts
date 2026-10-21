@@ -137,7 +137,7 @@ export interface AppSettings {
   browserAgentEnabled?: boolean; browserExecutable?: string;
   browserDefaultMode?: 'managed' | 'existing'; browserExistingSourceId?: string; browserCdpEndpoint?: string;
 }
-export interface Bootstrap { projects: Project[]; sessions: Session[]; messages: Message[]; tasks: Task[]; events: WorkspaceEvent[]; approvals: Approval[]; providers: ProviderInfo[]; settings: AppSettings; version: string; runs: SessionRun[]; toolCalls: ToolCall[]; groups?: import('./groups').GroupSnapshot[] }
+export interface Bootstrap { projects: Project[]; sessions: Session[]; messages: Message[]; tasks: Task[]; events: WorkspaceEvent[]; approvals: Approval[]; plans: import('./planning').SessionPlan[]; questions: import('./planning').UserQuestion[]; providers: ProviderInfo[]; settings: AppSettings; version: string; runs: SessionRun[]; toolCalls: ToolCall[]; groups?: import('./groups').GroupSnapshot[] }
 export interface GitFile { path: string; status: string }
 export interface GitStatus { branch: string; files: GitFile[]; diff: string; isRepo: boolean }
 export interface FileEntry { path: string; name: string; type: 'file' | 'directory' }
@@ -180,7 +180,7 @@ export const UpdateSessionSchema = z.object({
   pinned: z.boolean().optional(), unread: z.boolean().optional(),
 }).strict().refine((patch) => Object.keys(patch).length > 0, 'Supply a session setting to update');
 export const SendMessageSchema = z.object({
-  content: z.string().trim().max(100_000).default(''), skills: z.array(z.string().min(1).max(4096)).max(20).optional(),
+  content: z.string().trim().max(100_000).default(''), intent: z.enum(['normal', 'plan']).default('normal'), skills: z.array(z.string().min(1).max(4096)).max(20).optional(),
   attachmentIds: AttachmentIdsSchema.optional(),
   contextRefs: MessageContextRefsSchema.optional(),
 }).strict().refine((body) => body.content.length > 0 || (body.attachmentIds?.length ?? 0) > 0, { message: 'Write a message or attach a file', path: ['content'] });
@@ -213,7 +213,9 @@ export interface RunOptions {
    */
   invocation?: import('./attachments').NativeInvocation;
   context?: string;
-  teamMcp?: import('./groups').TeamMcpConnection; providerTaskState?: import('./project-context').ProviderTaskPlan['steps']; session: Session; prompt: string; skills?: ProviderSkill[]; browserMcp?: import('./browser').BrowserMcpConnection; signal: AbortSignal; onEvent: (event: AdapterEvent) => void; requestApproval: (request: { tool: string; description: string; input: Record<string, unknown> }) => Promise<boolean>; settings: AppSettings }
+  /** Native read-only planning intent; adapters must reject it unless the runtime provides a real plan mode. */
+  intent?: 'normal' | 'plan';
+  teamMcp?: import('./groups').TeamMcpConnection; providerTaskState?: import('./project-context').ProviderTaskPlan['steps']; session: Session; prompt: string; skills?: ProviderSkill[]; browserMcp?: import('./browser').BrowserMcpConnection; signal: AbortSignal; onEvent: (event: AdapterEvent) => void; requestApproval: (request: { tool: string; description: string; input: Record<string, unknown> }) => Promise<boolean>; requestUserInput?: (request: import('./planning').NativeUserInputRequest) => Promise<import('./planning').UserInputAnswers | null>; settings: AppSettings }
 export type AdapterEvent =
   | ({ type: 'task.plan' } & import('./project-context').ProviderTaskPlan)
   | { type: 'session'; providerSessionId: string }
@@ -245,3 +247,4 @@ export * from './attachments';
 export * from './message-context';
 export * from './native-actions';
 export * from './account';
+export * from './planning';
