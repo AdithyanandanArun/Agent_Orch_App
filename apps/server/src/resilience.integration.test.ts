@@ -35,14 +35,21 @@ async function configureQuotaFallback(t: TestApp, groupId: string, sourceId: str
   expect(response.status, JSON.stringify(response.json)).toBe(200);
 }
 
+async function configureWorkerQuotaFallback(t: TestApp, groupId: string, sourceId: string, targetId: string): Promise<void> {
+  const response = await t.api('PATCH', `/api/groups/${groupId}`, {
+    recoveryPolicy: { automaticFallback: true, allowUnverifiedQuotaFallback: true, workerFallbacks: { [sourceId]: targetId } },
+  });
+  expect(response.status, JSON.stringify(response.json)).toBe(200);
+}
+
 async function createGroup(
   t: TestApp, mode: 'cowork' | 'current-leads' | 'orchestrated', agentConfiguration: AgentConfiguration = claudeConfig,
-  orchestratorConfiguration: AgentConfiguration = claudeConfig,
+  orchestratorConfiguration: AgentConfiguration = claudeConfig, isolated = true,
 ): Promise<GroupSnapshot> {
   await t.api('POST', '/api/providers/refresh', {});
   const created = await t.api<GroupSnapshot>('POST', '/api/groups', {
     sessionId: EXAMPLE_CLIENT_SESSION_ID, mode,
-    agent: { handle: 'backup', isolated: true, configuration: agentConfiguration },
+    agent: { handle: 'backup', isolated, configuration: agentConfiguration },
     ...(mode === 'orchestrated' ? { orchestrator: orchestratorConfiguration } : {}),
   });
   expect(created.status, JSON.stringify(created.json)).toBe(201);
@@ -515,6 +522,20 @@ describe('durable resilience API', () => {
     const failedMemberId = mode === 'cowork' ? failedRequest.plannerMemberId : initial.group.orchestratorMemberId!;
     const replacement = snapshot.members.find((member) => member.id !== failedMemberId)!;
     const groupId = initial.group.id;
+    const failedMember = snapshot.members.find((member) => member.id === failedMemberId)!;
+    const failedSession = (await t.api('GET', '/api/bootstrap')).json.sessions.find((row: any) => row.id === failedMember.sessionId);
+    const dirtyPath = 'manual-coordinator-source-dirty.txt';
+    writeFileSync(path.join(failedSession.worktreePath, dirtyPath), 'Uncommitted source work remains in its original worktree.');
+    const continuationGate = deferred<void>();
+    let continuationRun: Parameters<typeof t.fake.script>[0] | undefined;
+    let requestWasPausedForReview = false;
+    t.fake.script = async (options, emit) => {
+      if (options.session.id === replacement.sessionId) {
+        continuationRun = options;
+        emit({ type: 'text', text: 'Continued the original request after coordinator replacement.' });
+        await continuationGate.promise;
+      }
+    };
     const replace = {
       action: 'replace-coordinator', replacementMemberId: replacement.id,
       ...(mode === 'cowork' ? { requestId: failedRequest.id } : {}),
@@ -523,25 +544,200 @@ describe('durable resilience API', () => {
       ...replace, idempotencyKey: `replace-before-ack-${mode}`,
     });
     expect(unacknowledged.status).toBe(409);
-    const checkpointId = await captureAndAck(t, groupId, delivery.id);
-    const response = await t.api('POST', `/api/groups/${initial.group.id}/recovery`, {
-      ...replace, checkpointId, idempotencyKey: `replace-${mode}`,
-    });
-    expect(response.status).toBe(200);
-    const after = t.app.groups.get(initial.group.id);
-    expect(after.group.coordinatorEpoch).toBeGreaterThan(initial.group.coordinatorEpoch ?? 0);
-    if (mode === 'cowork') {
-      expect(after.group.mode).toBe('cowork');
-      expect(after.requests.find((request) => request.id === failedRequest.id)?.plannerMemberId).toBe(replacement.id);
-      expect(after.members.filter((member) => !member.removedAt).every((member) => member.role === 'peer')).toBe(true);
-    } else if (mode === 'current-leads') {
-      expect(after.group.mode).toBe('orchestrated');
-      expect(after.group.orchestratorMemberId).toBe(replacement.id);
-      expect(after.group.anchorSessionId).toBe(initial.group.anchorSessionId);
-    } else {
-      expect(after.group.mode).toBe('orchestrated');
-      expect(after.group.orchestratorMemberId).toBe(replacement.id);
+    try {
+      const paused = await t.api('POST', `/api/groups/${groupId}/recovery`, {
+        action: 'pause-for-human', deliveryId: delivery.id, reason: 'Review the failed coordinator before continuing.',
+        idempotencyKey: `pause-manual-replacement-${mode}`,
+      });
+      expect(paused.status, JSON.stringify(paused.json)).toBe(200);
+      const checkpointId = await waitFor(() => t.app.groups.get(groupId).group.recoveryState?.pendingCheckpointId);
+      expect(checkpointId).toMatch(/^gcp_/);
+      const requestBeforeAcknowledgment = t.app.groups.get(groupId).requests.find((request) => request.id === failedRequest.id);
+      requestWasPausedForReview = requestBeforeAcknowledgment?.status === 'paused';
+      expect.soft(requestBeforeAcknowledgment?.status).toBe('paused');
+      expect(t.fake.runs.filter((run) => run.session.id === replacement.sessionId)).toHaveLength(0);
+
+      const acknowledged = await t.api('POST', `/api/groups/${groupId}/recovery`, {
+        action: 'acknowledge-checkpoint', checkpointId, idempotencyKey: `ack-manual-replacement-${mode}`,
+      });
+      expect(acknowledged.status, JSON.stringify(acknowledged.json)).toBe(200);
+      const response = await t.api('POST', `/api/groups/${groupId}/recovery`, {
+        ...replace, checkpointId, idempotencyKey: `replace-${mode}`,
+      });
+      expect(response.status, JSON.stringify(response.json)).toBe(200);
+      const continuation = await waitFor(() => continuationRun, 1_500, 'replacement coordinator continuation to dispatch');
+      const after = t.app.groups.get(initial.group.id);
+      expect(after.group.coordinatorEpoch).toBeGreaterThan(initial.group.coordinatorEpoch ?? 0);
+      if (mode === 'cowork') {
+        expect(after.group.mode).toBe('cowork');
+        expect(after.requests.find((request) => request.id === failedRequest.id)?.plannerMemberId).toBe(replacement.id);
+        expect(after.members.filter((member) => !member.removedAt).every((member) => member.role === 'peer')).toBe(true);
+        expect(after.members.some((member) => !member.removedAt && !member.held && member.id !== failedMember.id)).toBe(true);
+      } else if (mode === 'current-leads') {
+        expect(after.group.mode).toBe('orchestrated');
+        expect(after.group.orchestratorMemberId).toBe(replacement.id);
+        expect(after.group.anchorSessionId).toBe(initial.group.anchorSessionId);
+      } else {
+        expect(after.group.mode).toBe('orchestrated');
+        expect(after.group.orchestratorMemberId).toBe(replacement.id);
+      }
+
+      const original = after.deliveries.find((row) => row.id === delivery.id)!;
+      const successor = after.deliveries.find((row) => row.id === original.recoveredByDeliveryId);
+      expect(original).toMatchObject({ status: 'failed', recoveredByDeliveryId: expect.any(String) });
+      expect(successor).toMatchObject({ status: 'running', kind: 'result', memberId: replacement.id, requestId: failedRequest.id });
+      expect(after.requests.filter((request) => request.id === failedRequest.id)).toHaveLength(1);
+      expect(continuation.prompt).toContain('Implement a bounded recovery fixture.');
+      expect(continuation.prompt).toContain(dirtyPath);
+      expect((await import('node:fs')).existsSync(path.join(continuation.session.worktreePath, dirtyPath))).toBe(false);
+      expect((await import('node:fs')).existsSync(path.join(failedSession.worktreePath, dirtyPath))).toBe(true);
+      expect((await t.api('GET', `/api/sessions/${failedMember.sessionId}/recovery`)).json.failure).toMatchObject({
+        kind: 'quota_exhausted', outcomeUnknown: false,
+      });
+      expect(t.fake.runs.filter((run) => run.session.id === replacement.sessionId)).toHaveLength(1);
+    } finally {
+      continuationGate.resolve();
     }
+    await waitFor(() => t.app.runtime.activeCount() === 0);
+    // Keep this expectation strong: request refresh currently risks marking unresolved work completed.
+    expect(requestWasPausedForReview).toBe(true);
+  });
+
+  it('automatically hands a dispatched Claude worker quota failure to one configured Codex worker', async () => {
+    const t = await bootWithCodexAndClaude();
+    const initial = await createGroup(t, 'current-leads', claudeConfig, claudeConfig, false);
+    const groupId = initial.group.id;
+    const lead = initial.members.find((member) => member.sessionId === initial.group.anchorSessionId)!;
+    const source = initial.members.find((member) => member.handle === 'backup')!;
+    const added = await t.api('POST', `/api/groups/${groupId}/agents`, {
+      configuration: codexConfig, handle: 'codex-fallback', isolated: false,
+    });
+    expect(added.status, JSON.stringify(added.json)).toBe(201);
+    const target = t.app.groups.get(groupId).members.find((member) => member.handle === 'codex-fallback')!;
+    expect(target).toBeDefined();
+    await configureWorkerQuotaFallback(t, groupId, source.id, target.id);
+    const sourceSession = (await t.api('GET', '/api/bootstrap')).json.sessions.find((row: any) => row.id === source.sessionId);
+
+    const taskObjective = 'Implement the bounded Claude-worker handoff fixture.';
+    const acceptanceCriteria = 'The Codex successor receives the same task and reports completion.';
+    const dirtyPath = 'automatic-worker-source-dirty.txt';
+    let assignedTaskId: string | undefined;
+    let assignedRequestId: string | undefined;
+    let targetRun: Parameters<typeof t.fake.script>[0] | undefined;
+    let leadTurns = 0;
+    t.fake.script = async (options, emit) => {
+      if (options.session.id === lead.sessionId) {
+        if (leadTurns++ === 0) {
+          const active = t.app.groups.get(groupId).deliveries.find((row) => row.status === 'running' && row.memberId === lead.id);
+          if (!active?.runId) throw new Error('Lead delivery was not bound to its provider run');
+          assignedRequestId = active.requestId;
+          const context = t.app.groups.contextForRun(options.session.id, active.runId);
+          if (!context) throw new Error('Lead group context is unavailable');
+          const assignment = t.app.groups.assign(context, {
+            recipient: source.handle, title: 'Cross-provider quota recovery', objective: taskObjective,
+            acceptanceCriteria, scope: [dirtyPath], dependsOn: [], inputArtifacts: [],
+          }) as { taskId?: string; status?: string };
+          assignedTaskId = assignment.taskId;
+          expect(assignment.status).toBe('queued');
+        }
+        emit({ type: 'text', text: 'Assigned the worker task and reviewed its bounded continuation.' });
+        return;
+      }
+      if (options.session.id === source.sessionId) {
+        writeFileSync(path.join(options.session.worktreePath, dirtyPath), 'Uncommitted source worker changes stay in the shared worktree.');
+        (options as typeof options & DispatchAwareOptions).onDispatchState?.('dispatched');
+        throw new ProviderError('Account quota exhausted.', {
+          providerCode: 'usageLimitExceeded', outcomeKnown: true, continuationSafety: 'safe',
+        });
+      }
+      if (options.session.id === target.sessionId) {
+        targetRun = options;
+        emit({ type: 'text', text: 'Codex completed the existing assignment without replaying the source run.' });
+      }
+    };
+
+    expect((await t.api('POST', `/api/groups/${groupId}/messages`, { content: 'Implement a bounded recovery fixture.' })).status).toBe(202);
+    await waitFor(() => targetRun && t.app.runtime.activeCount() === 0, 4000, 'Codex fallback to complete');
+
+    expect(assignedTaskId).toBeTruthy();
+    expect(assignedRequestId).toBeTruthy();
+    expect(targetRun).toBeDefined();
+    expect(t.fake.runs.filter((run) => run.session.id === target.sessionId)).toHaveLength(1);
+    expect(targetRun!.prompt).toContain(taskObjective);
+    expect(targetRun!.prompt).toContain(acceptanceCriteria);
+    expect(targetRun!.prompt).toContain(dirtyPath);
+    expect(targetRun!.session.worktreePath).toBe(sourceSession.worktreePath);
+    expect((await import('node:fs')).existsSync(path.join(targetRun!.session.worktreePath, dirtyPath))).toBe(true);
+
+    const snapshot = t.app.groups.get(groupId);
+    const original = snapshot.deliveries.find((row) => row.memberId === source.id && row.status === 'failed')!;
+    const successor = snapshot.deliveries.find((row) => row.id === original.recoveredByDeliveryId);
+    expect(original.failure).toMatchObject({ kind: 'quota_exhausted', outcomeUnknown: false, continuationSafety: 'safe', dispatchState: 'dispatched' });
+    expect(successor).toMatchObject({ status: 'completed', kind: 'assignment', memberId: target.id, requestId: assignedRequestId });
+    expect(snapshot.deliveries.filter((row) => row.memberId === target.id && row.status === 'completed')).toHaveLength(1);
+    expect(snapshot.assignments).toHaveLength(1);
+    expect(snapshot.assignments[0]).toMatchObject({ taskId: assignedTaskId, toMemberId: target.id });
+    expect(snapshot.requests.filter((request) => request.id === assignedRequestId)).toHaveLength(1);
+    expect(snapshot.group.anchorSessionId).toBe(initial.group.anchorSessionId);
+    expect(snapshot.group.orchestratorMemberId).toBe(initial.group.orchestratorMemberId);
+    expect((await import('node:fs')).readFileSync(path.join(sourceSession.worktreePath, dirtyPath), 'utf8')).toContain('Uncommitted source worker changes');
+  });
+
+  it('keeps an uncertain Claude worker quota failure held instead of dispatching its configured Codex fallback', async () => {
+    const t = await bootWithCodexAndClaude();
+    const initial = await createGroup(t, 'current-leads', claudeConfig, claudeConfig, false);
+    const groupId = initial.group.id;
+    const lead = initial.members.find((member) => member.sessionId === initial.group.anchorSessionId)!;
+    const source = initial.members.find((member) => member.handle === 'backup')!;
+    const added = await t.api('POST', `/api/groups/${groupId}/agents`, {
+      configuration: codexConfig, handle: 'codex-fallback', isolated: false,
+    });
+    expect(added.status, JSON.stringify(added.json)).toBe(201);
+    const target = t.app.groups.get(groupId).members.find((member) => member.handle === 'codex-fallback')!;
+    await configureWorkerQuotaFallback(t, groupId, source.id, target.id);
+    let leadTurns = 0;
+    t.fake.script = async (options, emit) => {
+      if (options.session.id === lead.sessionId) {
+        if (leadTurns++ === 0) {
+          const active = t.app.groups.get(groupId).deliveries.find((row) => row.status === 'running' && row.memberId === lead.id);
+          if (!active?.runId) throw new Error('Lead delivery was not bound to its provider run');
+          const context = t.app.groups.contextForRun(options.session.id, active.runId);
+          if (!context) throw new Error('Lead group context is unavailable');
+          expect(t.app.groups.assign(context, {
+            recipient: source.handle, title: 'Uncertain worker quota recovery', objective: 'Do not replace a worker with an uncertain provider outcome.',
+            acceptanceCriteria: 'A human reviews the uncertain source before any replacement starts.',
+            scope: ['src/uncertain-quota.ts'], dependsOn: [], inputArtifacts: [],
+          })).toMatchObject({ status: 'queued' });
+        }
+        emit({ type: 'text', text: 'The source assignment was recorded.' });
+        return;
+      }
+      if (options.session.id === source.sessionId) {
+        (options as typeof options & DispatchAwareOptions).onDispatchState?.('unknown');
+        throw new ProviderError('Account quota exhausted after provider outcome became uncertain.', {
+          providerCode: 'usageLimitExceeded', continuationSafety: 'unsafe',
+        });
+      }
+      if (options.session.id === target.sessionId) emit({ type: 'text', text: 'Must not start automatically.' });
+    };
+
+    expect((await t.api('POST', `/api/groups/${groupId}/messages`, { content: 'Keep uncertain worker side effects under review.' })).status).toBe(202);
+    const failed = await waitFor(() => {
+      const snapshot = t.app.groups.get(groupId);
+      const row = snapshot.deliveries.find((delivery) => delivery.memberId === source.id && delivery.status === 'failed');
+      return row && t.app.runtime.activeCount() === 0 ? row : undefined;
+    }, 4000, 'uncertain worker quota failure and provider cleanup');
+
+    const snapshot = t.app.groups.get(groupId);
+    expect(failed.failure).toMatchObject({ kind: 'quota_exhausted', outcomeUnknown: true, continuationSafety: 'unsafe', dispatchState: 'unknown' });
+    expect(snapshot.members.find((member) => member.id === source.id)?.held).toBe(true);
+    expect(failed.recoveredByDeliveryId).toBeUndefined();
+    expect(snapshot.deliveries.some((delivery) => delivery.memberId === target.id)).toBe(false);
+    expect(t.fake.runs.filter((run) => run.session.id === target.sessionId)).toHaveLength(0);
+    expect((await t.api('GET', `/api/sessions/${source.sessionId}/recovery`)).json.failure).toMatchObject({
+      kind: 'quota_exhausted', outcomeUnknown: true, continuationSafety: 'unsafe', dispatchState: 'unknown',
+    });
+    expect(snapshot.group.recoveryState?.status).toBe('degraded');
   });
 
   it.each(['current-leads', 'cowork', 'orchestrated'] as const)('makes one permission-safe configured quota handoff in %s mode', async (mode) => {
