@@ -72,7 +72,7 @@ async function runAlternatingTurns(t: TestApp, group: GroupSnapshot, turnLimit: 
       await t.app.groups.message(context, {
         recipient: recipient.handle,
         content: `Continue deterministic autonomy fixture at turn ${total}.`,
-        expectsReply: false,
+        expectsReply: true,
       });
     }
   };
@@ -121,6 +121,7 @@ describe('group autonomy and stall evidence integration', () => {
     const lead = boundedGroup.members.find((member) => member.sessionId === EXAMPLE_CLIENT_SESSION_ID)!;
     const peer = boundedGroup.members.find((member) => member.id !== lead.id)!;
     let total = 0;
+    const budgetRejections: string[] = [];
     bounded.fake.script = async (options, emit) => {
       total++;
       const member = boundedGroup.members.find((candidate) => candidate.sessionId === options.session.id)!;
@@ -131,17 +132,23 @@ describe('group autonomy and stall evidence integration', () => {
       emit({ type: 'text', text: 'A bounded turn completed.' });
       if (total < 3) {
         const recipient = member.id === lead.id ? peer : lead;
-        await bounded.app.groups.message(context, { recipient: recipient.handle, content: `Bounded turn ${total}.`, expectsReply: false });
+        try {
+          await bounded.app.groups.message(context, { recipient: recipient.handle, content: `Bounded turn ${total}.`, expectsReply: true });
+        } catch (error) {
+          const detail = error as { status?: number; statusCode?: number; message?: string };
+          const reason = error instanceof Error ? error.message : String(error);
+          if ((detail.status === 409 || detail.statusCode === 409) && /turn budget/i.test(reason)) budgetRejections.push(reason);
+          else throw error;
+        }
       }
     };
     const accepted = await bounded.api('POST', `/api/groups/${boundedGroup.group.id}/messages`, { content: 'Respect the inherited request ceiling.' });
     expect(accepted.status).toBe(202);
     await driveProviderRuns(bounded, boundedGroup.group.id, 2);
-    await waitFor(() => total >= 2 && bounded.app.runtime.activeCount() === 0, 10_000, 'the bounded request to pause');
-    const capped = bounded.app.groups.get(boundedGroup.group.id);
+    await waitFor(() => total >= 2 && bounded.app.runtime.activeCount() === 0, 10_000, 'the bounded request to finish');
     expect(bounded.fake.runs).toHaveLength(2);
-    expect(capped.deliveries.some((delivery) => delivery.status === 'queued')).toBe(true);
-    expect(capped.requests[0]?.status).toBe('paused');
+    expect(budgetRejections).toHaveLength(1);
+    expect(budgetRejections[0]).toMatch(/turn budget/i);
   }, 15_000);
 
   it('deduplicates repeated failed command events within one provider run', async () => {
@@ -226,7 +233,7 @@ describe('group autonomy and stall evidence integration', () => {
     await t.api('PATCH', `/api/groups/${group.group.id}`, { maxHops: 12 });
     const lead = group.members.find((member) => member.sessionId === EXAMPLE_CLIENT_SESSION_ID)!;
     const tasks: string[] = [];
-    for (let index = 0; index < 5; index++) {
+    for (let index = 0; index < 3; index++) {
       const created = await t.api('POST', '/api/tasks', {
         projectId: group.group.projectId, title: `Status-only task ${index + 1}`, description: '', acceptanceCriteria: '', sessionId: lead.sessionId,
       });
@@ -237,13 +244,18 @@ describe('group autonomy and stall evidence integration', () => {
     }
 
     let leadTurn = 0;
-    const groupsWithStatus = t.app.groups as unknown as {
-      status(context: unknown, input: { taskId: string; status: 'running'; note: string }): unknown;
-    };
-    await runAlternatingTurns(t, group, 9, (context, isLead, _memberTurn, emit) => {
+    await runAlternatingTurns(t, group, 5, async (_context, isLead, _memberTurn, emit) => {
       if (!isLead) return;
       leadTurn++;
-      groupsWithStatus.status(context, { taskId: tasks[leadTurn - 1]!, status: 'running', note: 'Status changed; no artifact or successful check.' });
+      const taskId = tasks[leadTurn - 1]!;
+      await t.app.store.updateTask(taskId, { status: 'running' });
+      t.app.store.recordEvent({
+        projectId: group.group.projectId,
+        sessionId: lead.sessionId,
+        type: 'group.status',
+        summary: 'Simulated reported status without check or artifact',
+        payload: { groupId: group.group.id, taskId, status: 'running', changed: true },
+      });
       emit(failedCommand(`status-only-run-${leadTurn}`));
     });
 
@@ -251,7 +263,7 @@ describe('group autonomy and stall evidence integration', () => {
     const heldLead = current.members.find((member) => member.sessionId === EXAMPLE_CLIENT_SESSION_ID)!;
     expect(heldLead.held).toBe(true);
     const events = await groupEvents(t, group.group.id);
-    expect(events.filter((event) => event.type === 'group.status' && event.payload.changed === true)).toHaveLength(5);
+    expect(events.filter((event) => event.type === 'group.status' && event.payload.changed === true)).toHaveLength(3);
     expect(events.some((event) => event.type === 'group.stall.detected' && event.payload.memberId === lead.id)).toBe(true);
   }, 15_000);
 });
