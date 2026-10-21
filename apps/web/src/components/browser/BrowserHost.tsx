@@ -4,20 +4,62 @@ import { cx } from '../../lib/format';
 import { usePresence } from '../../lib/motion';
 
 interface Geometry { left: number; top: number; width: number; height: number }
+type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
+type PointerInteraction = { kind: 'move' } | { kind: 'resize'; corner: ResizeCorner };
+
+const PIP_GUTTER = 12;
+const PIP_MIN_WIDTH = 320;
+const PIP_MIN_HEIGHT = 240;
+const RESIZE_CORNERS: { corner: ResizeCorner; label: string }[] = [
+  { corner: 'nw', label: 'top-left' },
+  { corner: 'ne', label: 'top-right' },
+  { corner: 'sw', label: 'bottom-left' },
+  { corner: 'se', label: 'bottom-right' },
+];
+
+function viewportBounds() {
+  const gutterX = Math.min(PIP_GUTTER, Math.max(0, (window.innerWidth - 1) / 2));
+  const gutterY = Math.min(PIP_GUTTER, Math.max(0, (window.innerHeight - 1) / 2));
+  const maxWidth = Math.max(1, window.innerWidth - gutterX * 2);
+  const maxHeight = Math.max(1, window.innerHeight - gutterY * 2);
+  return {
+    gutterX, gutterY, maxWidth, maxHeight,
+    minWidth: Math.min(PIP_MIN_WIDTH, maxWidth), minHeight: Math.min(PIP_MIN_HEIGHT, maxHeight),
+  };
+}
 
 function initialGeometry(): Geometry {
+  const { gutterX, gutterY, maxWidth, maxHeight } = viewportBounds();
+  const width = Math.min(480, maxWidth), height = Math.min(360, maxHeight);
   return {
-    left: Math.max(12, window.innerWidth - 500), top: Math.max(12, window.innerHeight - 380),
-    width: Math.min(480, Math.max(320, window.innerWidth - 24)), height: Math.min(360, Math.max(240, window.innerHeight - 24)),
+    left: Math.max(gutterX, window.innerWidth - width - gutterX),
+    top: Math.max(gutterY, window.innerHeight - height - gutterY), width, height,
   };
 }
 
 function clampGeometry(value: Geometry): Geometry {
-  const width = Math.min(Math.max(320, value.width), Math.max(320, window.innerWidth - 24));
-  const height = Math.min(Math.max(240, value.height), Math.max(240, window.innerHeight - 24));
+  const { gutterX, gutterY, maxWidth, maxHeight, minWidth, minHeight } = viewportBounds();
+  const width = Math.min(maxWidth, Math.max(minWidth, value.width));
+  const height = Math.min(maxHeight, Math.max(minHeight, value.height));
   return {
-    left: Math.max(12, Math.min(window.innerWidth - width - 12, value.left)),
-    top: Math.max(12, Math.min(window.innerHeight - height - 12, value.top)), width, height,
+    left: Math.max(gutterX, Math.min(window.innerWidth - gutterX - width, value.left)),
+    top: Math.max(gutterY, Math.min(window.innerHeight - gutterY - height, value.top)), width, height,
+  };
+}
+
+function resizeFromCorner(origin: Geometry, corner: ResizeCorner, dx: number, dy: number): Geometry {
+  const { gutterX, gutterY } = viewportBounds();
+  const west = corner.endsWith('w'), north = corner.startsWith('n');
+  const right = origin.left + origin.width, bottom = origin.top + origin.height;
+  const maxWidth = Math.max(1, west ? right - gutterX : window.innerWidth - gutterX - origin.left);
+  const maxHeight = Math.max(1, north ? bottom - gutterY : window.innerHeight - gutterY - origin.top);
+  const minWidth = Math.min(PIP_MIN_WIDTH, maxWidth), minHeight = Math.min(PIP_MIN_HEIGHT, maxHeight);
+  const width = Math.max(minWidth, Math.min(maxWidth, origin.width + (west ? -dx : dx)));
+  const height = Math.max(minHeight, Math.min(maxHeight, origin.height + (north ? -dy : dy)));
+  return {
+    left: west ? right - width : origin.left,
+    top: north ? bottom - height : origin.top,
+    width, height,
   };
 }
 
@@ -39,7 +81,7 @@ export function BrowserHost({
   const floatingSlot = useRef<HTMLDivElement>(null);
   const floatingPanel = useRef<HTMLDivElement>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
-  const dragCleanup = useRef<(() => void) | null>(null);
+  const interactionCleanup = useRef<(() => void) | null>(null);
   const [overlaySlot, setOverlaySlot] = useState<HTMLDivElement | null>(null);
   const [geometry, setGeometry] = useState<Geometry>(initialGeometry);
   const { present: overlayPresent, closing: overlayClosing } = usePresence(expanded);
@@ -55,24 +97,13 @@ export function BrowserHost({
     if (!expanded) returnFocus.current = null;
   }, [expanded, floating, overlaySlot, host]);
 
-  useEffect(() => () => dragCleanup.current?.(), []);
+  useEffect(() => () => interactionCleanup.current?.(), []);
+  useEffect(() => () => interactionCleanup.current?.(), [floating, expanded]);
   useEffect(() => {
-    if (!floating || expanded) return;
-    const panel = floatingPanel.current;
-    if (!panel) return;
-    const observer = new ResizeObserver(([entry]) => {
-      if (!entry) return;
-      const bounds = panel.getBoundingClientRect();
-      setGeometry((previous) => {
-        const next = clampGeometry({ ...previous, width: bounds.width, height: bounds.height });
-        return next.width === previous.width && next.height === previous.height ? previous : next;
-      });
-    });
-    observer.observe(panel);
-    return () => observer.disconnect();
-  }, [floating, expanded]);
-  useEffect(() => {
-    const resize = () => setGeometry((value) => clampGeometry(value));
+    const resize = () => {
+      interactionCleanup.current?.();
+      setGeometry((value) => clampGeometry(value));
+    };
     window.addEventListener('resize', resize);
     return () => window.removeEventListener('resize', resize);
   }, []);
@@ -98,35 +129,61 @@ export function BrowserHost({
     return () => overlaySlot.removeEventListener('keydown', onKey);
   }, [expanded, overlaySlot, host]);
 
-  const onDragStart = useCallback((event: ReactPointerEvent<HTMLElement>) => {
-    if (event.button !== 0 || (event.target as HTMLElement).closest('button')) return;
-    const origin = floatingPanel.current?.getBoundingClientRect();
-    if (!origin) return;
+  const startInteraction = useCallback((event: ReactPointerEvent<HTMLElement>, interaction: PointerInteraction) => {
+    if (event.button !== 0 || !event.isPrimary) return;
+    if (interaction.kind === 'move' && (event.target as HTMLElement).closest('button')) return;
+    const panel = floatingPanel.current;
+    const originRect = panel?.getBoundingClientRect();
+    if (!originRect) return;
+    const target = event.currentTarget;
+    const pointerId = event.pointerId;
+    try { target.setPointerCapture(pointerId); }
+    catch { return; }
     event.preventDefault();
-    const startX = event.clientX, startY = event.clientY, left = origin.left, top = origin.top;
+    interactionCleanup.current?.();
+    const origin = clampGeometry({ left: originRect.left, top: originRect.top, width: originRect.width, height: originRect.height });
+    const startX = event.clientX, startY = event.clientY;
+    let active = true;
+    const cleanup = () => {
+      if (!active) return;
+      active = false;
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', end);
+      window.removeEventListener('pointercancel', finish);
+      window.removeEventListener('blur', cleanup);
+      target.removeEventListener('lostpointercapture', cleanup);
+      if (interactionCleanup.current === cleanup) interactionCleanup.current = null;
+      try { if (target.hasPointerCapture(pointerId)) target.releasePointerCapture(pointerId); }
+      catch { /* The target may have been detached during a mode change. */ }
+    };
     const move = (next: PointerEvent) => {
-      if (next.pointerId !== event.pointerId) return;
-      setGeometry((previous) => clampGeometry({ ...previous, left: left + next.clientX - startX, top: top + next.clientY - startY }));
+      if (next.pointerId !== pointerId) return;
+      next.preventDefault();
+      const dx = next.clientX - startX, dy = next.clientY - startY;
+      setGeometry(interaction.kind === 'move'
+        ? clampGeometry({ ...origin, left: origin.left + dx, top: origin.top + dy })
+        : resizeFromCorner(origin, interaction.corner, dx, dy));
     };
     const finish = (next: PointerEvent) => {
-      if (next.pointerId !== event.pointerId) return;
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', finish);
-      window.removeEventListener('pointercancel', finish);
-      dragCleanup.current = null;
+      if (next.pointerId === pointerId) cleanup();
     };
-    dragCleanup.current?.();
-    dragCleanup.current = () => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', finish);
-      window.removeEventListener('pointercancel', finish);
+    const end = (next: PointerEvent) => {
+      if (next.pointerId !== pointerId) return;
+      move(next);
+      cleanup();
     };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', finish);
+    target.addEventListener('lostpointercapture', cleanup);
+    window.addEventListener('pointermove', move, { passive: false });
+    window.addEventListener('pointerup', end);
     window.addEventListener('pointercancel', finish);
+    window.addEventListener('blur', cleanup);
+    interactionCleanup.current = cleanup;
   }, []);
 
+  const onDragStart = (event: ReactPointerEvent<HTMLElement>) => startInteraction(event, { kind: 'move' });
+
   const onDragKey = (event: React.KeyboardEvent<HTMLElement>) => {
+    if ((event.target as HTMLElement).closest('button')) return;
     const delta = event.shiftKey ? 40 : 12;
     const next = { ...geometry };
     if (event.key === 'ArrowLeft') next.left -= delta;
@@ -136,6 +193,15 @@ export function BrowserHost({
     else return;
     event.preventDefault();
     setGeometry(clampGeometry(next));
+  };
+
+  const onResizeKey = (event: React.KeyboardEvent<HTMLElement>, corner: ResizeCorner) => {
+    const delta = event.shiftKey ? 40 : 12;
+    const dx = event.key === 'ArrowLeft' ? -delta : event.key === 'ArrowRight' ? delta : 0;
+    const dy = event.key === 'ArrowUp' ? -delta : event.key === 'ArrowDown' ? delta : 0;
+    if (!dx && !dy) return;
+    event.preventDefault();
+    setGeometry((value) => resizeFromCorner(value, corner, dx, dy));
   };
 
   return (
@@ -153,6 +219,17 @@ export function BrowserHost({
             <button type="button" className="browser-pip__action" onClick={onDock}>Dock browser</button>
           </header>
           <div className="browser-pip__content" ref={floatingSlot} />
+          {RESIZE_CORNERS.map(({ corner, label }) => (
+            <div
+              key={corner}
+              className={`browser-pip__resize-handle browser-pip__resize-handle--${corner}`}
+              role="group"
+              tabIndex={0}
+              aria-label={`Resize floating browser from ${label} corner with arrow keys; hold Shift to resize farther`}
+              onPointerDown={(event) => startInteraction(event, { kind: 'resize', corner })}
+              onKeyDown={(event) => onResizeKey(event, corner)}
+            />
+          ))}
         </section>, document.body,
       ) : null}
       {overlayPresent ? createPortal(
