@@ -1,6 +1,6 @@
 import type { AdapterEvent, AgentAdapter, ContextCompactionResult, RunOptions, ToolActivity, ToolCategory } from '@mingle/contracts';
 import { ProviderError, abortError, isRecord, markDispatched, markNotDispatched, redactSecrets, truncate } from '../common.js';
-import { nativePlanSteps } from '../plans.js';
+import { nativePlanSteps, sessionPlanSteps } from '../plans.js';
 import {
   cachedAntigravityMetadata, closeAntigravity, markAntigravityAuthenticated, rememberAntigravityMetadata,
   resolveAntigravity, safeAntigravityError, safeAntigravityText, startAntigravity, type AntigravityRuntime, type AntigravitySpawn,
@@ -23,7 +23,7 @@ export function createAntigravityAdapter(deps: AntigravityAdapterDeps = {}): Age
     if (options.signal.aborted) throw abortError();
     if (options.session.serviceTier && options.session.serviceTier !== 'standard') throw new ProviderError('Antigravity ACP does not expose Mingle service tiers. Choose Standard.', { code: 'unsupported_service_tier' });
     if ((options.skills ?? []).length || options.invocation?.kind === 'skill') throw new ProviderError('Mingle-selected Antigravity skills are unavailable. Native provider skills remain provider-owned.', { code: 'unsupported_skills' });
-    if (!MODE[options.session.policy]) throw new ProviderError('Antigravity supports Supervised, Auto-accept edits and Full access. Auto is unavailable.', { code: 'unsupported_policy' });
+    if (options.intent !== 'plan' && !MODE[options.session.policy]) throw new ProviderError('Antigravity supports Supervised, Auto-accept edits and Full access. Auto is unavailable.', { code: 'unsupported_policy' });
     const env = deps.env ?? process.env;
     const resolved = await resolveAntigravity(options.settings, env);
     if (!resolved.ok) throw new ProviderError(resolved.reason, { code: 'executable_unavailable' });
@@ -47,6 +47,7 @@ class AntigravityRun {
   private selected: unknown;
   private expectedModel: string | null = null;
   private expectedEffort: string | null = null;
+  private expectedMode: string | null = null;
   private commands: unknown[] = [];
   private readonly tools = new Map<string, ToolActivity>();
   private readonly cancellation = new AbortController();
@@ -167,21 +168,36 @@ class AntigravityRun {
       if (configuration(this.selected, 'thinking_level')?.currentValue !== wanted.effort) throw new ProviderError('Antigravity did not confirm the requested reasoning effort.', { code: 'unsupported_effort' });
       this.expectedEffort = wanted.effort;
     }
-    const mode = MODE[wanted.policy];
+    const mode = this.options.intent === 'plan' ? nativeModes(this.selected).find((value) => value === 'plan') : MODE[wanted.policy];
+    if (!mode) throw new ProviderError('This Antigravity ACP runtime did not advertise a native read-only plan mode. No prompt was sent.', { code: 'unsupported_plan_mode' });
     const selector = configuration(this.selected, 'mode');
-    if (!selector || !nativeModes(this.selected).includes(mode)) throw new ProviderError('Antigravity did not advertise the requested permission mode. No prompt was sent.', { code: 'unsupported_policy' });
-    await this.setConfig(String(selector.id), mode);
-    if (configuration(this.selected, 'mode')?.currentValue !== mode) throw new ProviderError('Antigravity did not confirm the requested permission mode. No prompt was sent.', { code: 'unsupported_policy' });
+    if (!nativeModes(this.selected).includes(mode)) throw new ProviderError('Antigravity did not advertise the requested permission mode. No prompt was sent.', { code: 'unsupported_policy' });
+    this.expectedMode = mode;
+    if (selector) {
+      await this.setConfig(String(selector.id), mode);
+      if (configuration(this.selected, 'mode')?.currentValue !== mode) throw new ProviderError('Antigravity did not confirm the requested permission mode. No prompt was sent.', { code: 'unsupported_policy' });
+    } else if (this.options.intent === 'plan') {
+      const response = await this.race(this.runtime!.conn.request('session/set_mode', { sessionId: this.sessionId, modeId: mode }, SESSION_TIMEOUT));
+      const reported = object(response).currentModeId;
+      if (typeof reported === 'string' && reported !== mode) throw new ProviderError('Antigravity did not confirm its native read-only plan mode. No prompt was sent.', { code: 'unsupported_plan_mode' });
+      this.selected = { ...object(this.selected), modes: { ...object(object(this.selected).modes), currentModeId: mode } };
+    } else throw new ProviderError('Antigravity did not expose a configurable permission mode. No prompt was sent.', { code: 'unsupported_policy' });
     if (nativeModelValue(this.selected) !== this.expectedModel) throw new ProviderError('Antigravity changed the selected model while applying configuration. No prompt was sent.', { code: 'model_substitution' });
     if (this.expectedEffort && configuration(this.selected, 'thinking_level')?.currentValue !== this.expectedEffort) throw new ProviderError('Antigravity changed the requested reasoning effort while applying configuration. No prompt was sent.', { code: 'unsupported_effort' });
   }
 
   private async onRequest(method: string, params: unknown): Promise<unknown> {
-    if (method !== 'session/request_permission') throw new AcpRpcError(ACP_METHOD_NOT_FOUND, `Mingle does not provide ACP client method ${method}.`);
+    if (method !== 'session/request_permission') {
+      if (method === 'elicitation/create' || method === 'session/request_input' || method === 'session/request_user_input') {
+        this.info('This Antigravity ACP runtime requested interactive input through a method Mingle cannot verify or answer. The request was declined; no answer was sent.');
+      }
+      throw new AcpRpcError(ACP_METHOD_NOT_FOUND, `Mingle does not provide ACP client method ${method}.`);
+    }
     const data = object(params); const call = object(data.toolCall);
     const cancelled = { outcome: { outcome: 'cancelled' } };
     if (this.phase !== 'prompt' || this.signal.aborted) return cancelled;
     if (data.sessionId !== this.sessionId) throw new AcpRpcError(ACP_INVALID_PARAMS, 'This permission request belongs to another session.');
+    if (this.options.intent === 'plan') return cancelled;
     const options = Array.isArray(data.options) ? data.options.map(object) : [];
     const allow = options.find((option) => option.kind === 'allow_once' && typeof option.optionId === 'string');
     const reject = options.find((option) => option.kind === 'reject_once' && typeof option.optionId === 'string');
@@ -210,7 +226,10 @@ class AntigravityRun {
     else if (kind === 'tool_call' || kind === 'tool_call_update') this.tool(update);
     else if (kind === 'plan') {
       const steps = nativePlanSteps(update.entries, 'content');
-      if (steps) this.emit({ type: 'task.plan', planId: 'antigravity-plan', replace: true, steps });
+      if (steps) {
+        if (this.options.intent === 'plan') this.emit({ type: 'session.plan', providerPlanId: 'antigravity-plan', explanation: '', steps: sessionPlanSteps(steps) });
+        else this.emit({ type: 'task.plan', planId: 'antigravity-plan', replace: true, steps });
+      }
     } else if (kind === 'config_option_update') {
       const state = { configOptions: update.configOptions };
       const model = nativeModelValue(state);
@@ -218,8 +237,8 @@ class AntigravityRun {
       const mode = configuration(state, 'mode')?.currentValue;
       if (model && model !== this.expectedModel) this.fail('Antigravity changed the selected model during the run. Mingle stopped the turn rather than accepting an automatic substitution.', 'model_substitution');
       if (this.expectedEffort && effort !== undefined && effort !== this.expectedEffort) this.fail('Antigravity changed the selected reasoning effort during the run.', 'effort_substitution');
-      if (mode !== undefined && mode !== MODE[this.options.session.policy]) this.fail('Antigravity changed the selected permission mode during the run. Mingle stopped the turn.', 'permission_mode_changed');
-    } else if (kind === 'current_mode_update' && update.currentModeId !== MODE[this.options.session.policy]) this.fail('Antigravity changed the selected permission mode during the run. Mingle stopped the turn.', 'permission_mode_changed');
+      if (mode !== undefined && mode !== this.expectedMode) this.fail('Antigravity changed the selected permission mode during the run. Mingle stopped the turn.', 'permission_mode_changed');
+    } else if (kind === 'current_mode_update' && update.currentModeId !== this.expectedMode) this.fail('Antigravity changed the selected permission mode during the run. Mingle stopped the turn.', 'permission_mode_changed');
     // Thoughts are provider-private. usage_update.used is context size, not input/output token usage.
   }
 

@@ -1,7 +1,7 @@
-import { nativePlanSteps } from '../plans.js';
+import { nativePlanSteps, sessionPlanSteps } from '../plans.js';
 import { spawn, type SpawnOptions } from 'node:child_process';
 import path from 'node:path';
-import type { AdapterEvent, AgentAdapter, AppSettings, ContextCompactionResult, RunOptions } from '@mingle/contracts';
+import type { AdapterEvent, AgentAdapter, AppSettings, ContextCompactionResult, NativeUserInputRequest, RunOptions } from '@mingle/contracts';
 import { ProviderError, TextTail, abortError, cleanEnv, errorMessage, isRecord, markDispatched, markNotDispatched, redactSecrets, truncate } from '../common.js';
 import { resolveExecutableCached, type ResolveResult } from '../discovery.js';
 import { shutdownChild, type ChildLike } from '../process.js';
@@ -166,7 +166,7 @@ class CodexRun {
     this.child.stderr?.on('data', (chunk: string | Buffer) => this.stderr.push(chunk.toString()));
     this.conn = new JsonRpcConnection(this.child, {
       onNotification: (method, params) => this.onNotification(method, params),
-      onRequest: (method, params) => this.onServerRequest(method, params),
+      onRequest: (method, params, requestId) => this.onServerRequest(method, params, requestId),
       formatClose: (info) => this.describeClose(info),
       onIssue: (message) => this.info(message),
     });
@@ -250,8 +250,12 @@ class CodexRun {
   private async openThread(): Promise<void> {
     const { session } = this.options;
     const policy = codexPolicy(session.policy, session.worktreePath);
+    const readOnlyPlan = this.options.intent === 'plan';
     const serviceTier = session.serviceTier && session.serviceTier !== 'standard' ? session.serviceTier : null;
-    const common = { model: session.model, cwd: session.worktreePath, approvalPolicy: policy.approvalPolicy, approvalsReviewer: policy.approvalsReviewer, sandbox: policy.sandbox, serviceTier };
+    const common = { model: session.model, cwd: session.worktreePath,
+      approvalPolicy: readOnlyPlan ? 'on-request' as const : policy.approvalPolicy,
+      approvalsReviewer: readOnlyPlan ? 'user' as const : policy.approvalsReviewer,
+      sandbox: readOnlyPlan ? 'read-only' as const : policy.sandbox, serviceTier };
     const catalog = parseCodexModels(await this.conn.request('model/list', { limit: 200, includeHidden: false }, this.ctx.timeouts.threadMs));
     const model = catalog.find((candidate) => candidate.id === session.model);
     if (imagesOf(this.options.attachments).length && model?.inputModalities && !model.inputModalities.includes('image')) {
@@ -311,6 +315,7 @@ class CodexRun {
   private async startTurn(): Promise<void> {
     const { session, prompt } = this.options;
     const policy = codexPolicy(session.policy, session.worktreePath);
+    const readOnlyPlan = this.options.intent === 'plan';
     const serviceTier = session.serviceTier && session.serviceTier !== 'standard' ? session.serviceTier : null;
     const serviceTierForTurn = serviceTier ?? 'default';
     const selected = this.options.invocation?.kind === 'skill' ? [this.options.invocation.skill] : this.options.skills ?? [];
@@ -333,7 +338,10 @@ class CodexRun {
     if (this.abortRequested) throw abortError();
     const request = this.conn.request('turn/start', {
       threadId: this.threadId, input, cwd: session.worktreePath,
-      model: session.model, ...(!this.omitEffort ? { effort: session.effort } : {}), serviceTier, serviceTierForTurn, approvalPolicy: policy.approvalPolicy, approvalsReviewer: policy.approvalsReviewer, sandboxPolicy: policy.sandboxPolicy,
+      model: session.model, ...(!this.omitEffort ? { effort: session.effort } : {}), serviceTier, serviceTierForTurn,
+      approvalPolicy: readOnlyPlan ? 'on-request' : policy.approvalPolicy,
+      approvalsReviewer: readOnlyPlan ? 'user' : policy.approvalsReviewer,
+      sandboxPolicy: readOnlyPlan ? { type: 'readOnly' } : policy.sandboxPolicy,
     }, this.ctx.timeouts.turnStartMs);
     markDispatched(this.options);
     request.then((result) => {
@@ -386,7 +394,11 @@ class CodexRun {
       case 'turn/plan/updated': {
         if (typeof params.turnId !== 'string' || (this.turnId && params.turnId !== this.turnId)) break;
         const steps = nativePlanSteps(params.plan, 'step');
-        if (steps) this.emit({ type: 'task.plan', planId: 'codex-plan', replace: true, steps, ...(typeof params.explanation === 'string' ? { explanation: params.explanation.slice(0, 4000) } : {}) });
+        if (steps) {
+          const explanation = typeof params.explanation === 'string' ? params.explanation.slice(0, 4000) : '';
+          if (this.options.intent === 'plan') this.emit({ type: 'session.plan', providerPlanId: 'codex-plan', explanation, steps: sessionPlanSteps(steps) });
+          else this.emit({ type: 'task.plan', planId: 'codex-plan', replace: true, steps, ...(explanation ? { explanation } : {}) });
+        }
         break;
       }
       case 'turn/started': {
@@ -533,7 +545,7 @@ class CodexRun {
     }
   }
 
-  private async onServerRequest(method: string, raw: unknown): Promise<unknown> {
+  private async onServerRequest(method: string, raw: unknown, requestId: number | string): Promise<unknown> {
     const params = isRecord(raw) ? raw : {};
     switch (method) {
       case 'item/commandExecution/requestApproval': {
@@ -557,6 +569,24 @@ class CodexRun {
       case 'mcpServer/elicitation/request':
         this.info(`An MCP server (${String(params.serverName ?? 'unknown')}) asked for input; Mingle declined because it has no input surface for that.`);
         return { action: 'decline', content: null };
+      case 'item/tool/requestUserInput': {
+        const questions = Array.isArray(params.questions) ? params.questions : [];
+        const fields: NativeUserInputRequest['questions'] = questions.flatMap((value, index) => {
+          if (!isRecord(value) || typeof value.id !== 'string' || typeof value.question !== 'string' || !Array.isArray(value.options)) return [];
+          const options = value.options.flatMap((option) => isRecord(option) && typeof option.label === 'string'
+            ? [{ label: option.label, ...(typeof option.description === 'string' ? { description: option.description } : {}) }]
+            : []);
+          if (options.length !== value.options.length) return [];
+          return [{ id: value.id, ...(typeof value.header === 'string' ? { header: value.header } : {}), question: value.question, options,
+            multiSelect: value.multiSelect === true, allowOther: value.isOther === true, secret: false }];
+        });
+        if (!this.options.requestUserInput || !fields.length || fields.length !== questions.length) {
+          this.info('Codex requested interactive input that Mingle could not validate or display; the request was rejected.');
+          throw new RpcError(RPC_METHOD_NOT_FOUND, 'Mingle cannot handle this Codex user-input request.');
+        }
+        const answers = await this.options.requestUserInput({ nativeRequestId: String(requestId), tool: 'requestUserInput', questions: fields });
+        return { answers: Object.fromEntries(Object.entries(answers ?? {}).map(([id, values]) => [id, { answers: values }])) };
+      }
       case 'item/tool/call':
         this.info(`Codex requested the client-side tool "${String(params.tool ?? 'unknown')}", which Mingle does not provide.`);
         return { contentItems: [{ type: 'inputText', text: 'Mingle does not provide client-side tools.' }], success: false };

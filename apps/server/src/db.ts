@@ -248,9 +248,20 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
       native_request_id TEXT NOT NULL, status TEXT NOT NULL CHECK (status IN ('pending', 'answered', 'cancelled')),
       data TEXT NOT NULL, created_at TEXT NOT NULL, resolved_at TEXT,
      UNIQUE(run_id, native_request_id)
-    );
-    CREATE INDEX user_questions_session ON user_questions(session_id, created_at DESC);
-    CREATE INDEX user_questions_pending ON user_questions(status, session_id);`,
+     );
+     CREATE INDEX user_questions_session ON user_questions(session_id, created_at DESC);
+     CREATE INDEX user_questions_pending ON user_questions(status, session_id);`,
+   // Migration 17 persists group planning intent and execution identity. Accept a v16 database
+   // created by the standalone planning sequence, where these columns may already exist.
+   (db) => {
+    const columns = db.prepare('PRAGMA table_info(group_requests)').all() as { name: string }[];
+    if (!columns.some((column) => column.name === 'intent')) {
+      db.exec("ALTER TABLE group_requests ADD COLUMN intent TEXT NOT NULL DEFAULT 'normal' CHECK (intent IN ('normal', 'plan'));");
+    }
+     if (!columns.some((column) => column.name === 'execution_plan_id')) {
+       db.exec('ALTER TABLE group_requests ADD COLUMN execution_plan_id TEXT;');
+     }
+   },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

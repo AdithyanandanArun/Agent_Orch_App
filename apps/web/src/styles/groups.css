@@ -57,6 +57,7 @@
 .speaker strong { font-weight: 650; }
 .speaker__to { display: inline-flex; align-items: center; gap: 4px; }
 .msg__to { margin-top: 5px; color: var(--fg-2); font-size: var(--text-xs); }
+.group-plan-intent { color: var(--accent); }
 .deliveries { display: flex; flex-wrap: wrap; gap: 5px; margin: 8px 0 0; padding: 0; list-style: none; }
 .delivery { display: inline-flex; align-items: center; gap: 5px; padding: 3px 7px; border: 1px solid var(--line); border-radius: 999px; color: var(--fg-2); background: var(--bg-panel); font-size: var(--text-2xs); }
 .delivery i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }

@@ -21,7 +21,7 @@ export const RPC_INTERNAL_ERROR = -32603;
 export interface ConnectionHooks {
   onNotification(method: string, params: unknown): void;
   /** Return the result for a server-initiated request, or throw RpcError to answer with an error. */
-  onRequest(method: string, params: unknown): Promise<unknown>;
+  onRequest(method: string, params: unknown, requestId: number | string): Promise<unknown>;
   /** Builds the message used to reject in-flight requests when the process goes away. */
   formatClose(info: CloseInfo): string;
   onIssue?(message: string): void;
@@ -157,7 +157,7 @@ export class JsonRpcConnection {
   private async answerRequest(id: number | string, method: string, params: unknown): Promise<void> {
     let response: Record<string, unknown>;
     try {
-      response = { id, result: (await this.hooks.onRequest(method, params)) ?? {} };
+      response = { id, result: (await this.hooks.onRequest(method, params, id)) ?? {} };
     } catch (error) {
       response = error instanceof RpcError
         ? { id, error: { code: error.code, message: error.message } }

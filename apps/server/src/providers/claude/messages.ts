@@ -2,7 +2,7 @@ import { nativePlanSteps } from '../plans.js';
 import type { ProviderTaskPlan, AdapterEvent, Policy, ToolActivity, ToolCategory } from '@mingle/contracts';
 import { ProviderError, describeValue, isRecord, truncate } from '../common.js';
 
-export type ClaudeSdkPermissionMode = 'default' | 'acceptEdits' | 'auto' | 'bypassPermissions';
+export type ClaudeSdkPermissionMode = 'default' | 'acceptEdits' | 'auto' | 'bypassPermissions' | 'plan';
 
 /** Mingle policy names map directly to Claude Code permission modes. */
 export function claudePermissionMode(policy: Policy): ClaudeSdkPermissionMode {

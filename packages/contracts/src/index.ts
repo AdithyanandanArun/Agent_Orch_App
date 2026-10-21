@@ -218,6 +218,7 @@ export interface RunOptions {
   teamMcp?: import('./groups').TeamMcpConnection; providerTaskState?: import('./project-context').ProviderTaskPlan['steps']; session: Session; prompt: string; skills?: ProviderSkill[]; browserMcp?: import('./browser').BrowserMcpConnection; signal: AbortSignal; onEvent: (event: AdapterEvent) => void; requestApproval: (request: { tool: string; description: string; input: Record<string, unknown> }) => Promise<boolean>; requestUserInput?: (request: import('./planning').NativeUserInputRequest) => Promise<import('./planning').UserInputAnswers | null>; settings: AppSettings }
 export type AdapterEvent =
   | ({ type: 'task.plan' } & import('./project-context').ProviderTaskPlan)
+  | ({ type: 'session.plan' } & import('./planning').SessionPlanProposal)
   | { type: 'session'; providerSessionId: string }
   | { type: 'text'; text: string }
   | { type: 'tool'; name: string; content: string }

@@ -3,7 +3,7 @@ import {
   nativeActionCommands, nativeActionSkills,
 } from '@mingle/contracts';
 import type {
-  AddGroupAgent, AgentConfiguration, AutonomyConfig, ConversationGroup, CreateGroup, GroupAssignment, GroupDelivery, GroupMember, GroupMessage, GroupMode, MessageContextRef,
+  AddGroupAgent, AgentConfiguration, AutonomyConfig, ConversationGroup, CreateGroup, GroupAssignment, GroupDelivery, GroupMember, GroupMessage, GroupMode, MessageContextRef, SessionPlan,
   GroupMilestone, GroupRecoveryPolicy, GroupRecoveryState, ProviderFailure, RecoveryActionRequest, RecoveryActionResult, RecoveryCheckpoint,
   GroupRunContext, GroupSnapshot, ProviderInfo, Session, Task, TeamArtifactSchema, TeamAssignSchema, TeamMessageSchema, TeamStatusSchema, UpdateGroupSchema,
 } from '@mingle/contracts';
@@ -33,7 +33,7 @@ export type GroupLog = (level: 'info' | 'warn' | 'error', message: string, detai
 export interface GroupRuntime {
   isActive(sessionId: string): boolean;
   isRunLive?(sessionId: string, runId: string): boolean;
-  start(sessionId: string, content: string, options?: { taskId?: string; groupDeliveryId?: string; userMessage?: { content: string; kind?: string }; attachmentOwnerKind?: 'message' | 'group_message'; attachmentOwnerId?: string; invocation?: import('@mingle/contracts').NativeInvocation; context?: string; contextRefs?: MessageContextRef[] }): string;
+  start(sessionId: string, content: string, options?: { taskId?: string; groupDeliveryId?: string; userMessage?: { content: string; kind?: string }; attachmentOwnerKind?: 'message' | 'group_message'; attachmentOwnerId?: string; invocation?: import('@mingle/contracts').NativeInvocation; context?: string; contextRefs?: MessageContextRef[]; intent?: 'normal' | 'plan'; executionPlanId?: string }): string;
   interrupt(sessionId: string): boolean;
   withSessionsStopped?<T>(sessionIds: string[], action: () => T): Promise<T>;
 }
@@ -414,12 +414,15 @@ export class GroupService {
 
   // ---------------------------------------------------------------- user messages
 
-  async send(groupId: string, input: { content: string; recipients?: string[]; clientMessageId?: string; attachmentIds?: string[]; contextRefs?: MessageContextRef[]; invocation?: NativeInvocationInput }): Promise<GroupSnapshot> {
+  async send(groupId: string, input: { content: string; recipients?: string[]; intent?: 'normal' | 'plan'; clientMessageId?: string; attachmentIds?: string[]; contextRefs?: MessageContextRef[]; invocation?: NativeInvocationInput; executionPlanId?: string }): Promise<GroupSnapshot> {
     this.assertOpen();
     let group = this.requireGroup(groupId);
     if (input.clientMessageId && this.repo.messageByClientId(group.id, input.clientMessageId)) return this.snapshot(group);
     let members = this.repo.members(group.id, false);
     const content = clean(input.content, 100_000);
+    const intent = input.intent ?? 'normal';
+    if (intent === 'plan' && input.invocation) throw unprocessable('Native read-only plan mode accepts a regular planning prompt, not provider commands or skills.');
+    if (intent === 'plan' && /^\s*(?:@[A-Za-z0-9_-]+(?:\s*,\s*|\s+))*[/$][A-Za-z0-9]/.test(content)) throw unprocessable('Native read-only plan mode accepts a regular planning prompt, not provider commands or skills.');
     let invocation: GroupInvocation | undefined;
     let requested = input.recipients;
     let sendContent = content;
@@ -470,9 +473,23 @@ export class GroupService {
         throw conflict('The selected group agent or its settings changed while validating message context. Refresh and send again.');
       }
     }
-    const route = invocation
+    let route = invocation
       ? { recipients: [members.find((m) => m.id === invocation!.memberId)!], runners: [members.find((m) => m.id === invocation!.memberId)!], planner: members.find((m) => m.id === invocation!.memberId)! }
       : this.route(group, members, requested, sendContent);
+    if (intent === 'plan') {
+      if (route.recipients.length !== 1) throw unprocessable('Native plan mode must target exactly one group agent. Choose one recipient or mention one @handle.');
+      const target = route.recipients[0]!;
+      route = { recipients: [target], runners: [target], planner: target };
+    }
+    let executionPlan: SessionPlan | undefined;
+    if (input.executionPlanId) {
+      executionPlan = this.store.getSessionPlan(input.executionPlanId);
+      const target = route.recipients.length === 1 ? this.store.getSession(route.recipients[0]!.sessionId) : undefined;
+      if (intent !== 'normal' || invocation || input.attachmentIds?.length || !executionPlan || executionPlan.sessionId !== target?.id
+        || executionPlan.status !== 'approved' || executionPlan.approvedRevision !== executionPlan.revision) {
+        throw conflict('The approved plan or its group agent changed. Review the plan again before execution.');
+      }
+    }
     if (attachmentRows.some((row) => row.kind === 'image')) {
       for (const member of route.recipients) {
         const recipient = this.store.getSession(member.sessionId);
@@ -489,7 +506,16 @@ export class GroupService {
       const message = this.repo.insertMessage({ groupId: group.id, senderMemberId: null, recipients: route.recipients.map((m) => m.id), kind: 'user', content: sendContent, clientMessageId: input.clientMessageId ?? null, invocation, contextRefs: input.contextRefs });
       if (input.attachmentIds?.length) this.attachments?.claim({ kind: 'group', id: groupId }, input.attachmentIds, 'group_message', message.id);
       const requestId = newRequestId();
-      this.repo.insertRequest({ id: requestId, groupId: group.id, messageId: message.id, plannerMemberId: route.planner.id });
+      this.repo.insertRequest({ id: requestId, groupId: group.id, messageId: message.id, plannerMemberId: route.planner.id, intent, executionPlanId: executionPlan?.id });
+      if (executionPlan) {
+        const current = this.store.getSessionPlan(executionPlan.id);
+        if (!current || current.status !== 'approved' || current.approvedRevision !== current.revision || current.sessionId !== executionPlan.sessionId) {
+          throw conflict('The approved plan changed before it could be queued. Review it again before execution.');
+        }
+        const executing = { ...current, status: 'executing' as const, executionRunId: null, updatedAt: nowIso() };
+        this.store.updateSessionPlan(executing);
+        this.store.recordEvent({ projectId: group.projectId, sessionId: current.sessionId, type: 'session.plan.execution.queued', summary: `Approved plan queued (revision ${current.revision})`, payload: { planId: current.id, revision: current.revision, requestId } });
+      }
       this.repo.updateMember(route.planner.id, {});
       for (const member of route.runners) this.repo.insertDelivery({ id: deliveryId(), groupId: group.id, requestId, messageId: message.id, memberId: member.id, kind: 'request', hop: 0 });
       this.repo.touchGroup(group.id);
@@ -499,6 +525,21 @@ export class GroupService {
     });
     this.schedule(group.id);
     return this.get(group.id);
+  }
+
+  async executePlan(sessionId: string, planId: string, prompt: string): Promise<{ deliveryId: string; runId: string | null }> {
+    this.assertOpen();
+    const plan = this.store.getSessionPlan(planId);
+    const member = this.repo.activeMemberOfSession(sessionId);
+    if (!plan || plan.sessionId !== sessionId || !member) throw conflict('This plan is no longer attached to an active group agent.');
+    const snapshot = await this.send(member.groupId, {
+      content: prompt, recipients: [member.id], executionPlanId: plan.id,
+      clientMessageId: `plan-execution-${plan.id}-${plan.revision}`,
+    });
+    const request = snapshot.requests.find((row) => row.executionPlanId === plan.id);
+    const delivery = request && snapshot.deliveries.find((row) => row.requestId === request.id && row.kind === 'request' && row.memberId === member.id);
+    if (!delivery) throw conflict('The approved plan request was saved but its group delivery is unavailable. Refresh the conversation.');
+    return { deliveryId: delivery.id, runId: delivery.runId };
   }
 
   /** Explicit human task run preserves the existing task and follows the durable group queue. */
@@ -2069,7 +2110,9 @@ export class GroupService {
         return false;
       }
     }
-    const text = this.deliveryText(group, member, d, request.plannerMemberId);
+    const text = request.intent === 'plan' && d.kind === 'request'
+      ? this.repo.getMessage(d.messageId)?.content ?? this.deliveryText(group, member, d, request.plannerMemberId)
+      : this.deliveryText(group, member, d, request.plannerMemberId);
     const reserved = this.store.tx(() => {
       if (!this.repo.transitionDelivery(d.id, 'queued', 'running', { runId: null, startedAt: nowIso(), attemptsDelta: 1 })) return false;
       this.repo.updateRequest(request.id, { status: 'active', turnsDelta: 1 });
@@ -2092,7 +2135,8 @@ export class GroupService {
         return this.store.getMessage(messageId);
       });
       runId = this.runtime.start(session.id, text, { groupDeliveryId: d.id, taskId: assignment?.taskId ?? d.taskId ?? undefined,
-        userMessage: { content: text, kind: 'group-delivery' }, attachmentOwnerKind: 'group_message', attachmentOwnerId, invocation: nativeInvocation, context, contextRefs: contextSourceMessage?.contextRefs });
+        userMessage: { content: text, kind: 'group-delivery' }, attachmentOwnerKind: 'group_message', attachmentOwnerId, invocation: nativeInvocation, context, contextRefs: contextSourceMessage?.contextRefs,
+        intent: request.intent === 'plan' && d.kind === 'request' ? 'plan' : 'normal', executionPlanId: d.kind === 'request' ? request.executionPlanId : undefined });
     } catch (error) {
       this.reserved.delete(session.id);
       const message = clean(errorMessage(error), 500);
@@ -2106,6 +2150,13 @@ export class GroupService {
         }
         this.repo.transitionDelivery(d.id, 'running', 'failed', { error: message, retryable: false, attemptsDelta: 0 });
         this.repo.updateRequest(request.id, { status: 'paused', turnsDelta: -1 });
+        if (request.executionPlanId) {
+          const plan = this.store.getSessionPlan(request.executionPlanId);
+          if (plan?.status === 'executing' && !plan.executionRunId) {
+            this.store.updateSessionPlan({ ...plan, status: 'failed', updatedAt: nowIso() });
+            this.store.recordEvent({ projectId: group.projectId, sessionId: plan.sessionId, type: 'session.plan.execution.failed', summary: `Approved plan execution could not start (revision ${plan.revision})`, payload: { planId: plan.id, revision: plan.revision, error: message } });
+          }
+        }
         this.repo.updateMember(member.id, { held: true });
         const reason = clean(`Could not start @${member.handle}: ${message}. Other group members may continue; recover this member explicitly.`, 1000);
         this.repo.updateGroup(group.id, { recoveryState: { status: 'degraded', reason, activeRequestId: request.id, updatedAt: nowIso() } });
@@ -2257,6 +2308,13 @@ export class GroupService {
     const status = unresolvedFailure || pendingCheckpoint ? 'paused'
       : open.length || retry ? (hold || group?.paused || retry ? 'paused' : 'active') : 'completed';
     if (status !== request.status) this.repo.updateRequest(id, { status });
+    if (status === 'completed' && request.executionPlanId) {
+      const plan = this.store.getSessionPlan(request.executionPlanId);
+      if (plan?.status === 'executing' && !plan.executionRunId) {
+        this.store.updateSessionPlan({ ...plan, status: 'interrupted', updatedAt: nowIso() });
+        this.store.recordEvent({ projectId: group?.projectId ?? null, sessionId: plan.sessionId, type: 'session.plan.execution.interrupted', summary: `Approved plan delivery ended before a run started (revision ${plan.revision})`, payload: { planId: plan.id, revision: plan.revision, requestId: request.id } });
+      }
+    }
   }
 
   // ---------------------------------------------------------------- team tools

@@ -52,9 +52,10 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
   const pickerId = useId();
   const pendingId = useRef<{ key: string; id: string } | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
+  const [planningMode, setPlanningMode] = useState(false);
   const [attachments, setAttachments] = useState<AttachmentRef[]>([]);
   const [filePickerOpen, setFilePickerOpen] = useState(false);
-  useEffect(() => { setAttachments([]); setCompactStatus(null); }, [snapshot.group.id]);
+  useEffect(() => { setAttachments([]); setCompactStatus(null); setPlanningMode(false); }, [snapshot.group.id]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -127,7 +128,8 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
   const blocker = connection !== 'online' ? 'Disconnected from the Mingle server — reconnect to send.'
     : recipients.length === 0 ? 'No agent is set to receive unaddressed messages. Mention an agent or choose a recipient.'
       : recipients.length > MAX_RECIPIENTS ? `A message can address at most ${MAX_RECIPIENTS} agents.`
-        : unavailable;
+        : planningMode && recipients.length !== 1 ? 'Native plan mode must target exactly one agent. Choose one recipient or mention one @handle.'
+          : unavailable;
   const problem = staleSelectionError ?? mentions.problems[0]?.message ?? null;
   const sendDisabled = sending || (attachmentDraft.busy && !compactCandidate) || empty || (!local && !compactCandidate && (Boolean(blocker) || Boolean(problem)));
 
@@ -336,6 +338,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
     // Prose may contain paths or shell variables; only leading syntax, optionally after mentions, is an action.
     const actionToken = /^\s*(?:@[A-Za-z0-9_-]+(?:\s*,\s*|\s+))*([/$])([A-Za-z0-9][A-Za-z0-9_.:-]*)(?:\s|$)/.exec(content);
     const nativeIntent = Boolean(actionToken);
+    if (planningMode && nativeIntent) { setError('Native plan mode accepts a regular planning prompt, not provider commands or skills.'); return; }
     let invocation: import('@mingle/contracts').NativeInvocationInput | undefined;
     if (actionMatch && actionTargetId && nativeCatalog) {
       const symbol = actionMatch[2];
@@ -353,19 +356,20 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
       if (!actionTargetId) { setError('Address a provider command or skill to one agent, for example @claude1 /review or @codex1 $skill-name.'); return; }
       if (!invocation || invocation.name !== actionName || (kind === '$' ? invocation.kind !== 'skill' : invocation.kind !== 'command')) { setError(nativeCatalogError ?? 'That action is unavailable or ambiguous. Refresh the menu and choose the listed action.'); return; }
     }
-    const key = `${targets.length ? 'direct' : 'default'}\u0000${content}\u0000${ids.join(',')}\u0000${attachments.map((item) => item.id).join(',')}\u0000${JSON.stringify(contextRefs)}\u0000${invocation ? `${invocation.kind}:${invocation.id}:${invocation.arguments}` : ''}`;
+    const key = `${planningMode ? 'plan' : 'normal'}\u0000${targets.length ? 'direct' : 'default'}\u0000${content}\u0000${ids.join(',')}\u0000${attachments.map((item) => item.id).join(',')}\u0000${JSON.stringify(contextRefs)}\u0000${invocation ? `${invocation.kind}:${invocation.id}:${invocation.arguments}` : ''}`;
     const clientMessageId = pendingId.current?.key === key ? pendingId.current.id : crypto.randomUUID();
     pendingId.current = { key, id: clientMessageId };
     setSending(true);
     setError(null);
     try {
       const submittedContextRefs = contextRefs;
-      const updated = await api.sendGroupMessage(snapshot.group.id, { content, ...(targets.length ? { recipients: ids } : {}), ...(attachments.length ? { attachmentIds: attachments.map((item) => item.id) } : {}), ...(submittedContextRefs.length ? { contextRefs: submittedContextRefs } : {}), ...(invocation ? { invocation } : {}), clientMessageId });
+      const updated = await api.sendGroupMessage(snapshot.group.id, { content, intent: planningMode ? 'plan' : 'normal', ...(targets.length ? { recipients: ids } : {}), ...(attachments.length ? { attachmentIds: attachments.map((item) => item.id) } : {}), ...(submittedContextRefs.length ? { contextRefs: submittedContextRefs } : {}), ...(invocation ? { invocation } : {}), clientMessageId });
       const store = useMingle.getState();
       store.applyGroup(updated);
       if (store.drafts[anchor.id] === draft) setDraft('');
       if (store.contextDrafts[anchor.id] === submittedContextRefs) store.setContextDraft(anchor.id, []);
       setPicked([]);
+      setPlanningMode(false);
       attachmentDraft.sent(attachments.map((item) => item.id));
       pendingId.current = null;
       await store.refreshNow();
@@ -393,7 +397,7 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
     }).catch((cause) => setCompactStatus({ status: 'failed', handle, message: `Compaction cancellation could not be confirmed: ${errorMessage(cause)}. Its outcome may be unknown.` })).finally(() => { void useMingle.getState().refreshNow(); });
   };
   const defaultLabel = snapshot.group.mode === 'cowork' ? 'default: all peers' : 'default: orchestrator';
-  const note = error ?? problem ?? blocker;
+  const note = error ?? problem ?? blocker ?? (planningMode ? 'Native plan mode is read-only. The plan will appear for review before execution.' : null);
   const noteIsError = Boolean(error ?? problem);
 
   return (
@@ -474,6 +478,11 @@ export function GroupComposer({ snapshot, anchor, onOpenMembers, footer }: { sna
           {actionTargetId && (nativeCatalog || nativeCatalogError) ? <> <button type="button" className="link-btn" onMouseDown={(event) => event.preventDefault()} onClick={() => { setCatalogRevision((value) => value + 1); ref.current?.focus(); }}>Refresh</button></> : null}
         </div> : null}
         <div className="composer__bar">
+          <div className="composer__controls">
+            <button type="button" className={cx('composer__plan-toggle', planningMode && 'is-active')} aria-pressed={planningMode} disabled={sending} title="Ask one group agent for a native read-only plan" onClick={() => { setPlanningMode((value) => !value); setSelectedNativeAction(null); setError(null); }}>
+              {planningMode ? 'Planning on' : 'Plan'}
+            </button>
+          </div>
           <div className="composer__send">
             <button type="button" className="composer__context-button" onClick={() => setFilePickerOpen(true)} disabled={sending || connection !== 'online'} aria-label="Add workspace file context" title="Add a file from this session worktree"><FilePlus2 size={15} /></button>
             <AttachmentDrafts scope={{ kind: 'group', id: snapshot.group.id }} busy={attachmentDraft.busy} onFiles={attachmentDraft.addFiles} disabled={sending || Boolean(blocker)} />

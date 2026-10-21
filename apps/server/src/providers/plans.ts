@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { ProviderTaskPlan } from '@mingle/contracts';
+import type { ProviderTaskPlan, SessionPlanProposal } from '@mingle/contracts';
 import { isRecord } from './common.js';
 
 /** Title identities survive status updates and reordering; duplicate titles retain occurrence identities. */
@@ -19,4 +19,17 @@ export function nativePlanSteps(raw: unknown, titleKey: string): ProviderTaskPla
     steps.push({ id: `${digest}:${occurrence}`, title, ...(fullTitle.length > 200 ? { description: fullTitle.slice(0, 4000) } : {}), status: status as ProviderTaskPlan['steps'][number]['status'] });
   }
   return steps;
+}
+
+/** Converts provider-native plan updates into editable Mingle steps without inheriting execution status. */
+export function sessionPlanSteps(steps: ProviderTaskPlan['steps']): SessionPlanProposal['steps'] {
+  return steps.map((step) => ({
+    id: step.id,
+    providerId: step.id,
+    title: step.title,
+    description: step.description ?? '',
+    acceptanceCriteria: [],
+    dependsOn: step.dependsOn ?? [],
+    status: 'pending',
+  }));
 }

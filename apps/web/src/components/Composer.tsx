@@ -29,6 +29,7 @@ export function Composer({ session }: { session: Session }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const compactController = useRef<{ controller: AbortController; targetSessionId: string; operationId: string } | null>(null);
   const [sending, setSending] = useState(false);
+  const [planningMode, setPlanningMode] = useState(false);
   const [compactStatus, setCompactStatus] = useState<{ status: 'running' | 'completed' | 'unsupported' | 'failed'; message?: string } | null>(null);
   const [updating, setUpdating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -79,7 +80,7 @@ export function Composer({ session }: { session: Session }) {
     el.style.height = '0px';
     el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
   }, [draft, session.id]);
-  useEffect(() => { setError(null); setCompactStatus(null); }, [session.id]);
+  useEffect(() => { setError(null); setCompactStatus(null); setPlanningMode(false); }, [session.id]);
   useEffect(() => { setUsageOpen(false); }, [session.id, session.provider, session.model]);
   const closeUsage = useCallback(() => {
     setUsageOpen(false);
@@ -102,7 +103,7 @@ export function Composer({ session }: { session: Session }) {
   const running = session.status === 'running' || session.status === 'waiting';
   const blocker =
     connection !== 'online' ? 'Disconnected from the Mingle server — reconnect to send.'
-      : running ? (session.status === 'waiting' ? 'Waiting for your approval above before the run can continue.' : 'This session is running. Wait for it to finish or interrupt it.')
+      : running ? (session.status === 'waiting' ? 'Waiting for your answer or approval above before the run can continue.' : 'This session is running. Wait for it to finish or interrupt it.')
         : provider && !provider.available ? `${PROVIDER_NAME[session.provider]} needs setup before you can send a message.`
           : null;
   const empty = draft.trim().length === 0 && attachments.length === 0 && attachmentDraft.uploads.length === 0;
@@ -200,14 +201,16 @@ export function Composer({ session }: { session: Session }) {
       if (session.provider === 'claude' && messageSkills.length > 1) {
         throw new Error('Claude accepts one selected skill per message. Remove the extra skill reference.');
       }
+      if (planningMode && (messageSkills.length || /^\s*\//.test(draft))) throw new Error('Native plan mode accepts a regular planning prompt, not provider commands or skills.');
       const submittedDraft = draft;
       const submittedAttachmentIds = attachments.map((item) => item.id);
       const submittedContextRefs = contextRefs;
-      await api.sendMessage(session.id, draft.trim(), messageSkills, submittedAttachmentIds, submittedContextRefs);
+      await api.sendMessage(session.id, draft.trim(), messageSkills, submittedAttachmentIds, submittedContextRefs, planningMode ? 'plan' : 'normal');
       if (useMingle.getState().drafts[session.id] === submittedDraft) useMingle.getState().setDraft(session.id, '');
       if (useMingle.getState().contextDrafts[session.id] === submittedContextRefs) useMingle.getState().setContextDraft(session.id, []);
       attachmentDraft.sent(submittedAttachmentIds);
       setSelectedSkills([]);
+      setPlanningMode(false);
       await useMingle.getState().refreshNow();
     } catch (e) {
       setError(errorMessage(e));
@@ -396,7 +399,7 @@ export function Composer({ session }: { session: Session }) {
           role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded={Boolean(suggestion && suggestions.length)}
           aria-controls={suggestion && suggestions.length ? pickerId : undefined}
           aria-activedescendant={suggestion && suggestions.length ? `${pickerId}-option-${activeSuggestion}` : undefined}
-          placeholder="Ask anything, or describe a task…"
+          placeholder={planningMode ? 'Describe what to plan…' : 'Ask anything, or describe a task…'}
           onChange={(e) => {
             const nextDraft = e.target.value;
             caret.current = e.target.selectionStart ?? nextDraft.length;
@@ -441,6 +444,9 @@ export function Composer({ session }: { session: Session }) {
         {focused && trigger.startsWith('$') && !suggestions.length && !catalogError ? <div className="composer-picker-empty" role="status">{!catalog ? 'Loading skills…' : catalog.skills.some((item) => item.enabled) ? 'No matching skills.' : 'No skills are available for this provider and session.'}</div> : null}
         <div className="composer__bar">
           <div className="composer__controls" aria-busy={updating}>
+            <button type="button" className={cx('composer__plan-toggle', planningMode && 'is-active')} aria-pressed={planningMode} disabled={disabled} title="Ask the provider for a native read-only plan" onClick={() => { setPlanningMode((value) => !value); setSelectedSkills([]); setError(null); }}>
+              {planningMode ? 'Planning on' : 'Plan'}
+            </button>
             <SelectMenu triggerRef={modelControl} openRequest={modelOpenRequest} className="composer__select composer__select--model" label="Model"
               value={JSON.stringify([session.provider, selectedModelId])} disabled={disabled || modelOptions.length === 0}
               options={modelOptions} placement="top"

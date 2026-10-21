@@ -1,6 +1,6 @@
 import type { AdapterEvent, AgentAdapter, ContextCompactionResult, Policy, RunOptions, ToolActivity, ToolCategory } from '@mingle/contracts';
 import { ProviderError, abortError, errorMessage, isRecord, markDispatched, markNotDispatched, redactSecrets, truncate } from '../common.js';
-import { nativePlanSteps } from '../plans.js';
+import { nativePlanSteps, sessionPlanSteps } from '../plans.js';
 import { AcpRpcError, ACP_INVALID_PARAMS, ACP_METHOD_NOT_FOUND } from './rpc.js';
 import {
   NATIVE_EFFORT, NATIVE_VARIANT_DEFAULT, OPENCODE_DEFAULT_MODEL, OPENCODE_POLICIES, choices, configuration, currentValue, nativeEfforts, object, parseNativeCommands,
@@ -27,9 +27,14 @@ const json = (value: unknown, max = 20_000): string => { try { return truncate(t
  * Supervised, and file edits are additionally allowed in Auto-accept edits. Interactive question and plan-mode tools are denied
  * because ACP has no channel for answering them. Full access allows everything.
  */
-export function permissionRules(policy: Policy, relay: { browser: boolean; team: boolean }): Record<string, unknown> | null {
+export function permissionRules(policy: Policy, relay: { browser: boolean; team: boolean }, intent: RunOptions['intent'] = 'normal'): Record<string, unknown> | null {
   if (!OPENCODE_POLICIES.includes(policy)) return null;
   const denied = { question: 'deny', plan_enter: 'deny', plan_exit: 'deny' };
+  if (intent === 'plan') return {
+    '*': 'deny',
+    read: { '*': 'allow', '*.env': 'deny', '*.env.*': 'deny', '*.env.example': 'allow' },
+    glob: 'allow', grep: 'allow', list: 'allow', lsp: 'allow', todowrite: 'allow', ...denied,
+  };
   const rules: Record<string, unknown> = policy === 'full-access'
     ? { '*': 'allow', ...denied }
     : {
@@ -87,6 +92,7 @@ class OpencodeRun {
   private phase: 'setup' | 'prompt' | 'compact' | 'done' = 'setup';
   private selected: unknown;
   private expectedModel: string | null = null;
+  private expectedModeId: string | null = null;
   /** Native variant that was explicitly applied (`default` for Native default); null when the model has no effort selector. */
   private expectedEffort: string | null = null;
   private commands: ReturnType<typeof parseNativeCommands> = [];
@@ -130,7 +136,7 @@ class OpencodeRun {
     this.options.signal.addEventListener('abort', this.onAbort, { once: true });
     try {
       if (this.signal.aborted) throw abortError();
-      const rules = permissionRules(session.policy, { browser: Boolean(browserMcp), team: Boolean(teamMcp) });
+      const rules = permissionRules(session.policy, { browser: Boolean(browserMcp), team: Boolean(teamMcp) }, this.options.intent);
       const childEnv = opencodeEnvironment(this.env, rules ?? undefined);
       // The generated server password must never reach persisted tool output, even if a tool prints its environment.
       this.secrets.push(...environmentSecrets(childEnv));
@@ -170,6 +176,7 @@ class OpencodeRun {
       if (this.signal.aborted) throw abortError();
       this.emit({ type: 'session', providerSessionId: this.sessionId! });
       await this.applySelection();
+      if (this.options.intent === 'plan') await this.setPlanMode();
       if (session.model === OPENCODE_DEFAULT_MODEL) this.info(`OpenCode selected its native default model: ${this.expectedModel}.`);
       const mode = currentValue(this.selected, 'mode');
       if (mode && mode !== 'build') this.info(`OpenCode is using its "${mode}" agent mode from your OpenCode configuration.`);
@@ -264,6 +271,22 @@ class OpencodeRun {
     if (currentValue(this.selected, 'model') !== this.expectedModel) throw new ProviderError('OpenCode changed the selected model while applying configuration. No prompt was sent.', { code: 'model_substitution' });
   }
 
+  private async setPlanMode(): Promise<void> {
+    const modes = object(object(this.selected).modes);
+    const available = Array.isArray(modes.availableModes) ? modes.availableModes.map(object) : [];
+    if (!available.some((mode) => mode.id === 'plan')) {
+      throw new ProviderError('This OpenCode ACP runtime did not advertise its native read-only plan mode. No prompt was sent.', { code: 'unsupported_plan_mode' });
+    }
+    this.expectedModeId = 'plan';
+    if (modes.currentModeId !== 'plan') {
+      const response = await this.race(this.runtime!.conn.request('session/set_mode', { sessionId: this.sessionId, modeId: 'plan' }, SESSION_TIMEOUT));
+      const returned = object(response).currentModeId;
+      if (typeof returned === 'string' && returned !== 'plan') throw new ProviderError('OpenCode did not confirm native read-only plan mode. No prompt was sent.', { code: 'unsupported_plan_mode' });
+      this.selected = { ...object(this.selected), modes: { ...modes, currentModeId: 'plan' } };
+    }
+    if (this.signal.aborted) throw abortError();
+  }
+
   private announceSlashCommand(): void {
     const prompt = this.options.invocation ? invocationText(this.options.invocation) : this.options.prompt;
     const match = /^\/([A-Za-z0-9][A-Za-z0-9_.:-]*)(?:\s|$)/.exec(prompt.trimStart());
@@ -283,7 +306,12 @@ class OpencodeRun {
   }
 
   private async onRequest(method: string, params: unknown): Promise<unknown> {
-    if (method !== 'session/request_permission') throw new AcpRpcError(ACP_METHOD_NOT_FOUND, `Mingle does not provide ACP client method ${method}.`);
+    if (method !== 'session/request_permission') {
+      if (method === 'elicitation/create' || method === 'session/request_input' || method === 'session/request_user_input') {
+        this.info('This OpenCode ACP runtime requested interactive input through a method Mingle cannot verify or answer. The request was declined; no answer was sent.');
+      }
+      throw new AcpRpcError(ACP_METHOD_NOT_FOUND, `Mingle does not provide ACP client method ${method}.`);
+    }
     const data = object(params);
     const call = object(data.toolCall);
     const cancelled = { outcome: { outcome: 'cancelled' } };
@@ -323,7 +351,12 @@ class OpencodeRun {
     else if (kind === 'tool_call' || kind === 'tool_call_update') this.tool(update);
     else if (kind === 'plan') {
       const steps = nativePlanSteps(update.entries, 'content');
-      if (steps) this.emit({ type: 'task.plan', planId: 'opencode-plan', replace: true, steps });
+      if (steps) {
+        if (this.options.intent === 'plan') this.emit({ type: 'session.plan', providerPlanId: 'opencode-plan', explanation: '', steps: sessionPlanSteps(steps) });
+        else this.emit({ type: 'task.plan', planId: 'opencode-plan', replace: true, steps });
+      }
+    } else if (kind === 'current_mode_update' && this.expectedModeId && update.currentModeId !== this.expectedModeId) {
+      this.fail('OpenCode changed the selected native plan mode during the run. Mingle stopped the turn.', 'permission_mode_changed');
     } else if (kind === 'config_option_update') {
       const model = currentValue({ configOptions: update.configOptions }, 'model');
       if (model && model !== this.expectedModel) this.fail('OpenCode changed the selected model during the run. Mingle stopped the turn rather than accepting an automatic substitution.', 'model_substitution');

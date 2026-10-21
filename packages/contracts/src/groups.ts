@@ -38,6 +38,7 @@ export const UpdateGroupSchema = z.object({
 export type UpdateGroup = z.infer<typeof UpdateGroupSchema>;
 export const SendGroupMessageSchema = z.object({
   content: z.string().trim().max(100_000).default(''), recipients: z.array(z.string().min(1).max(100)).min(1).max(8).optional(),
+  intent: z.enum(['normal', 'plan']).default('normal'),
   clientMessageId: z.string().min(1).max(100).optional(),
   attachmentIds: AttachmentIdsSchema.optional(),
   contextRefs: MessageContextRefsSchema.optional(),
@@ -70,7 +71,7 @@ export interface GroupMessage {
 }
 export interface GroupRequest {
   id: string; groupId: string; messageId: string; plannerMemberId: string;
-  status: 'active' | 'completed' | 'paused'; turnsUsed: number; createdAt: string;
+  status: 'active' | 'completed' | 'paused'; turnsUsed: number; createdAt: string; intent: 'normal' | 'plan'; executionPlanId?: string;
 }
 export interface GroupDelivery {
   id: string; groupId: string; requestId: string; messageId: string; memberId: string;

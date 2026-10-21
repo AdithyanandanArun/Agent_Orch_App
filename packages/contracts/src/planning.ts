@@ -26,6 +26,13 @@ export const SessionPlanSchema = z.object({
 }).strict();
 export type SessionPlan = z.infer<typeof SessionPlanSchema>;
 
+export const SessionPlanProposalSchema = z.object({
+  providerPlanId: z.string().min(1).max(200),
+  explanation: z.string().max(4000),
+  steps: z.array(SessionPlanStepSchema).max(100),
+}).strict();
+export type SessionPlanProposal = z.infer<typeof SessionPlanProposalSchema>;
+
 export const EditSessionPlanSchema = z.object({
   explanation: z.string().max(4000).optional(),
   steps: z.array(SessionPlanStepSchema).max(100),

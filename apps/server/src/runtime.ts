@@ -1,12 +1,12 @@
-import { ContextCompactionResultSchema, ProviderTaskPlanSchema } from '@mingle/contracts';
+import { ContextCompactionResultSchema, NativeUserInputRequestSchema, ProviderTaskPlanSchema, SessionPlanProposalSchema, UserInputAnswersSchema } from '@mingle/contracts';
 import type { ProjectIntelligenceService } from './project-intelligence/service.ts';
 import { existsSync, statSync } from 'node:fs';
-import type { ProviderTaskPlan, AdapterEvent, Approval, ContextCompactionResult, Message, ProviderFailure, ProviderSkill, RunChanges, RunOptions, Session, ToolActivity, ToolCall } from '@mingle/contracts';
+import type { ProviderTaskPlan, AdapterEvent, Approval, ContextCompactionResult, Message, ProviderFailure, ProviderSkill, RunChanges, RunOptions, Session, SessionPlan, SessionPlanStep, UserInputAnswers, UserQuestion, ToolActivity, ToolCall } from '@mingle/contracts';
 import type { Hub } from './hub.ts';
 import type { Store } from './store.ts';
 import type { TaskService } from './tasks.ts';
 import type { Logger, ProviderRuntime } from './types.ts';
-import { conflict, errorMessage, notFound, redactSecrets, truncate, newId, nowIso } from './util.ts';
+import { badRequest, conflict, errorMessage, notFound, redactSecrets, truncate, newId, nowIso } from './util.ts';
 import { captureRunTree, compareRunTrees, unavailableRunChanges, type RunTreeSnapshot } from './run-changes.ts';
 import type { GroupService } from './groups/service.ts';
 import type { TeamMcpBridge } from './team-mcp.ts';
@@ -22,6 +22,8 @@ export interface RuntimeOptions {
   abortGraceMs?: number;
   /** Interval for persisting streamed assistant text. */
   flushIntervalMs?: number;
+  /** Maximum time to wait for a native provider question before cancelling the run. */
+  userInputTimeoutMs?: number;
 }
 
 interface ToolBuffer { call: ToolCall; output: string; dirty: boolean; tick: number | null }
@@ -38,6 +40,7 @@ interface ActiveRun {
   cleanupPending: boolean;
   acceptingTools: boolean;
   approvals: Map<string, (allowed: boolean) => void>;
+  questions: Map<string, (answers: UserInputAnswers | null) => void>;
   stream: { messageId: string; text: string; dirty: boolean } | null;
   flushTimer: NodeJS.Timeout | null;
   consumedHandoffs: string[];
@@ -49,6 +52,8 @@ interface ActiveRun {
   taskId: string | null;
   skills: ProviderSkill[];
   invocation?: NativeInvocation;
+  intent: 'normal' | 'plan';
+  executionPlanId?: string;
   context?: string;
   attachmentOwnerKind?: 'message' | 'group_message';
   attachmentOwnerId?: string;
@@ -68,10 +73,26 @@ interface ActiveCompaction {
   promise: Promise<ContextCompactionResult>;
 }
 
-export interface StartOptions { groupDeliveryId?: string; taskId?: string; userMessage?: { content: string; kind?: string }; skills?: ProviderSkill[]; attachmentIds?: string[]; attachmentOwnerKind?: 'message' | 'group_message'; attachmentOwnerId?: string; invocation?: NativeInvocation; context?: string; contextRefs?: Message['contextRefs'] }
+export interface StartOptions { groupDeliveryId?: string; taskId?: string; userMessage?: { content: string; kind?: string }; skills?: ProviderSkill[]; attachmentIds?: string[]; attachmentOwnerKind?: 'message' | 'group_message'; attachmentOwnerId?: string; invocation?: NativeInvocation; context?: string; contextRefs?: Message['contextRefs']; intent?: 'normal' | 'plan'; executionPlanId?: string }
 
 const MAX_TOOL_CHARS = 20_000;
 const MAX_APPROVAL_INPUT_CHARS = 20_000;
+
+function hasPlanDependencyCycle(steps: readonly SessionPlanStep[]): boolean {
+  const dependencies = new Map(steps.map((step) => [step.id, step.dependsOn]));
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (id: string): boolean => {
+    if (visiting.has(id)) return true;
+    if (visited.has(id)) return false;
+    visiting.add(id);
+    for (const dependency of dependencies.get(id) ?? []) if (visit(dependency)) return true;
+    visiting.delete(id);
+    visited.add(id);
+    return false;
+  };
+  return [...dependencies.keys()].some(visit);
+}
 const FAILURE_SCALAR_FIELDS = new Set([
   'message', 'code', 'providerCode', 'provider_code', 'errorCode', 'error_code', 'type', 'subtype',
   'status', 'statusCode', 'status_code', 'httpStatus', 'httpStatusCode', 'retryAt', 'retry_at',
@@ -107,11 +128,13 @@ export class SessionRuntime {
   private readonly active = new Map<string, ActiveRun>();
   private readonly compactions = new Map<string, ActiveCompaction>();
   private readonly stopping = new Set<string>();
+  private readonly questionTimers = new Map<string, NodeJS.Timeout>();
   private groups?: GroupService;
   private teamMcp?: TeamMcpBridge;
   private attachmentService?: AttachmentService;
   private readonly abortGraceMs: number;
   private readonly flushIntervalMs: number;
+  private readonly userInputTimeoutMs: number;
 
   constructor(
     private readonly store: Store, private readonly hub: Hub, private readonly providers: ProviderRuntime, private readonly tasks: TaskService,
@@ -121,6 +144,7 @@ export class SessionRuntime {
     // Covers the supported adapters' interrupt grace and escalating process shutdown.
     this.abortGraceMs = options.abortGraceMs ?? 30_000;
     this.flushIntervalMs = options.flushIntervalMs ?? 300;
+    this.userInputTimeoutMs = options.userInputTimeoutMs ?? 5 * 60_000;
   }
 
   setGroupServices(groups: GroupService, teamMcp: TeamMcpBridge): void {
@@ -149,6 +173,13 @@ export class SessionRuntime {
     const session = this.store.getSession(sessionId);
     if (!session) throw notFound('Session not found');
     if (this.stopping.has(sessionId)) throw conflict('This session is being removed from Mingle.');
+    if (options.intent === 'plan' && (options.invocation || options.skills?.length)) throw badRequest('Native plan generation cannot run provider commands or skills. Send a regular planning prompt instead.');
+    const executionPlan = options.executionPlanId ? this.store.getSessionPlan(options.executionPlanId) : undefined;
+    if (options.executionPlanId && (!executionPlan || executionPlan.sessionId !== sessionId
+      || !((executionPlan.status === 'approved' && executionPlan.approvedRevision === executionPlan.revision)
+        || (executionPlan.status === 'executing' && executionPlan.executionRunId === null)))) {
+      throw conflict('This approved plan is no longer ready to execute. Review it again before starting work.');
+    }
     if (this.groups?.forSession(sessionId) && !options.groupDeliveryId) throw conflict('Start grouped work through its recorded group delivery.');
     if (this.isActive(sessionId) || session.status === 'running' || session.status === 'waiting') throw conflict('Session already has active work or provider cleanup is still in progress');
     if (!existsSync(session.worktreePath) || !statSync(session.worktreePath).isDirectory()) throw conflict('The session worktree no longer exists on disk');
@@ -160,8 +191,10 @@ export class SessionRuntime {
     const prompt = invocation ? content : this.composePrompt(handoffs, content);
     const run: ActiveRun = {
       id: runId, startedAt: nowIso(), provider: session.provider, tick: performance.now(), tools: new Map(), activityTimer: null,
-      sessionId, controller: new AbortController(), closed: false, cleanupPending: false, acceptingTools: false, approvals: new Map(), stream: null, flushTimer: null, consumedHandoffs: handoffs.map((h) => h.id), firstEvent: false, capabilityTokens: [],
-      baseInput: session.inputTokens, baseOutput: session.outputTokens, baseCost: session.costUsd, taskId: options.taskId ?? null, skills: options.skills ?? [], invocation, context: [options.context, invocation && handoffs.length ? this.composePrompt(handoffs, '') : undefined].filter(Boolean).join('\n\n') || undefined, attachmentOwnerKind: options.attachmentOwnerKind ?? 'message', attachmentOwnerId: options.attachmentOwnerId, changeBaseline: null, dispatchState: 'unknown', promise: Promise.resolve(),
+      sessionId, controller: new AbortController(), closed: false, cleanupPending: false, acceptingTools: false, approvals: new Map(), questions: new Map(), stream: null, flushTimer: null, consumedHandoffs: handoffs.map((h) => h.id), firstEvent: false, capabilityTokens: [],
+      baseInput: session.inputTokens, baseOutput: session.outputTokens, baseCost: session.costUsd, taskId: options.taskId ?? null, skills: options.skills ?? [], invocation, intent: options.intent ?? 'normal', executionPlanId: options.executionPlanId,
+      context: [options.context, invocation && handoffs.length ? this.composePrompt(handoffs, '') : undefined].filter(Boolean).join('\n\n') || undefined,
+      attachmentOwnerKind: options.attachmentOwnerKind ?? 'message', attachmentOwnerId: options.attachmentOwnerId, changeBaseline: null, dispatchState: 'unknown', promise: Promise.resolve(),
     };
     this.store.tx(() => {
       const userMessage = this.store.insertMessage({ sessionId, role: 'user', content: options.userMessage?.content ?? content, kind: options.userMessage?.kind ?? null, runId: run.id, contextRefs: options.contextRefs });
@@ -171,6 +204,17 @@ export class SessionRuntime {
         this.attachmentService.claim({ kind: 'session', id: sessionId }, options.attachmentIds, 'message', userMessage.id);
       }
       this.store.insertRun({ id: run.id, sessionId, userMessageId: userMessage.id, provider: session.provider, model: session.model, startedAt: run.startedAt });
+      if (options.executionPlanId) {
+        const current = this.store.getSessionPlan(options.executionPlanId);
+        if (!current || current.sessionId !== sessionId
+          || !((current.status === 'approved' && current.approvedRevision === current.revision)
+            || (current.status === 'executing' && current.executionRunId === null))) {
+          throw conflict('This approved plan changed before execution could start. Review it again before starting work.');
+        }
+        const executing = { ...current, status: 'executing' as const, executionRunId: run.id, updatedAt: nowIso() };
+        this.store.updateSessionPlan(executing);
+        this.store.recordEvent({ projectId: session.projectId, sessionId, type: 'session.plan.execution.started', summary: `Plan execution started (revision ${current.revision})`, payload: { planId: current.id, revision: current.revision, runId: run.id } });
+      }
       this.store.updateSession(sessionId, { status: 'running', error: null });
       if (options.taskId) {
         const task = this.store.getTask(options.taskId);
@@ -182,6 +226,112 @@ export class SessionRuntime {
     this.active.set(sessionId, run);
     run.promise = this.execute(run, session, prompt);
     return run.id;
+  }
+
+  approvePlan(planId: string, revision: number): SessionPlan {
+    const plan = this.store.getSessionPlan(planId);
+    if (!plan) throw notFound('Plan not found');
+    if (plan.status !== 'review' || plan.revision !== revision) throw conflict('This plan changed or is no longer awaiting review. Refresh before approving it.');
+    const generation = this.store.getRun(plan.runId);
+    if (!generation || generation.status !== 'completed') throw conflict('Wait for plan generation to finish before approving it.');
+    const approved: SessionPlan = { ...plan, status: 'approved', approvedRevision: revision, updatedAt: nowIso() };
+    this.store.tx(() => {
+      this.store.updateSessionPlan(approved);
+      const session = this.store.getSession(plan.sessionId, true);
+      this.store.recordEvent({ projectId: session?.projectId ?? null, sessionId: plan.sessionId, type: 'session.plan.approved', summary: `Plan approved (revision ${revision})`, payload: { planId, revision } });
+    });
+    return approved;
+  }
+
+  editPlan(planId: string, input: { explanation?: string; steps: SessionPlan['steps'] }): SessionPlan {
+    const plan = this.store.getSessionPlan(planId);
+    if (!plan) throw notFound('Plan not found');
+    if (plan.status === 'executing') throw conflict('An executing plan cannot be edited. Interrupt its run first.');
+    const ids = new Set(input.steps.map((step) => step.id));
+    if (ids.size !== input.steps.length) throw conflict('Plan step IDs must be unique.');
+    if (input.steps.some((step) => step.dependsOn.some((id) => id === step.id || !ids.has(id)))) throw conflict('Plan dependencies must refer to other steps in this plan.');
+    if (hasPlanDependencyCycle(input.steps)) throw conflict('Plan dependencies must not contain a cycle.');
+    const sourceRun = this.store.getRun(plan.runId);
+    if (!sourceRun || sourceRun.status !== 'completed') throw conflict('Wait for plan generation to finish before editing it.');
+    const prior = new Map(plan.steps.map((step) => [step.id, step]));
+    const steps = input.steps.map((step) => ({ ...step, providerId: prior.get(step.id)?.providerId ?? null, status: 'pending' as const }));
+    const updated: SessionPlan = {
+      ...plan, explanation: input.explanation ?? plan.explanation, steps, revision: plan.revision + 1,
+      approvedRevision: null, status: 'review', executionRunId: null, updatedAt: nowIso(),
+    };
+    this.store.tx(() => {
+      this.store.updateSessionPlan(updated);
+      const session = this.store.getSession(plan.sessionId, true);
+      this.store.recordEvent({ projectId: session?.projectId ?? null, sessionId: plan.sessionId, type: 'session.plan.edited', summary: `Plan revised to ${updated.revision}`, payload: { planId, revision: updated.revision } });
+    });
+    return updated;
+  }
+
+  async executePlan(planId: string): Promise<{ accepted: true; runId: string | null; deliveryId?: string; plan: SessionPlan }> {
+    const plan = this.store.getSessionPlan(planId);
+    if (!plan) throw notFound('Plan not found');
+    if (plan.status !== 'approved' || plan.approvedRevision !== plan.revision) throw conflict('Approve the current plan revision before executing it.');
+    if (!plan.steps.length) throw conflict('Add at least one step before executing this plan.');
+    if (hasPlanDependencyCycle(plan.steps)) throw conflict('Plan dependencies contain a cycle. Revise and approve the plan again.');
+    const generation = this.store.getRun(plan.runId);
+    if (!generation || generation.status !== 'completed') throw conflict('Plan generation has not completed.');
+    const session = this.store.getSession(plan.sessionId);
+    if (!session) throw notFound('Session not found');
+    const prompt = [
+      'Execute this user-approved Mingle plan. Work only on its listed steps, respect the dependencies and acceptance criteria, and report any blocked work instead of inventing approval.',
+      plan.explanation ? `Plan context:\n${plan.explanation}` : '',
+      ...plan.steps.map((step, index) => `${index + 1}. ${step.title}${step.description ? `\n   ${step.description}` : ''}${step.acceptanceCriteria.length ? `\n   Acceptance criteria: ${step.acceptanceCriteria.join('; ')}` : ''}${step.dependsOn.length ? `\n   Depends on: ${step.dependsOn.map((id) => plan.steps.find((candidate) => candidate.id === id)?.title ?? id).join(', ')}` : ''}`),
+    ].filter(Boolean).join('\n\n');
+    if (this.groups?.forSession(session.id)) {
+      const dispatch = await this.groups.executePlan(session.id, plan.id, prompt);
+      const executing = this.store.getSessionPlan(plan.id);
+      if (!executing) throw conflict('The group plan execution was queued, but its plan record is unavailable. Refresh the conversation.');
+      return { accepted: true, runId: dispatch.runId, deliveryId: dispatch.deliveryId, plan: executing };
+    }
+    const runId = this.start(session.id, prompt, { executionPlanId: plan.id, userMessage: { content: prompt, kind: 'plan-execution' } });
+    const executing = this.store.getSessionPlan(plan.id);
+    if (!executing) throw conflict('Plan execution started, but its plan record is unavailable. Refresh the conversation.');
+    return { accepted: true, runId, plan: executing };
+  }
+
+  answerUserQuestion(questionId: string, rawAnswers: unknown): UserQuestion {
+    const question = this.store.getUserQuestion(questionId);
+    if (!question) throw notFound('Question not found');
+    if (question.status !== 'pending') throw conflict(`Question is already ${question.status}.`);
+    const run = this.active.get(question.sessionId);
+    const resolve = run?.questions.get(question.id);
+    if (!run || run.id !== question.runId || run.closed || !resolve || run.controller.signal.aborted) {
+      this.cancelQuestion(run, question, 'The provider request is no longer active.');
+      throw conflict('Question is stale: its provider request is no longer active.');
+    }
+    const parsed = UserInputAnswersSchema.safeParse(rawAnswers);
+    if (!parsed.success) throw badRequest('Answers are invalid. Refresh the question and try again.');
+    const expected = new Map(question.questions.map((field) => [field.id, field]));
+    if (Object.keys(parsed.data).length !== expected.size || Object.keys(parsed.data).some((id) => !expected.has(id))) throw badRequest('Answer every field in the question exactly once.');
+    for (const [id, field] of expected) {
+      const values = parsed.data[id]!;
+      if ((!field.multiSelect && values.length !== 1) || values.length > 20) throw badRequest(`Choose a valid number of answers for “${field.question.slice(0, 120)}”.`);
+      const allowed = new Set(field.options.map((option) => option.label));
+      if (!field.allowOther && values.some((value) => !allowed.has(value))) throw badRequest('Choose only options provided by the active question.');
+    }
+    const session = this.store.getSession(question.sessionId, true);
+    const answered = this.store.tx(() => {
+      const updated = this.store.resolveUserQuestion(question.id, 'answered', parsed.data);
+      this.store.recordEvent({ projectId: session?.projectId ?? null, sessionId: question.sessionId, type: 'session.question.answered', summary: 'Provider question answered', payload: { questionId: question.id, runId: question.runId } });
+      return updated;
+    });
+    this.finishQuestionWait(run, question.id, parsed.data);
+    return answered;
+  }
+
+  cancelUserQuestion(questionId: string): UserQuestion {
+    const question = this.store.getUserQuestion(questionId);
+    if (!question) throw notFound('Question not found');
+    if (question.status !== 'pending') throw conflict(`Question is already ${question.status}.`);
+    const run = this.active.get(question.sessionId);
+    this.cancelQuestion(run, question, 'The user cancelled the provider question.');
+    if (run && !run.controller.signal.aborted) this.interrupt(question.sessionId);
+    return this.store.getUserQuestion(questionId) ?? { ...question, status: 'cancelled', reason: 'The user cancelled the provider question.', resolvedAt: nowIso() };
   }
 
   private composePrompt(handoffs: Message[], content: string): string {
@@ -212,23 +362,25 @@ export class SessionRuntime {
         return;
       }
       run.acceptingTools = true;
-      const browserMcp = settings.browserAgentEnabled !== false ? this.browserMcp?.create(run.id, session, run.controller.signal, (request) => this.requestApproval(run, request)) : undefined;
+      // Browser actions and team tools can have external side effects and are deliberately absent from read-only planning.
+      const browserMcp = run.intent !== 'plan' && settings.browserAgentEnabled !== false ? this.browserMcp?.create(run.id, session, run.controller.signal, (request) => this.requestApproval(run, request)) : undefined;
       if (browserMcp) capabilityTokens.push(browserMcp.token);
       const groupContext = this.groups?.contextForRun(session.id, run.id);
       if (this.groups?.forSession(session.id) && !groupContext) throw conflict('Group runs must start through a recorded group delivery. Refresh and send through the group conversation.');
-      const teamMcp = groupContext ? this.teamMcp?.create(run.id, session, run.controller.signal, groupContext) : undefined;
+      const teamMcp = run.intent !== 'plan' && groupContext ? this.teamMcp?.create(run.id, session, run.controller.signal, groupContext) : undefined;
       if (teamMcp) capabilityTokens.push(teamMcp.token);
       const explicit = run.invocation;
-      const effectivePrompt = explicit ? prompt : [groupContext?.instructions, run.context, prompt].filter(Boolean).join('\n\n');
+      const effectivePrompt = explicit ? prompt : [run.intent !== 'plan' ? groupContext?.instructions : undefined, run.context, prompt].filter(Boolean).join('\n\n');
       if (explicit && groupContext) run.context = [run.context, groupContext.instructions].filter(Boolean).join('\n\n');
       const stagedAttachments = this.attachmentService && run.attachmentOwnerId
         ? await this.attachmentService.stage(run.id, run.attachmentOwnerKind ?? 'message', run.attachmentOwnerId)
         : [];
       if (run.controller.signal.aborted) throw conflict('The run was interrupted before the provider started.');
       const runOptions: RunOptions & DispatchAwareOptions = {
-        session, prompt: effectivePrompt, ...(explicit ? { invocation: explicit, ...(run.context ? { context: run.context } : {}) } : {}), attachments: stagedAttachments, teamMcp, providerTaskState: this.nativeTaskState(session), skills: run.skills, browserMcp, signal: run.controller.signal, settings,
+        session, prompt: effectivePrompt, intent: run.intent, ...(explicit ? { invocation: explicit, ...(run.context ? { context: run.context } : {}) } : {}), attachments: stagedAttachments, teamMcp, providerTaskState: this.nativeTaskState(session), skills: run.skills, browserMcp, signal: run.controller.signal, settings,
         onEvent: (event) => this.handleEvent(run, capabilityTokens.length ? JSON.parse(scrubCapabilities(JSON.stringify(event))) as AdapterEvent : event),
         requestApproval: (request) => this.requestApproval(run, JSON.parse(scrubCapabilities(JSON.stringify(request)))),
+        requestUserInput: (request) => this.requestUserInput(run, request),
         onDispatchState: (state) => { run.dispatchState = state; },
       };
       const adapterRun = Promise.resolve().then(() => adapter.run(runOptions));
@@ -344,6 +496,15 @@ export class SessionRuntime {
     if (run.closed) return;
     try {
       switch (event.type) {
+        case 'session.plan': {
+          if (run.intent !== 'plan') break;
+          const { type: _type, ...raw } = event;
+          const parsed = SessionPlanProposalSchema.safeParse(JSON.parse(redactSecrets(JSON.stringify(raw))));
+          const ids = new Set(parsed.success ? parsed.data.steps.map((step) => step.id) : []);
+          if (!parsed.success || ids.size !== parsed.data.steps.length || parsed.data.steps.some((step) => step.dependsOn.some((id) => id === step.id || !ids.has(id))) || hasPlanDependencyCycle(parsed.data.steps)) break;
+          this.persistSessionPlan(run, parsed.data);
+          break;
+        }
         case 'task.plan': {
           const { type: _type, ...raw } = event;
           const plan = ProviderTaskPlanSchema.safeParse(JSON.parse(redactSecrets(JSON.stringify(raw))));
@@ -390,6 +551,92 @@ export class SessionRuntime {
       }
     } catch (error) {
       this.log('error', `Failed to record adapter event for ${run.sessionId}`, error);
+    }
+  }
+
+  private persistSessionPlan(run: ActiveRun, proposal: import('@mingle/contracts').SessionPlanProposal): void {
+    const existing = this.store.getRunPlan(run.id, proposal.providerPlanId);
+    const steps = proposal.steps.map((step) => ({ ...step, providerId: step.providerId ?? step.id }));
+    const same = existing && existing.explanation === proposal.explanation && JSON.stringify(existing.steps) === JSON.stringify(steps);
+    if (same) return;
+    const at = nowIso();
+    const plan: SessionPlan = existing
+      ? { ...existing, explanation: proposal.explanation, steps, revision: existing.revision + 1, approvedRevision: null, status: 'review', executionRunId: null, updatedAt: at }
+      : { id: newId('plan'), sessionId: run.sessionId, runId: run.id, provider: run.provider, providerPlanId: proposal.providerPlanId,
+        explanation: proposal.explanation, steps, revision: 1, approvedRevision: null, status: 'review', executionRunId: null, createdAt: at, updatedAt: at };
+    const session = this.store.getSession(run.sessionId, true);
+    this.store.tx(() => {
+      this.store.saveSessionPlan(plan);
+      this.store.recordEvent({ projectId: session?.projectId ?? null, sessionId: run.sessionId, type: 'session.plan.updated', summary: `Plan ready for review (revision ${plan.revision})`, payload: { planId: plan.id, revision: plan.revision, runId: run.id } });
+    });
+  }
+
+  private requestUserInput(run: ActiveRun, raw: unknown): Promise<UserInputAnswers | null> {
+    if (run.closed || run.controller.signal.aborted || !this.isRunLive(run.sessionId, run.id)) return Promise.resolve(null);
+    const parsed = NativeUserInputRequestSchema.safeParse(raw);
+    if (!parsed.success) {
+      this.log('warn', `Provider ${run.provider} sent an invalid native user-input request for ${run.id}.`);
+      return Promise.resolve(null);
+    }
+    const native = parsed.data;
+    if (run.questions.size) return Promise.resolve(null);
+    const at = nowIso();
+    const question: UserQuestion = {
+      id: newId('question'), sessionId: run.sessionId, runId: run.id, provider: run.provider, tool: truncate(redactSecrets(native.tool), 200),
+      questions: native.questions.map((field) => ({ ...field, question: truncate(redactSecrets(field.question), 2000), options: field.options.map((option) => ({ ...option, label: truncate(redactSecrets(option.label), 200), ...(option.description ? { description: truncate(redactSecrets(option.description), 500) } : {}) })) })),
+      status: 'pending', createdAt: at, resolvedAt: null,
+    };
+    this.closeStream(run, null);
+    const session = this.store.getSession(run.sessionId, true);
+    let saved: UserQuestion | undefined;
+    this.store.tx(() => {
+      const inserted = this.store.insertUserQuestion({ question, nativeRequestId: native.nativeRequestId });
+      saved = inserted;
+      if (inserted.id !== question.id) return;
+      this.store.updateSession(run.sessionId, { status: 'waiting' });
+      this.store.recordEvent({ projectId: session?.projectId ?? null, sessionId: run.sessionId, type: 'session.question.asked', summary: `Provider asked ${inserted.questions.length} question${inserted.questions.length === 1 ? '' : 's'}`, payload: { questionId: inserted.id, runId: run.id, provider: run.provider } });
+    });
+    const savedQuestion = saved;
+    if (!savedQuestion || savedQuestion.id !== question.id) return Promise.resolve(null);
+    return new Promise<UserInputAnswers | null>((resolve) => {
+      run.questions.set(savedQuestion.id, resolve);
+      const timer = setTimeout(() => {
+        this.cancelQuestion(run, savedQuestion, 'The provider question timed out.');
+        this.interrupt(run.sessionId);
+      }, this.userInputTimeoutMs);
+      timer.unref();
+      this.questionTimers.set(savedQuestion.id, timer);
+    });
+  }
+
+  private finishQuestionWait(run: ActiveRun, questionId: string, answers: UserInputAnswers | null): void {
+    const timer = this.questionTimers.get(questionId);
+    if (timer) clearTimeout(timer);
+    this.questionTimers.delete(questionId);
+    const resolve = run.questions.get(questionId);
+    run.questions.delete(questionId);
+    resolve?.(answers);
+    if (!run.closed && !run.controller.signal.aborted && !run.approvals.size && !run.questions.size) this.store.updateSession(run.sessionId, { status: 'running' });
+  }
+
+  private cancelQuestion(run: ActiveRun | undefined, question: UserQuestion, reason: string): UserQuestion {
+    let updated = question;
+    if (question.status === 'pending') {
+      const session = this.store.getSession(question.sessionId, true);
+      this.store.tx(() => {
+        updated = this.store.resolveUserQuestion(question.id, 'cancelled', undefined, redactSecrets(reason).slice(0, 500));
+        this.store.recordEvent({ projectId: session?.projectId ?? null, sessionId: question.sessionId, type: 'session.question.cancelled', summary: 'Provider question cancelled', payload: { questionId: question.id, runId: question.runId } });
+      });
+    }
+    if (run) this.finishQuestionWait(run, question.id, null);
+    return updated;
+  }
+
+  private cancelRunQuestions(run: ActiveRun, reason: string): void {
+    for (const id of [...run.questions.keys()]) {
+      const question = this.store.getUserQuestion(id);
+      if (question) this.cancelQuestion(run, question, reason);
+      else this.finishQuestionWait(run, id, null);
     }
   }
 
@@ -534,7 +781,7 @@ export class SessionRuntime {
     const resolved = this.store.tx(() => {
       const result = this.store.resolveApproval(approvalId, decision, 'host');
       run.approvals.delete(approvalId);
-      if (run.approvals.size === 0) this.store.updateSession(approval.sessionId, { status: 'running' });
+      if (run.approvals.size === 0 && run.questions.size === 0) this.store.updateSession(approval.sessionId, { status: 'running' });
       this.store.recordEvent({ projectId: session?.projectId ?? null, sessionId: approval.sessionId, type: 'approval.resolved', summary: `Approval ${decision}: ${approval.tool}`, payload: { approvalId, decision } });
       return result;
     });
@@ -561,6 +808,7 @@ export class SessionRuntime {
   interrupt(sessionId: string): boolean {
     const run = this.active.get(sessionId);
     if (run && !run.closed) {
+      this.cancelRunQuestions(run, 'The provider run was interrupted.');
       run.controller.abort();
       this.denyApprovals(run, 'interrupted');
       return true;
@@ -792,6 +1040,7 @@ export class SessionRuntime {
   private async finish(run: ActiveRun, outcome: 'completed' | 'failed' | 'interrupted', failure: string | null, changes: RunChanges, durationMs = Math.max(0, Math.round(performance.now() - run.tick)), finishedAt = nowIso()): Promise<void> {
     run.closed = true;
     run.acceptingTools = false;
+    this.cancelRunQuestions(run, outcome === 'completed' ? 'The provider run finished before the question was answered.' : `The provider run was ${outcome}.`);
     this.denyApprovals(run, outcome === 'completed' ? 'run finished' : outcome);
     try {
       this.store.tx(() => {
@@ -813,6 +1062,16 @@ export class SessionRuntime {
         }
         if (outcome === 'completed' && !run.firstEvent) this.store.markConsumed(run.consumedHandoffs);
         if (run.taskId) this.tasks.finishRun(run.taskId, outcome);
+        if (run.executionPlanId) {
+          const plan = this.store.getSessionPlan(run.executionPlanId);
+          if (plan?.status === 'executing' && plan.executionRunId === run.id) {
+            const status = outcome === 'completed' ? 'completed' : outcome;
+            this.store.updateSessionPlan({ ...plan, status, updatedAt: finishedAt });
+          }
+        }
+        if (run.intent === 'plan' && outcome === 'completed' && !this.store.listSessionPlans(run.sessionId).some((plan) => plan.runId === run.id)) {
+          this.store.insertMessage({ sessionId: run.sessionId, runId: run.id, role: 'system', kind: 'info', content: 'The provider completed without exposing a native plan. No reviewable plan was saved.' });
+        }
         this.intelligence?.finishRun(session, run.id, outcome);
         this.store.recordEvent({
           projectId: session.projectId, sessionId: run.sessionId, type: `session.run.${outcome}`,

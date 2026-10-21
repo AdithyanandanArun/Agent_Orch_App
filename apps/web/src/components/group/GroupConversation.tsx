@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowDown, ArrowRight, FolderPlus } from 'lucide-react';
-import type { GroupDelivery, GroupSnapshot, Message, ProviderInfo, Session, SessionRun, Task, ToolCall } from '@mingle/contracts';
+import type { GroupDelivery, GroupSnapshot, Message, ProviderInfo, Session, SessionPlan, SessionRun, Task, ToolCall, UserQuestion } from '@mingle/contracts';
 import { useMingle, useProject } from '../../store/store';
 import { clockTime, cx } from '../../lib/format';
 import { DELIVERY_LABEL, activeMembers } from '../../lib/groups';
@@ -9,7 +9,7 @@ import {
 } from '../../lib/groupTimeline';
 import { Markdown } from '../Markdown';
 import { Button, EmptyState } from '../ui';
-import { ApprovalCard, LegacyToolGroup, MessageRow, SpeakerLabel } from '../ConversationParts';
+import { ApprovalCard, LegacyToolGroup, MessageRow, SessionPlanCard, SpeakerLabel, UserQuestionCard } from '../ConversationParts';
 import { RunActivity } from '../RunActivity';
 import { RunChanges } from '../RunChanges';
 import { GitBar } from '../git/GitBar';
@@ -26,6 +26,8 @@ const NO_RUNS: SessionRun[] = [];
 const NO_CALLS: ToolCall[] = [];
 const NO_PROVIDERS: ProviderInfo[] = [];
 const NO_TASKS: Task[] = [];
+const NO_PLANS: SessionPlan[] = [];
+const NO_QUESTIONS: UserQuestion[] = [];
 
 /** Start a long final report at its outcome, rather than hiding it above the viewport. */
 function latestPosition(scroller: HTMLDivElement): number {
@@ -65,6 +67,7 @@ function Handles({ speakersList, sessions }: { speakersList: Speaker[]; sessions
 
 function GroupMessageRow({ item, snapshot }: { item: GroupItem; snapshot: GroupSnapshot }) {
   const { message, sender, recipients, deliveries } = item;
+  const planMode = message.kind === 'user' && snapshot.requests.some((request) => request.messageId === message.id && request.intent === 'plan');
   const tasks = useMingle((s) => s.boot?.tasks);
   const sessions = useMingle((s) => s.boot?.sessions ?? NO_SESSIONS);
   const providerOf = (speaker: Speaker) => sessions.find((session) => session.id === speaker.sessionId)?.provider;
@@ -73,7 +76,7 @@ function GroupMessageRow({ item, snapshot }: { item: GroupItem; snapshot: GroupS
     return (
       <article className="msg msg--user" aria-label="Your message">
         <div className="msg__bubble"><Markdown text={message.content} /><AttachmentHistory attachments={message.attachments} /><ContextReferenceChips refs={message.contextRefs ?? []} /></div>
-        {recipients.length ? <div className="msg__to">To <Handles speakersList={recipients} sessions={sessions} /></div> : null}
+        {recipients.length || planMode ? <div className="msg__to">{recipients.length ? <>To <Handles speakersList={recipients} sessions={sessions} /></> : null}{planMode ? <span className="group-plan-intent">{recipients.length ? ' · ' : ''}Plan mode · read-only</span> : null}</div> : null}
         <DeliveryChips deliveries={deliveries} snapshot={snapshot} sessions={sessions} />
         {time}
       </article>
@@ -144,6 +147,8 @@ export function GroupConversation({ snapshot }: { snapshot: GroupSnapshot }) {
   const streams = useMingle((s) => s.streams);
   const allRuns = useMingle((s) => s.boot?.runs ?? NO_RUNS);
   const allCalls = useMingle((s) => s.boot?.toolCalls ?? NO_CALLS);
+  const allPlans = useMingle((s) => s.boot?.plans ?? NO_PLANS);
+  const allQuestions = useMingle((s) => s.boot?.questions ?? NO_QUESTIONS);
   const approvals = useMingle((s) => s.boot?.approvals);
   const providers = useMingle((s) => s.boot?.providers ?? NO_PROVIDERS);
   const connection = useMingle((s) => s.connection);
@@ -155,6 +160,16 @@ export function GroupConversation({ snapshot }: { snapshot: GroupSnapshot }) {
 
   const items = useMemo(() => buildTimeline({ snapshot, sessions, messages, streams }), [snapshot, sessions, messages, streams]);
   const sessionIds = useMemo(() => memberSessionIds(snapshot), [snapshot]);
+  const plans = useMemo(() => {
+    const rows = allPlans.filter((plan) => sessionIds.has(plan.sessionId));
+    const latestCompleted = new Map<string, SessionPlan>();
+    for (const plan of rows) if (plan.status === 'completed') latestCompleted.set(plan.sessionId, plan);
+    return [...rows.filter((plan) => plan.status !== 'completed'), ...latestCompleted.values()];
+  }, [allPlans, sessionIds]);
+  const questions = useMemo(() => {
+    const rows = allQuestions.filter((question) => sessionIds.has(question.sessionId));
+    return [...rows.filter((question) => question.status !== 'pending').slice(-2), ...rows.filter((question) => question.status === 'pending')];
+  }, [allQuestions, sessionIds]);
   const runs = useMemo(() => groupRuns(snapshot, allRuns), [snapshot, allRuns]);
   const placement = useMemo(() => placeRuns(items, runs), [items, runs]);
   const calls = useMemo(() => toolCallsByRun(allCalls, sessionIds), [allCalls, sessionIds]);
@@ -166,7 +181,8 @@ export function GroupConversation({ snapshot }: { snapshot: GroupSnapshot }) {
   const [away, setAway] = useState(false);
   const contentSig = items.filter((item): item is NativeItem => item.type === 'native').map((item) => `${item.key}:${item.message.content.length}`).join('|');
   const activitySig = runs.map((run) => `${run.id}:${run.status}:${run.toolCount}:${run.changes?.status ?? 'unknown'}:${run.changes?.fileCount ?? ''}`).join('|');
-  const sig = `${snapshot.group.id}|${items.length}|${contentSig}|${pending.length}|${activitySig}|${allCalls.length}|${snapshot.deliveries.map((d) => d.status).join('')}|${tasks.map((task) => `${task.id}:${task.status}`).join(',')}`;
+  const planningSig = `${plans.map((plan) => `${plan.id}:${plan.revision}:${plan.status}`).join(',')}|${questions.map((question) => `${question.id}:${question.status}`).join(',')}`;
+  const sig = `${snapshot.group.id}|${items.length}|${contentSig}|${pending.length}|${activitySig}|${allCalls.length}|${snapshot.deliveries.map((d) => d.status).join('')}|${tasks.map((task) => `${task.id}:${task.status}`).join(',')}|${planningSig}`;
   useEffect(() => { stick.current = true; setAway(false); }, [snapshot.group.id]);
   useLayoutEffect(() => {
     const el = scroller.current;
@@ -281,6 +297,8 @@ export function GroupConversation({ snapshot }: { snapshot: GroupSnapshot }) {
             const speaker = bySession.get(approval.sessionId) ?? byMember.get(approval.sessionId) ?? null;
             return <ApprovalCard key={approval.id} approval={approval} speaker={speaker} provider={sessions.find((session) => session.id === approval.sessionId)?.provider} />;
           })}
+          {plans.map((plan) => <SessionPlanCard key={plan.id} plan={plan} reviewReady={allRuns.some((run) => run.id === plan.runId && run.status === 'completed')} speaker={bySession.get(plan.sessionId) ?? null} />)}
+          {questions.map((question) => <UserQuestionCard key={question.id} question={question} speaker={bySession.get(question.sessionId) ?? null} />)}
           <GroupResultSummary snapshot={snapshot} sessions={sessions} messages={messages} runs={allRuns} tasks={tasks} />
         </div>
       </div>

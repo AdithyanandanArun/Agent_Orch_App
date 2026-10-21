@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { z } from 'zod';
 import {
-  CreateGroupSchema, AddGroupAgentSchema, UpdateGroupSchema, SendGroupMessageSchema, RepositoryCommitSchema, RepositoryPushSchema, RepositoryBranchSchema, RepositoryPullRequestSchema, BrowserConnectSchema, BrowserActionSchema, ApprovalDecisionSchema, ConversationIdSchema, ImportConversationSchema, ProviderSchema, CloneProjectSchema, NewProjectSchema, CreateProjectSchema, CreateSessionSchema, CreateTaskSchema, HandoffSchema, SendMessageSchema, UpdateProjectSchema, UpdateSessionSchema, UpdateSettingsSchema, UpdateTaskSchema,
+  CreateGroupSchema, AddGroupAgentSchema, UpdateGroupSchema, SendGroupMessageSchema, RepositoryCommitSchema, RepositoryPushSchema, RepositoryBranchSchema, RepositoryPullRequestSchema, BrowserConnectSchema, BrowserActionSchema, ApprovalDecisionSchema, ConversationIdSchema, ImportConversationSchema, ProviderSchema, CloneProjectSchema, NewProjectSchema, CreateProjectSchema, CreateSessionSchema, CreateTaskSchema, HandoffSchema, SendMessageSchema, UpdateProjectSchema, UpdateSessionSchema, UpdateSettingsSchema, UpdateTaskSchema, EditSessionPlanSchema, UserInputAnswersSchema,
   RecoveryActionRequestSchema,
 } from '@mingle/contracts';
 import type { Bootstrap, SessionUsage } from '@mingle/contracts';
@@ -386,11 +386,12 @@ export function buildRouter(s: Services) {
   });
   add('POST', '/api/sessions/:id/messages', async (ctx) => {
     const id = param(ctx, 'id');
-    const { content, skills: selected, attachmentIds, contextRefs } = await ctx.body(SendMessageSchema);
+    const { content, intent, skills: selected, attachmentIds, contextRefs } = await ctx.body(SendMessageSchema);
     const session = s.store.getSession(id);
     if (!session) throw notFound('Session not found');
     const group = s.groups.forSession(id);
     if (group) {
+      if (intent === 'plan') throw badRequest('Native read-only plan mode is not available for group-delivered turns. Open the member session to plan independently.');
       if (selected?.length) throw badRequest('Select skills in an independent session. Address provider actions directly to one group agent.');
       const member = group.members.find((row) => row.sessionId === id && !row.removedAt);
       if (!member) throw conflict('This agent is no longer in the group. Refresh the conversation.');
@@ -422,7 +423,7 @@ export function buildRouter(s: Services) {
       if (ref.kind === 'file' && ref.sourceSessionId !== id) throw badRequest('A file reference must come from this session worktree. Choose the file again.');
     }
     const context = await buildMessageContext(contextRefs, latest.worktreePath, (_sessionId, messageId) => s.store.getMessage(messageId));
-    s.runtime.start(id, content, { skills, attachmentIds, context, contextRefs });
+    s.runtime.start(id, content, { intent, skills, attachmentIds, context, contextRefs });
     return new Reply(202, { accepted: true });
   });
   add('POST', '/api/sessions/:id/interrupt', (ctx) => {
@@ -433,6 +434,21 @@ export function buildRouter(s: Services) {
     if (group && member) s.groups.stopMember(group.group.id, member.id);
     else s.runtime.interrupt(id);
     return { ok: true };
+  });
+
+  add('PATCH', '/api/plans/:id', async (ctx) => s.runtime.editPlan(param(ctx, 'id'), await ctx.body(EditSessionPlanSchema)));
+  add('POST', '/api/plans/:id/approve', async (ctx) => {
+    const { revision } = await ctx.body(z.object({ revision: z.number().int().positive() }).strict());
+    return s.runtime.approvePlan(param(ctx, 'id'), revision);
+  });
+  add('POST', '/api/plans/:id/execute', async (ctx) => {
+    await ctx.body(z.object({}).strict());
+    return new Reply(202, await s.runtime.executePlan(param(ctx, 'id')));
+  });
+  add('POST', '/api/questions/:id/answer', async (ctx) => s.runtime.answerUserQuestion(param(ctx, 'id'), await ctx.body(UserInputAnswersSchema)));
+  add('POST', '/api/questions/:id/cancel', async (ctx) => {
+    await ctx.body(z.object({}).strict());
+    return s.runtime.cancelUserQuestion(param(ctx, 'id'));
   });
 
   add('POST', '/api/tasks', async (ctx) => new Reply(201, s.tasks.create(await ctx.body(CreateTaskSchema))));

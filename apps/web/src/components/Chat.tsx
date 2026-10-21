@@ -1,10 +1,10 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDown, FolderPlus } from 'lucide-react';
-import type { Session, SessionRun, ToolCall } from '@mingle/contracts';
+import type { Session, SessionPlan, SessionRun, ToolCall, UserQuestion } from '@mingle/contracts';
 import { useMingle, useProject, useActiveSession, useActiveGroup } from '../store/store';
 import type { DisplayMessage } from '../lib/conversation';
 import { Button, EmptyState, PROVIDER_NAME } from './ui';
-import { ApprovalCard, LegacyToolGroup, MessageRow } from './ConversationParts';
+import { ApprovalCard, LegacyToolGroup, MessageRow, SessionPlanCard, UserQuestionCard } from './ConversationParts';
 import { GroupConversation } from './group/GroupConversation';
 import { Composer } from './Composer';
 import { RunActivity } from './RunActivity';
@@ -14,6 +14,8 @@ import { appendContextReference } from './MessageContextControls';
 
 const EMPTY_RUNS: SessionRun[] = [];
 const EMPTY_TOOL_CALLS: ToolCall[] = [];
+const EMPTY_PLANS: SessionPlan[] = [];
+const EMPTY_QUESTIONS: UserQuestion[] = [];
 
 function useSessionMessages(session: Session | undefined): DisplayMessage[] {
   const all = useMingle((s) => s.boot?.messages);
@@ -52,6 +54,8 @@ function SingleSessionPane() {
   const allRuns = useMingle((s) => s.boot?.runs ?? EMPTY_RUNS);
   const runs = useMemo(() => allRuns.filter(run => run.sessionId === session?.id), [allRuns, session?.id]);
   const allToolCalls = useMingle((s) => s.boot?.toolCalls ?? EMPTY_TOOL_CALLS);
+  const allPlans = useMingle((s) => s.boot?.plans ?? EMPTY_PLANS);
+  const allQuestions = useMingle((s) => s.boot?.questions ?? EMPTY_QUESTIONS);
   const toolCallsByRun = useMemo(() => {
     const grouped = new Map<string, ToolCall[]>();
     for (const call of allToolCalls) {
@@ -90,6 +94,16 @@ function SingleSessionPane() {
   }, [runs, messages, messageIds]);
   const approvals = useMingle((s) => s.boot?.approvals);
   const pending = useMemo(() => (approvals ?? []).filter((a) => a.sessionId === session?.id && a.status === 'pending'), [approvals, session?.id]);
+  const plans = useMemo(() => {
+    const rows = allPlans.filter((plan) => plan.sessionId === session?.id);
+    const completed = rows.filter((plan) => plan.status === 'completed').at(-1);
+    return [...rows.filter((plan) => plan.status !== 'completed'), ...(completed ? [completed] : [])];
+  }, [allPlans, session?.id]);
+  const questions = useMemo(() => {
+    const rows = allQuestions.filter((question) => question.sessionId === session?.id);
+    const pendingRows = rows.filter((question) => question.status === 'pending');
+    return [...rows.filter((question) => question.status !== 'pending').slice(-2), ...pendingRows];
+  }, [allQuestions, session?.id]);
   const { openDialog } = useMingle.getState();
   const creatingSession = useMingle((s) => s.creatingSession);
 
@@ -98,7 +112,8 @@ function SingleSessionPane() {
   const [away, setAway] = useState(false);
   const last = messages[messages.length - 1];
   const activitySig = runs.map(run => `${run.id}:${run.status}:${run.toolCount}:${run.changes?.status ?? 'unknown'}:${run.changes?.fileCount ?? ''}:${run.changes?.additions ?? ''}:${run.changes?.deletions ?? ''}`).join('|');
-  const sig = `${session?.id}|${messages.length}|${last?.content.length ?? 0}|${pending.length}|${activitySig}|${allToolCalls.length}`;
+  const planningSig = `${plans.map((plan) => `${plan.id}:${plan.revision}:${plan.status}`).join(',')}|${questions.map((question) => `${question.id}:${question.status}`).join(',')}`;
+  const sig = `${session?.id}|${messages.length}|${last?.content.length ?? 0}|${pending.length}|${activitySig}|${allToolCalls.length}|${planningSig}`;
 
   useEffect(() => { stick.current = true; setAway(false); }, [session?.id]);
   useLayoutEffect(() => {
@@ -164,6 +179,8 @@ function SingleSessionPane() {
           ) : null}
           {session.error && session.status === 'error' ? <div className="chat__error" role="alert"><strong>Session error</strong><span>{session.error}</span></div> : null}
           {pending.map((a) => <ApprovalCard key={a.id} approval={a} />)}
+          {plans.map((plan) => <SessionPlanCard key={plan.id} plan={plan} reviewReady={runs.some((run) => run.id === plan.runId && run.status === 'completed')} />)}
+          {questions.map((question) => <UserQuestionCard key={question.id} question={question} />)}
         </div>
       </div>
       {away ? (

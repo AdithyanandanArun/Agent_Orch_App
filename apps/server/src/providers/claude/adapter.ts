@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { ATTACHMENT_LIMITS, type AdapterEvent, type AgentAdapter, type AppSettings, type ContextCompactionResult, type RunOptions } from '@mingle/contracts';
+import { ATTACHMENT_LIMITS, type AdapterEvent, type AgentAdapter, type AppSettings, type ContextCompactionResult, type RunOptions, type SessionPlanProposal, type UserInputField } from '@mingle/contracts';
 import type { Options, PermissionResult, Query, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { ProviderError, TextTail, abortError, errorMessage, isAbortError, isRecord, markDispatched, markNotDispatched, redactSecrets, truncate } from '../common.js';
 import { bundledClaudeCandidates, resolveExecutableCached, type ResolveResult } from '../discovery.js';
@@ -24,6 +24,37 @@ export function resolveClaudeExecutable(settings: AppSettings, env: NodeJS.Proce
 }
 
 const TEAM_TOOL_NAMES: ReadonlySet<string> = new Set(['team_members', 'team_inbox', 'team_assign', 'team_message', 'team_artifact', 'team_status'].map((name) => `mcp__mingle_team__${name}`));
+
+function claudePlanProposal(value: string, requestId: string): SessionPlanProposal {
+  const headings = [...value.matchAll(/^(?:#{1,3}\s+(.+)|\d+[.)]\s+(.+))\s*$/gm)];
+  const steps = headings.length
+    ? headings.map((heading, index) => {
+      const start = (heading.index ?? 0) + heading[0].length;
+      const end = headings[index + 1]?.index ?? value.length;
+      const title = (heading[1] ?? heading[2] ?? `Step ${index + 1}`).trim().slice(0, 200);
+      const description = value.slice(start, end).trim().slice(0, 4000);
+      return { id: `claude-plan-step-${index + 1}`, providerId: `claude-plan-step-${index + 1}`, title, description, acceptanceCriteria: [], dependsOn: [], status: 'pending' as const };
+    })
+    : [{ id: 'claude-plan-step-1', providerId: 'claude-plan-step-1', title: 'Implementation plan', description: value.slice(0, 4000), acceptanceCriteria: [], dependsOn: [], status: 'pending' as const }];
+  return { providerPlanId: `claude:${requestId}`.slice(0, 200), explanation: '', steps };
+}
+
+function claudeQuestionFields(input: Record<string, unknown>, requestId: string): UserInputField[] | null {
+  if (!Array.isArray(input.questions) || input.questions.length < 1 || input.questions.length > 10) return null;
+  const fields: UserInputField[] = [];
+  for (const [index, raw] of input.questions.entries()) {
+    if (!isRecord(raw) || typeof raw.question !== 'string' || !Array.isArray(raw.options) || raw.options.length > 20) return null;
+    const options = raw.options.flatMap((option) => isRecord(option) && typeof option.label === 'string'
+      ? [{ label: option.label, ...(typeof option.description === 'string' ? { description: option.description } : {}) }]
+      : []);
+    if (options.length !== raw.options.length) return null;
+    fields.push({
+      id: `claude-${requestId.slice(0, 80)}-${index + 1}`, ...(typeof raw.header === 'string' ? { header: raw.header } : {}),
+      question: raw.question, options, multiSelect: raw.multiSelect === true, allowOther: true, secret: raw.secret === true,
+    });
+  }
+  return fields;
+}
 
 function promptWithSelectedClaudeSkill(prompt: string, skillName: string): string {
   const escapedName = skillName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -83,14 +114,36 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): AgentAdapter 
       signal.addEventListener('abort', onAbort, { once: true });
 
       // Never allow a tool call to proceed on an approval that has not been answered, and never past an abort.
-      const canUseTool = async (toolName: string, input: Record<string, unknown>, context: { signal: AbortSignal; title?: string }): Promise<PermissionResult> => {
+      const canUseTool = async (toolName: string, input: Record<string, unknown>, context: { signal: AbortSignal; title?: string; toolUseID?: string }): Promise<PermissionResult> => {
         if (signal.aborted || context.signal.aborted) return { behavior: 'deny', message: 'The run was interrupted.', interrupt: true };
         // Mingle's authenticated browser gateway enforces this run's policy and shared-control ownership.
         if (run.browserMcp && toolName.startsWith('mcp__mingle_browser__')) return { behavior: 'allow', updatedInput: input };
         // Only the six host-backed team tools; the bridge re-checks the run, membership and delivery on every call.
         if (run.teamMcp && TEAM_TOOL_NAMES.has(toolName)) return { behavior: 'allow', updatedInput: input };
         if (toolName === 'AskUserQuestion') {
-          return { behavior: 'deny', message: 'Interactive questions are not available in this environment. Continue with your best judgement and note any assumptions in your reply.' };
+          const requestId = context.toolUseID;
+          const questions = requestId ? claudeQuestionFields(input, requestId) : null;
+          if (!run.requestUserInput || !requestId || !questions) {
+            emit({ type: 'info', content: 'Claude requested interactive input, but this runtime did not provide a valid native question request. The request was declined.' });
+            return { behavior: 'deny', message: 'Mingle could not safely display this question. Continue with your best judgement and state any assumptions.' };
+          }
+          const answers = await run.requestUserInput({ nativeRequestId: requestId, tool: 'AskUserQuestion', questions });
+          if (!answers || signal.aborted || context.signal.aborted) return { behavior: 'deny', message: 'The user-input request was cancelled. Continue without it and explain any blocker.' };
+          const mapped = Object.fromEntries(questions.map((field, index) => {
+            const original = (input.questions as Record<string, unknown>[])[index]!;
+            const question = typeof original.question === 'string' ? original.question : field.id;
+            return [question, (answers[field.id] ?? []).join(', ')];
+          }));
+          return { behavior: 'allow', updatedInput: { ...input, answers: mapped } };
+        }
+        if (toolName === 'ExitPlanMode' && run.intent === 'plan') {
+          const plan = typeof input.plan === 'string' ? input.plan.trim() : '';
+          if (plan) {
+            const proposal = claudePlanProposal(plan, context.toolUseID ?? 'plan');
+            emit({ type: 'session.plan', ...proposal });
+            return { behavior: 'deny', message: 'The plan has been captured in Mingle for user review. Do not exit plan mode or begin implementation; provide a concise summary and finish this planning turn.' };
+          }
+          return { behavior: 'deny', message: 'Mingle could not capture an empty plan. Provide a concrete plan before finishing.' };
         }
         const aborted = new Promise<false>((resolve) => {
           const done = (): void => resolve(false);
@@ -121,8 +174,8 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): AgentAdapter 
         cwd: session.worktreePath,
         model: session.model,
         ...(session.effort !== 'none' ? { effort: session.effort as NonNullable<Options['effort']> } : {}),
-        permissionMode: claudePermissionMode(session.policy),
-        ...(session.policy === 'full-access' ? { allowDangerouslySkipPermissions: true } : {}),
+        permissionMode: run.intent === 'plan' ? 'plan' : claudePermissionMode(session.policy),
+        ...(session.policy === 'full-access' && run.intent !== 'plan' ? { allowDangerouslySkipPermissions: true } : {}),
         canUseTool,
         includePartialMessages: true,
         abortController: controller,

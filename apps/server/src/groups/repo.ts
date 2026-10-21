@@ -69,7 +69,8 @@ const mapMessage = (r: Row): GroupMessage => ({
 });
 const mapRequest = (r: Row): GroupRequest => ({
   id: r.id as string, groupId: r.group_id as string, messageId: r.message_id as string, plannerMemberId: r.planner_member_id as string,
-  status: r.status as GroupRequest['status'], turnsUsed: r.turns_used as number, createdAt: r.created_at as string,
+  status: r.status as GroupRequest['status'], turnsUsed: r.turns_used as number, createdAt: r.created_at as string, intent: (r.intent as GroupRequest['intent'] | undefined) ?? 'normal',
+  ...(typeof r.execution_plan_id === 'string' ? { executionPlanId: r.execution_plan_id } : {}),
 });
 const mapDelivery = (r: Row): DeliveryRow => ({
   id: r.id as string, groupId: r.group_id as string, requestId: r.request_id as string, messageId: r.message_id as string, memberId: r.member_id as string,
@@ -231,9 +232,9 @@ export class GroupRepo {
   }
 
   // requests
-  insertRequest(r: { id: string; groupId: string; messageId: string; plannerMemberId: string }): void {
+  insertRequest(r: { id: string; groupId: string; messageId: string; plannerMemberId: string; intent?: GroupRequest['intent']; executionPlanId?: string }): void {
     const now = nowIso();
-    this.run('INSERT INTO group_requests(id, group_id, message_id, planner_member_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)', r.id, r.groupId, r.messageId, r.plannerMemberId, 'active', now, now);
+    this.run('INSERT INTO group_requests(id, group_id, message_id, planner_member_id, status, created_at, updated_at, intent, execution_plan_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', r.id, r.groupId, r.messageId, r.plannerMemberId, 'active', now, now, r.intent ?? 'normal', r.executionPlanId ?? null);
   }
   getRequest(id: string): GroupRequest | undefined {
     const row = this.get('SELECT * FROM group_requests WHERE id = ?', id);

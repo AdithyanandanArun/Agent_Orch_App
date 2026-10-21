@@ -1,6 +1,6 @@
 import type {
   AddGroupAgent, AntigravityAuthState, AntigravityInstallState, Approval, AppSettings, Bootstrap, BrowserAction, BrowserConnect, BrowserDiscovery, BrowserSessionState, BrowserTab, CreateGroup, DirectoryListing, ExternalConversationDetails, ExternalConversationList, FileEntry, GitHubState, GitStatus, GroupSnapshot, ImportConversationResult, Project, ProjectContext, ProviderCatalog, ProviderInfo,
-  RepositoryBranch, RepositoryCommit, RepositoryMutationResult, RepositoryPullRequest, RepositoryPush, RepositoryState, RunChanges, SendGroupMessage, Session, SessionUsage, ToolCall, Task, TaskStatus, WorkspaceEvent, MessageContextRef,
+  RepositoryBranch, RepositoryCommit, RepositoryMutationResult, RepositoryPullRequest, RepositoryPush, RepositoryState, RunChanges, SendGroupMessage, Session, SessionUsage, ToolCall, Task, TaskStatus, WorkspaceEvent, MessageContextRef, EditSessionPlan, SessionPlan, UserInputAnswers, UserQuestion,
 } from '@mingle/contracts';
 import type { AccountState, AccountConnection, AccountPreferences, SavedAccountPreferences, AttachmentRef, NativeActionCatalog } from '@mingle/contracts';
 import type {
@@ -177,7 +177,12 @@ export const api = {
   toolCall: (id: string) => json<ToolCall>(`/api/tool-calls/${encodeURIComponent(id)}`),
   renameSession: (id: string, name: string) => json<Session>(`/api/sessions/${encodeURIComponent(id)}`, 'PATCH', { name }),
   deleteSession: (id: string) => json<{ ok: boolean; notices?: string[] }>(`/api/sessions/${encodeURIComponent(id)}`, 'DELETE'),
-  sendMessage: (id: string, content: string, skills?: string[], attachmentIds?: string[], contextRefs?: MessageContextRef[]) => json<{ accepted: boolean }>(`/api/sessions/${encodeURIComponent(id)}/messages`, 'POST', { content, ...(skills?.length ? { skills } : {}), ...(attachmentIds?.length ? { attachmentIds } : {}), ...(contextRefs?.length ? { contextRefs } : {}) }),
+  sendMessage: (id: string, content: string, skills?: string[], attachmentIds?: string[], contextRefs?: MessageContextRef[], intent: 'normal' | 'plan' = 'normal') => json<{ accepted: boolean }>(`/api/sessions/${encodeURIComponent(id)}/messages`, 'POST', { content, intent, ...(skills?.length ? { skills } : {}), ...(attachmentIds?.length ? { attachmentIds } : {}), ...(contextRefs?.length ? { contextRefs } : {}) }),
+  editPlan: (id: string, input: EditSessionPlan) => json<SessionPlan>(`/api/plans/${encodeURIComponent(id)}`, 'PATCH', input),
+  approvePlan: (id: string, revision: number) => json<SessionPlan>(`/api/plans/${encodeURIComponent(id)}/approve`, 'POST', { revision }),
+  executePlan: (id: string) => json<{ accepted: true; runId: string | null; deliveryId?: string; plan: SessionPlan }>(`/api/plans/${encodeURIComponent(id)}/execute`, 'POST', {}),
+  answerQuestion: (id: string, answers: UserInputAnswers) => json<UserQuestion>(`/api/questions/${encodeURIComponent(id)}/answer`, 'POST', answers),
+  cancelQuestion: (id: string) => json<UserQuestion>(`/api/questions/${encodeURIComponent(id)}/cancel`, 'POST', {}),
   compactSession: (id: string, signal?: AbortSignal, operationId?: string) => json<ContextCompactionResult>(`/api/sessions/${encodeURIComponent(id)}/compact`, 'POST', operationId ? { operationId } : {}, signal),
   interruptCompaction: (id: string, operationId: string) => json<{ interrupted: boolean }>(`/api/sessions/${encodeURIComponent(id)}/compact/interrupt`, 'POST', { operationId }),
   sessionRecovery: (id: string, signal?: AbortSignal) => json<{ checkpoint: ApiRecoveryCheckpoint | null; failure: ApiProviderFailure | null }>(`/api/sessions/${encodeURIComponent(id)}/recovery`, 'GET', undefined, signal),
