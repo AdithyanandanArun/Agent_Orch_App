@@ -3,7 +3,8 @@ import {
   nativeActionCommands, nativeActionSkills,
 } from '@mingle/contracts';
 import type {
-  AddGroupAgent, AgentConfiguration, ConversationGroup, CreateGroup, GroupAssignment, GroupDelivery, GroupMember, GroupMessage, GroupMode,
+  AddGroupAgent, AgentConfiguration, AutonomyConfig, ConversationGroup, CreateGroup, GroupAssignment, GroupDelivery, GroupMember, GroupMessage, GroupMode,
+  GroupMilestone, GroupRecoveryPolicy, GroupRecoveryState, ProviderFailure, RecoveryActionRequest, RecoveryActionResult, RecoveryCheckpoint,
   GroupRunContext, GroupSnapshot, ProviderInfo, Session, Task, TeamArtifactSchema, TeamAssignSchema, TeamMessageSchema, TeamStatusSchema, UpdateGroupSchema,
 } from '@mingle/contracts';
 import type { z } from 'zod';
@@ -12,16 +13,17 @@ import type { HandoffService } from '../handoffs.ts';
 import { resolveRunConfig } from '../session-config.ts';
 import type { Store } from '../store.ts';
 import type { TaskService } from '../tasks.ts';
-import { HttpError, conflict, errorMessage, notFound, nowIso, redactSecrets, truncate, unprocessable } from '../util.ts';
+import { RecoveryService } from '../recovery/service.ts';
+import { HttpError, conflict, errorMessage, newId, notFound, nowIso, redactSecrets, truncate, unprocessable } from '../util.ts';
 import type { WorkspaceService } from '../workspace.ts';
 import type { AttachmentService } from '../attachments/service.ts';
 import type { GroupInvocation, NativeInvocationInput, ProviderCatalog } from '@mingle/contracts';
 import {
-  GroupRepo, OPEN_DELIVERY, UNSETTLED_DELIVERY, artifactId, assignmentId, deliveryId, groupId as newGroupId, memberId as newMemberId, requestId as newRequestId,
-  type ArtifactRow, type AssignmentRow, type DeliveryRow, type MemberRow,
+  GroupRepo, OPEN_DELIVERY, artifactId, assignmentId, deliveryId, groupId as newGroupId, memberId as newMemberId, requestId as newRequestId,
+  type ArtifactRow, type AssignmentRow, type DeliveryRow, type GroupRecoveryCheckpointRow, type MemberRow,
 } from './repo.ts';
 import {
-  LIMITS, MODE_LABEL, assignmentText, buildInstructions, clean, messageDeliveryText, requestDeliveryText, resultText, type ResultLine, type RosterEntry,
+  LIMITS, MODE_LABEL, assignmentText, buildInstructions, clean, deriveAcceptanceCriteria, messageDeliveryText, requestDeliveryText, resultText, type ResultLine, type RosterEntry,
 } from './prompt.ts';
 import { RESERVED_HANDLES, extractMentions, normalizeScopes, safeArtifactPath, scopesOverlap } from './routing.ts';
 
@@ -34,11 +36,19 @@ export interface GroupRuntime {
   interrupt(sessionId: string): boolean;
 }
 export type GroupCatalog = (session: Session, refresh?: boolean) => Promise<ProviderCatalog>;
+export interface GroupRecoveryReader {
+  capture(sessionId: string, reason: string, runId?: string): Promise<RecoveryCheckpoint>;
+  latest(sessionId: string): RecoveryCheckpoint | null;
+  failure(sessionId: string): ProviderFailure | null;
+  failureForRun(runId: string): ProviderFailure | null;
+  clearFailure(sessionId: string): void;
+}
 export interface GroupServiceOptions {
   store: Store; workspace: WorkspaceService; tasks: TaskService; handoffs: HandoffService; runtime: GroupRuntime; log: GroupLog;
   providers?: () => ProviderInfo[];
   attachments?: AttachmentService;
   catalog?: GroupCatalog;
+  recovery?: GroupRecoveryReader;
 }
 
 type Outcome = 'completed' | 'failed' | 'interrupted';
@@ -47,17 +57,25 @@ type TeamMessage = z.infer<typeof TeamMessageSchema>;
 type TeamArtifact = z.infer<typeof TeamArtifactSchema>;
 type TeamStatus = z.infer<typeof TeamStatusSchema>;
 type Update = z.infer<typeof UpdateGroupSchema>;
+type QuotaRecoveryPolicy = GroupRecoveryPolicy & { allowUnverifiedQuotaFallback?: boolean };
 interface Live { delivery: DeliveryRow; group: ConversationGroup; member: MemberRow; session: Session; request: ReturnType<GroupRepo['getRequest']> & object }
 
 const MAX_MEMBERS = 8;
 const MAX_MESSAGES_PER_RUN = 12;
 const MAX_ASSIGNMENTS_PER_RUN = 10;
+const STALL_RUN_THRESHOLD = 3;
 const SNAPSHOT_MESSAGES = 500;
 const SNAPSHOT_DELIVERIES = 300;
 const SNAPSHOT_REQUESTS = 100;
 const FULL_SHA = /^[0-9a-f]{40,64}$/i;
-const DEFAULT_LIMITS = { maxParallel: 2, maxTurns: 16, maxHops: 6 };
+const DEFAULT_LIMITS = { maxParallel: 2, maxTurns: 80, maxHops: 6 };
+const MAX_SAFE_RETRIES = 1;
+const MAX_SAFE_RETRY_DELAY_MS = 24 * 60 * 60 * 1000;
 const forbidden = (message: string) => new HttpError(403, message);
+const effectiveTurnLimit = (group: ConversationGroup): number | null => {
+  const autonomy = group.autonomy;
+  return autonomy?.emergencyTurnLimit === undefined ? group.maxTurns : autonomy.emergencyTurnLimit;
+};
 
 export class GroupService {
   private readonly store: Store;
@@ -70,9 +88,13 @@ export class GroupService {
   private readonly providers?: () => ProviderInfo[];
   private readonly attachments?: AttachmentService;
   private readonly catalog?: GroupCatalog;
+  private readonly recovery?: GroupRecoveryReader;
   private closed = false;
   private lock: Promise<unknown> = Promise.resolve();
   private readonly pending = new Set<string>();
+  private readonly safeRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Only former coordinator runs lose authority on takeover; independent worker runs keep their tools. */
+  private readonly fencedCoordinatorDeliveries = new Set<string>();
   private scheduled = false;
   private readonly unsubscribe: () => void;
   /** Deliveries whose runtime.start call is in flight, keyed by session. Closed by the same synchronous turn. */
@@ -89,8 +111,12 @@ export class GroupService {
     this.providers = options.providers;
     this.attachments = options.attachments;
     this.catalog = options.catalog;
+    this.recovery = options.recovery ?? new RecoveryService(options.store);
     this.unsubscribe = this.store.subscribe((event) => {
       if (event?.type.startsWith('task.')) {
+        const taskId = typeof event.payload.taskId === 'string' ? event.payload.taskId : null;
+        if (taskId && event.type === 'task.done') this.repo.setTaskMilestones(taskId, 'completed', `task-event:${event.id}`);
+        if (taskId && event.type === 'task.blocked') this.repo.setTaskMilestones(taskId, 'blocked', `task-event:${event.id}`);
         for (const group of this.repo.listGroups()) if (group.projectId === event.projectId) this.schedule(group.id);
       }
     });
@@ -109,11 +135,17 @@ export class GroupService {
   }
 
   private snapshot(group: ConversationGroup): GroupSnapshot {
-    const members: GroupMember[] = this.repo.members(group.id).map((m) => ({ id: m.id, groupId: m.groupId, sessionId: m.sessionId, handle: m.handle, role: m.role, held: m.held, joinedAt: m.joinedAt, removedAt: m.removedAt }));
+    const members: GroupMember[] = this.repo.members(group.id).map((m) => {
+      const failure = this.recovery?.failure(m.sessionId) ?? undefined;
+      return { id: m.id, groupId: m.groupId, sessionId: m.sessionId, handle: m.handle, role: m.role, held: m.held,
+        joinedAt: m.joinedAt, removedAt: m.removedAt, ...(failure ? { failure } : {}) };
+    });
     const rows = [...new Map([...this.repo.recentDeliveries(group.id, SNAPSHOT_DELIVERIES), ...this.repo.deliveries(group.id).filter((d) => OPEN_DELIVERY.includes(d.status) || d.retryable)].map((d) => [d.id, d])).values()];
     const deliveries: GroupDelivery[] = rows.map((d) => ({
       id: d.id, groupId: d.groupId, requestId: d.requestId, messageId: d.messageId, memberId: d.memberId, status: d.status, runId: d.runId, hop: d.hop,
-      kind: d.kind,
+      kind: d.kind, coordinatorEpoch: d.coordinatorEpoch,
+      ...(d.runId && this.recovery?.failureForRun(d.runId) ? { failure: this.recovery.failureForRun(d.runId)! } : {}),
+      ...(this.repo.deliverySuccessor(group.id, d.id) ? { recoveredByDeliveryId: this.repo.deliverySuccessor(group.id, d.id)! } : {}),
       error: d.error, createdAt: d.createdAt, updatedAt: d.updatedAt,
     }));
     const requests = [...new Map([...this.repo.requests(group.id, SNAPSHOT_REQUESTS), ...rows.map((d) => this.repo.getRequest(d.requestId)).filter((r): r is NonNullable<typeof r> => Boolean(r))].map((r) => [r.id, r])).values()];
@@ -138,7 +170,7 @@ export class GroupService {
       this.assertOpen();
       const original = this.requireJoinable(input.sessionId);
       const settings = this.store.getSettings();
-      const defaults = { ...DEFAULT_LIMITS, ...settings.groupDefaults };
+        const defaults = { ...DEFAULT_LIMITS, ...settings.groupDefaults };
       if (input.mode !== 'orchestrated' && (input.orchestrator || input.currentConfiguration)) {
         throw unprocessable('A separate orchestrator and a current-agent configuration change apply only to Orchestrated groups');
       }
@@ -182,7 +214,7 @@ export class GroupService {
         const members = { original: newMemberId(), worker: newMemberId(), coordinator: coordinator ? newMemberId() : undefined };
         const peer = input.mode === 'cowork';
         this.store.tx(() => {
-          this.repo.insertGroup({ id, projectId: original.projectId, title: original.name, anchorSessionId: original.id, mode: input.mode, ...defaults });
+          this.repo.insertGroup({ id, projectId: original.projectId, title: original.name, anchorSessionId: original.id, mode: input.mode, ...defaults, autonomy: settings.groupDefaults?.autonomy ?? { mode: 'balanced' } });
           const originalRole = input.mode === 'current-leads' ? 'orchestrator' : peer ? 'peer' : 'worker';
           this.repo.insertMember({ id: members.original, groupId: id, sessionId: original.id, handle: originalHandle, role: originalRole });
           this.repo.insertMember({ id: members.worker, groupId: id, sessionId: worker.id, handle: newHandle, role: peer ? 'peer' : 'worker' });
@@ -268,6 +300,9 @@ export class GroupService {
     }
     if (limits.length && !group.paused && unsettled.length) throw conflict('Stop the group before changing limits while work is queued');
 
+    const recoveryPolicy = patch.recoveryPolicy ?? group.recoveryPolicy;
+    if (recoveryPolicy) this.validateRecoveryPolicy({ ...group, mode, orchestratorMemberId: orchestrator }, members, recoveryPolicy);
+
     this.store.tx(() => {
       if (changedRoles) {
         // Held deliveries belong to the old structure; they are cancelled visibly rather than silently retargeted.
@@ -277,12 +312,24 @@ export class GroupService {
           const role: GroupMember['role'] = mode === 'cowork' ? 'peer' : member.id === orchestrator ? 'orchestrator' : 'worker';
           if (role !== member.role) this.repo.updateMember(member.id, { role });
         }
-        this.repo.updateGroup(group.id, { mode, orchestratorMemberId: orchestrator });
+        const epoch = (group.coordinatorEpoch ?? 1) + 1;
+        this.repo.updateGroup(group.id, { mode, orchestratorMemberId: orchestrator, coordinatorEpoch: epoch });
+        const anchorId = members.find((member) => member.sessionId === group.anchorSessionId)?.id;
+        const planner = mode === 'cowork' ? anchorId : orchestrator;
+        if (planner) this.repo.updateRequestPlanner(group.id, null, planner);
         this.event(group, 'group.mode.changed', `Group mode: ${MODE_LABEL[group.mode]} → ${MODE_LABEL[mode]}`, { from: group.mode, to: mode, orchestratorMemberId: orchestrator, cancelled: unsettled.length });
       }
       if (limits.length) {
         this.repo.updateGroup(group.id, { maxParallel: patch.maxParallel, maxTurns: patch.maxTurns, maxHops: patch.maxHops });
         this.event(group, 'group.limits.changed', 'Group coordination limits updated', Object.fromEntries(limits.map((key) => [key, patch[key]])));
+      }
+      if (patch.autonomy && JSON.stringify(patch.autonomy) !== JSON.stringify(group.autonomy ?? { mode: 'balanced' })) {
+        this.repo.updateGroup(group.id, { autonomy: patch.autonomy });
+        this.event(group, 'group.autonomy.changed', `Group autonomy set to ${patch.autonomy.mode}`, { autonomy: patch.autonomy });
+      }
+      if (recoveryPolicy && JSON.stringify(recoveryPolicy) !== JSON.stringify(group.recoveryPolicy ?? { automaticFallback: false })) {
+        this.repo.updateGroup(group.id, { recoveryPolicy });
+        this.event(group, 'group.recovery-policy.changed', 'Group recovery policy updated', { recoveryPolicy });
       }
     });
     mode = this.requireGroup(group.id).mode;
@@ -470,23 +517,603 @@ export class GroupService {
     return this.get(group.id);
   }
 
-  /** Explicit resume: clears holds and requeues retryable interrupted or failed deliveries with a fresh run. */
+  /** Human-directed, durable recovery actions. Repeated idempotency keys return the stored result. */
+  async recoverAction(groupId: string, action: RecoveryActionRequest): Promise<RecoveryActionResult> {
+    return this.exclusive(async () => {
+      this.assertOpen();
+      const prior = this.repo.getRecoveryAction(groupId, action.idempotencyKey);
+      if (prior) return { ...prior, status: 'already-applied' };
+      const group = this.requireGroup(groupId);
+      let captured: RecoveryCheckpoint | null = null;
+      if (action.action === 'pause-for-human') {
+        const delivery = action.deliveryId ? this.recoveryDelivery(group, action.deliveryId) : null;
+        const memberId = delivery?.memberId ?? group.orchestratorMemberId
+          ?? this.repo.members(group.id, false).find((row) => row.sessionId === group.anchorSessionId)?.id;
+        const member = memberId ? this.requireMember(group, memberId) : undefined;
+        const session = member ? this.store.getSession(member.sessionId) : undefined;
+        if (!session) throw conflict('No group session is available to capture a recovery checkpoint');
+        const captureTarget = { member: member!, delivery };
+        captured = await this.recovery!.capture(session.id, action.reason.slice(0, 200), delivery?.runId ?? undefined);
+        this.assertRecoveryCaptureCurrent(group, captureTarget);
+      }
+      const currentGroup = action.action === 'pause-for-human' ? this.requireGroup(groupId) : group;
+      const result: RecoveryActionResult = {
+        actionId: newId('msg'), groupId, action: action.action, status: 'applied', coordinatorEpoch: currentGroup.coordinatorEpoch ?? 1,
+      };
+      const plannerRequestId = 'requestId' in action && typeof action.requestId === 'string' ? action.requestId : undefined;
+      this.store.tx(() => {
+        switch (action.action) {
+          case 'retry-delivery': this.applyRetryAction(currentGroup, action, result.actionId); break;
+          case 'fallback-delivery': this.applyFallbackAction(currentGroup, action, result.actionId); break;
+          case 'replace-coordinator': this.applyCoordinatorReplacement(currentGroup, action.replacementMemberId, false, action.checkpointId, plannerRequestId); break;
+          case 'pause-for-human': this.applyPauseForHuman(currentGroup, action.deliveryId ?? null, action.reason, captured!, action.idempotencyKey); break;
+          case 'acknowledge-checkpoint': this.acknowledgeCheckpoint(currentGroup, action.checkpointId); break;
+          case 'resume': this.applyRecoveryResume(currentGroup); break;
+        }
+        result.coordinatorEpoch = this.repo.getGroup(currentGroup.id)?.coordinatorEpoch ?? result.coordinatorEpoch;
+        this.repo.insertRecoveryAction({ id: result.actionId, groupId, idempotencyKey: action.idempotencyKey, action: action.action, result });
+      });
+      this.schedule(groupId);
+      return result;
+    });
+  }
+
+  private recoveryDelivery(group: ConversationGroup, id: string): DeliveryRow {
+    const delivery = this.repo.getDelivery(id);
+    if (!delivery || delivery.groupId !== group.id) throw notFound('Delivery not found in this group');
+    return delivery;
+  }
+
+  private assertRecoveryCaptureCurrent(group: ConversationGroup, target: { member: MemberRow; delivery: DeliveryRow | null }): void {
+    const fresh = this.requireGroup(group.id);
+    const epochChanged = (fresh.coordinatorEpoch ?? 1) !== (group.coordinatorEpoch ?? 1);
+    const configChanged = fresh.projectId !== group.projectId || fresh.anchorSessionId !== group.anchorSessionId
+      || fresh.mode !== group.mode || fresh.orchestratorMemberId !== group.orchestratorMemberId
+      || fresh.maxParallel !== group.maxParallel || fresh.maxTurns !== group.maxTurns || fresh.maxHops !== group.maxHops
+      || JSON.stringify(fresh.autonomy ?? null) !== JSON.stringify(group.autonomy ?? null)
+      || JSON.stringify(fresh.recoveryPolicy ?? null) !== JSON.stringify(group.recoveryPolicy ?? null);
+    if (epochChanged || configChanged) throw conflict('The group configuration changed while its recovery checkpoint was being captured. Review the current group state and try again.');
+
+    const member = this.requireMember(fresh, target.member.id);
+    if (member.sessionId !== target.member.sessionId || member.role !== target.member.role || member.held !== target.member.held
+      || !this.store.getSession(member.sessionId)) {
+      throw conflict('The checkpoint session is no longer an active group member. Review the current group state and try again.');
+    }
+    if (target.delivery) {
+      const current = this.recoveryDelivery(fresh, target.delivery.id);
+      if (current.memberId !== target.delivery.memberId || current.memberId !== member.id || current.requestId !== target.delivery.requestId
+        || current.status !== target.delivery.status || current.runId !== target.delivery.runId || current.updatedAt !== target.delivery.updatedAt) {
+        throw conflict('The delivery changed while its recovery checkpoint was being captured. Review the current delivery and try again.');
+      }
+    }
+  }
+
+  private assertNoRecoverySuccessor(group: ConversationGroup, source: DeliveryRow): void {
+    const successor = this.repo.deliverySuccessor(group.id, source.id);
+    if (successor) throw conflict(`This delivery already has recovery continuation ${successor}`);
+  }
+
+  private existingRecoveryContinuation(group: ConversationGroup, source: DeliveryRow, targetMemberId?: string): DeliveryRow | undefined {
+    return this.repo.requestDeliveries(source.requestId, OPEN_DELIVERY).find((row) => row.id !== source.id && (!targetMemberId || row.memberId === targetMemberId)
+      && (source.assignmentId ? row.assignmentId === source.assignmentId : row.kind === 'request' || row.kind === 'result'));
+  }
+
+  private linkRecoverySuccessor(group: ConversationGroup, source: DeliveryRow, successorId: string): void {
+    if (!this.repo.linkDeliverySuccessor(group.id, source.requestId, source.id, successorId)) {
+      throw conflict('This recovery continuation is already linked to another delivery');
+    }
+  }
+
+  private recoveryCheckpoint(
+    group: ConversationGroup, checkpointId: string | undefined, failure: ProviderFailure | null, requestIdArg?: string, deliveryIdArg?: string,
+  ): GroupRecoveryCheckpointRow | undefined {
+    const requiresCheckpoint = Boolean(failure && (failure.outcomeUnknown === true || failure.dispatchState === 'unknown' || failure.continuationSafety !== 'safe'));
+    if (!checkpointId) {
+      if (requiresCheckpoint) throw conflict('This provider outcome is uncertain. Capture and acknowledge a recovery checkpoint before retrying or reassigning it.');
+      return undefined;
+    }
+    const checkpoint = this.repo.getRecoveryCheckpoint(group.id, checkpointId);
+    if (!checkpoint) throw notFound('Recovery checkpoint not found in this group');
+    if (checkpoint.state !== 'acknowledged') throw conflict('Acknowledge the recovery checkpoint before continuing this delivery');
+    if (requestIdArg && checkpoint.requestId && checkpoint.requestId !== requestIdArg) throw conflict('This checkpoint belongs to a different group request');
+    if (deliveryIdArg) {
+      const linked = checkpoint.payload.deliveryId === deliveryIdArg
+        || (Array.isArray(checkpoint.payload.deliveryIds) && checkpoint.payload.deliveryIds.includes(deliveryIdArg));
+      if ((checkpoint.payload.deliveryId !== undefined || checkpoint.payload.deliveryIds !== undefined) && !linked) {
+        throw conflict('This checkpoint does not describe the delivery being recovered');
+      }
+    }
+    return checkpoint;
+  }
+
+  private validateHandoffCheckpoint(checkpoint: RecoveryCheckpoint, sessionId: string, runId?: string): void {
+    if (checkpoint.sessionId !== sessionId || (runId && checkpoint.runId !== runId)) throw conflict('Recovery checkpoint does not describe the source session and run');
+    if (!checkpoint.worktree.statusKnown) throw conflict('Recovery checkpoint could not verify source worktree state; ask for human review');
+    if (checkpoint.pendingApprovals.length) throw conflict('Recovery checkpoint contains pending approvals; ask for human review');
+    if (checkpoint.uncertainTools.some((tool) => tool.status !== 'completed')) throw conflict('Recovery checkpoint contains an uncertain tool outcome; ask for human review');
+  }
+
+  private acknowledgedNativeCheckpoint(group: ConversationGroup, checkpoint: GroupRecoveryCheckpointRow | undefined, sessionId: string, runId?: string): RecoveryCheckpoint | undefined {
+    if (!checkpoint) return undefined;
+    const providerCheckpointId = typeof checkpoint.payload.providerCheckpointId === 'string' ? checkpoint.payload.providerCheckpointId : undefined;
+    const native = providerCheckpointId ? this.recovery?.latest(sessionId) : null;
+    if (!native || native.id !== providerCheckpointId) throw conflict('The acknowledged group checkpoint does not resolve to its captured native worktree checkpoint');
+    this.validateHandoffCheckpoint(native, sessionId, runId);
+    return native;
+  }
+
+  private applyRetryAction(group: ConversationGroup, action: Extract<RecoveryActionRequest, { action: 'retry-delivery' }>, actionId: string): void {
+    const delivery = this.recoveryDelivery(group, action.deliveryId);
+    if (delivery.status !== 'failed' && delivery.status !== 'interrupted') throw conflict('Only a failed or interrupted delivery can be retried');
+    this.assertNoRecoverySuccessor(group, delivery);
+    const member = this.requireMember(group, delivery.memberId);
+    const session = this.store.getSession(member.sessionId);
+    if (!session || this.sessionBusy(session) || this.repo.memberDeliveries(member.id, ['running']).length) throw conflict(`Wait for @${member.handle} to finish provider cleanup before retrying`);
+    const failure = delivery.runId ? this.recovery?.failureForRun(delivery.runId) ?? null : null;
+    const checkpoint = this.recoveryCheckpoint(group, action.checkpointId, failure, delivery.requestId, delivery.id);
+    const request = this.repo.getRequest(delivery.requestId);
+    if (!request) throw conflict('The delivery request no longer exists');
+    const limit = effectiveTurnLimit(group);
+    if (limit !== null && request.turnsUsed + this.repo.requestDeliveries(request.id, ['queued']).length >= limit) throw conflict(`The request turn budget (${limit}) has been reached`);
+    if (delivery.hop > group.maxHops) throw conflict(`The message hop limit (${group.maxHops}) has been reached`);
+    const existing = this.existingRecoveryContinuation(group, delivery);
+    if (existing) {
+      this.linkRecoverySuccessor(group, delivery, existing.id);
+      this.repo.setDelivery(delivery.id, { retryable: false });
+      this.repo.updateMember(member.id, { held: false });
+      this.repo.updateRequest(request.id, { status: 'active' });
+      return;
+    }
+    const priorMessage = this.repo.getMessage(delivery.messageId)?.content ?? '';
+    const task = delivery.assignmentId ? this.store.getTask(this.repo.getAssignment(delivery.assignmentId)?.taskId ?? '') : undefined;
+    const approach = clean(action.approachNote?.trim() ?? '', 1000);
+    const content = task
+      ? `Recovery retry for existing task ${task.id}: ${task.title}\nContinue from the current worktree and inspect completed side effects before acting. Do not repeat completed effects.\n${approach ? `New approach: ${approach}\n` : ''}${checkpoint ? `Acknowledged checkpoint: ${checkpoint.id}\n` : ''}\n${clean(task.description, 6000)}`
+      : `Recovery continuation for failed delivery ${delivery.id}. Do not replay actions that may already have completed; inspect the current workspace and continue the request from its present state.\n${approach ? `New approach: ${approach}\n` : ''}${checkpoint ? `Acknowledged checkpoint: ${checkpoint.id}\n` : ''}\nOriginal context:\n${clean(priorMessage, 6000)}`;
+    const message = this.repo.insertMessage({ groupId: group.id, senderMemberId: null, recipients: [member.id], kind: 'status', requestId: request.id, content: truncate(content, 12_000) });
+    if (delivery.assignmentId && task) {
+      if (task.status === 'done') throw conflict('The assignment task was already accepted as done');
+      const nextId = deliveryId();
+      this.repo.insertDelivery({ id: nextId, groupId: group.id, requestId: request.id, messageId: message.id, memberId: member.id, kind: 'assignment', hop: delivery.hop, assignmentId: delivery.assignmentId, taskId: task.id, coordinatorEpoch: group.coordinatorEpoch });
+      this.repo.reassignAssignment(delivery.assignmentId, member.id, nextId);
+      this.linkRecoverySuccessor(group, delivery, nextId);
+    } else {
+      const nextId = deliveryId();
+      this.repo.insertDelivery({ id: nextId, groupId: group.id, requestId: request.id, messageId: message.id, memberId: member.id, kind: 'result', hop: delivery.hop, coordinatorEpoch: group.coordinatorEpoch });
+      this.linkRecoverySuccessor(group, delivery, nextId);
+    }
+    this.repo.setDelivery(delivery.id, { retryable: false });
+    this.repo.updateMember(member.id, { held: false });
+    this.repo.updateRequest(request.id, { status: 'active' });
+    this.repo.updateGroup(group.id, { recoveryState: { status: 'recovering', activeRequestId: request.id, updatedAt: nowIso() } });
+    this.event(group, 'group.recovery.retry', `Recovery continuation queued for @${member.handle}`, { deliveryId: delivery.id, actionId, checkpointId: checkpoint?.id ?? null }, member.sessionId);
+  }
+
+  private applyFallbackAction(group: ConversationGroup, action: Extract<RecoveryActionRequest, { action: 'fallback-delivery' }>, actionId: string): void {
+    const delivery = this.recoveryDelivery(group, action.deliveryId);
+    if (delivery.kind !== 'assignment' || !delivery.assignmentId || (delivery.status !== 'failed' && delivery.status !== 'interrupted')) {
+      throw conflict('Only a failed or interrupted assignment delivery can be reassigned');
+    }
+    this.assertNoRecoverySuccessor(group, delivery);
+    const assignment = this.repo.getAssignment(delivery.assignmentId);
+    const task = assignment ? this.store.getTask(assignment.taskId) : undefined;
+    const source = this.requireMember(group, delivery.memberId);
+    const target = this.requireMember(group, action.replacementMemberId);
+    const sourceSession = this.store.getSession(source.sessionId);
+    const targetSession = this.store.getSession(target.sessionId);
+    if (!assignment || !task || task.status === 'done') throw conflict('The assignment task is unavailable or already accepted');
+    if (!sourceSession || this.sessionBusy(sourceSession) || this.repo.memberDeliveries(source.id, ['running']).length) throw conflict(`Wait for @${source.handle} to finish cleanup before transferring the assignment`);
+    if (target.id === source.id || target.held || !targetSession || this.sessionBusy(targetSession) || this.repo.memberDeliveries(target.id, ['queued', 'running']).length) throw conflict(`@${target.handle} must be active and idle before receiving this assignment`);
+    if (task.status === 'running') throw conflict('The task is still marked running; wait for its owner to settle before reassignment');
+    const failure = delivery.runId ? this.recovery?.failureForRun(delivery.runId) ?? null : null;
+    if (sourceSession.worktreePath !== targetSession.worktreePath && !action.checkpointId) throw conflict('Reassignment to a different worktree requires an acknowledged source recovery checkpoint');
+    const checkpoint = this.recoveryCheckpoint(group, action.checkpointId, failure, delivery.requestId, delivery.id);
+    if (this.existingRecoveryContinuation(group, delivery)) throw conflict('A queued or running successor already owns this assignment');
+    this.assertNoTargetTaskConflict(group, target, targetSession.worktreePath, assignment.scope, assignment.id);
+    const request = this.repo.getRequest(delivery.requestId);
+    if (!request) throw conflict('The assignment request no longer exists');
+    const limit = effectiveTurnLimit(group);
+    if (limit !== null && request.turnsUsed + this.repo.requestDeliveries(request.id, ['queued']).length >= limit) throw conflict(`The request turn budget (${limit}) has been reached`);
+    const old = this.repo.getMessage(delivery.messageId)?.content ?? task.description;
+    const sourceCheckpointId = typeof checkpoint?.payload.providerCheckpointId === 'string' ? checkpoint.payload.providerCheckpointId : undefined;
+    const sourceCheckpoint = sourceCheckpointId ? this.recovery?.latest(source.sessionId) : null;
+    if (sourceSession.worktreePath !== targetSession.worktreePath && (!sourceCheckpoint || sourceCheckpoint.id !== sourceCheckpointId)) {
+      throw conflict('The acknowledged checkpoint does not contain source worktree references for this reassignment');
+    }
+    const sourceReferences = sourceSession.worktreePath !== targetSession.worktreePath && sourceCheckpoint ?
+      `Source worktree ${sourceCheckpoint.worktree.path}; branch ${sourceCheckpoint.worktree.branch ?? 'unknown'}; HEAD ${sourceCheckpoint.worktree.head ?? 'unknown'}; dirty paths ${sourceCheckpoint.worktree.dirtyPaths.join(', ') || 'none reported'}${sourceCheckpoint.worktree.dirtyPathsTruncated ? ' (list truncated)' : ''}. Inspect or integrate those references; this target worktree does not automatically contain the source edits.\nAcceptance: ${task.acceptanceCriteria}\n` : '';
+    const message = this.repo.insertMessage({ groupId: group.id, senderMemberId: null, recipients: [target.id], kind: 'assignment', requestId: request.id,
+      content: truncate(`Reassigned continuation of task ${task.id}: ${task.title}. Inspect existing changes and do not repeat completed side effects.\nScope: ${assignment.scope.join(', ')}\n${checkpoint ? `Acknowledged checkpoint: ${checkpoint.id}\n` : ''}${sourceReferences}${clean(old, 6000)}`, 12_000) });
+    const nextId = deliveryId();
+    this.store.updateTask(task.id, { sessionId: target.sessionId });
+    this.repo.insertDelivery({ id: nextId, groupId: group.id, requestId: request.id, messageId: message.id, memberId: target.id, kind: 'assignment', hop: delivery.hop, assignmentId: assignment.id, taskId: task.id, coordinatorEpoch: group.coordinatorEpoch });
+    this.repo.reassignAssignment(assignment.id, target.id, nextId);
+    this.linkRecoverySuccessor(group, delivery, nextId);
+    this.repo.setDelivery(delivery.id, { retryable: false });
+    this.repo.updateMember(source.id, { held: true });
+    this.repo.updateRequest(request.id, { status: 'active' });
+    this.repo.updateGroup(group.id, { recoveryState: { status: 'recovering', activeRequestId: request.id, updatedAt: nowIso() } });
+    this.event(group, 'group.assignment.reassigned', `Assignment moved from @${source.handle} to @${target.handle}`, { assignmentId: assignment.id, deliveryId: delivery.id, replacementDeliveryId: nextId, actionId, checkpointId: checkpoint?.id ?? null }, target.sessionId);
+  }
+
+  private assertNoTargetTaskConflict(group: ConversationGroup, target: MemberRow, worktreePath: string, scope: string[], exceptAssignmentId: string): void {
+    for (const assignment of this.repo.activeAssignments(group.id)) {
+      if (assignment.id === exceptAssignmentId) continue;
+      const delivery = this.repo.getDelivery(assignment.deliveryId);
+      const owner = this.repo.getMember(assignment.toMemberId);
+      const ownerSession = owner ? this.store.getSession(owner.sessionId) : undefined;
+      if (!delivery || !owner || !ownerSession || ownerSession.worktreePath !== worktreePath) continue;
+      const task = this.store.getTask(assignment.taskId);
+      if (assignment.toMemberId === target.id && (OPEN_DELIVERY.includes(delivery.status) || delivery.retryable || task?.status === 'running')) {
+        throw conflict(`@${target.handle} already owns live or retryable task work; settle or cancel it before reassignment`);
+      }
+      if ((OPEN_DELIVERY.includes(delivery.status) || delivery.retryable) && scopesOverlap(scope, assignment.scope)) {
+        throw conflict(`The recovery scope overlaps active assignment ${assignment.id} in the same worktree`);
+      }
+    }
+    if (this.store.listTasks(group.projectId).some((task) => task.sessionId === target.sessionId && (task.status === 'ready' || task.status === 'running'))) {
+      throw conflict(`@${target.handle} has another ready or running task even though the provider session is idle`);
+    }
+  }
+
+  private applyPauseForHuman(group: ConversationGroup, deliveryIdArg: string | null, reason: string, captured: RecoveryCheckpoint, idempotencyKey: string): void {
+    const delivery = deliveryIdArg ? this.recoveryDelivery(group, deliveryIdArg) : undefined;
+    const requestIdArg = delivery?.requestId ?? null;
+    const checkpoint = this.repo.insertRecoveryCheckpoint({
+      id: newId('msg'), groupId: group.id, requestId: requestIdArg, batchId: delivery?.id ?? null, kind: 'pause-for-human',
+      reason: clean(reason, 1000), payload: { deliveryId: delivery?.id ?? null, providerCheckpointId: captured.id }, idempotencyKey,
+    });
+    this.repo.updateGroup(group.id, { paused: true, pauseReason: clean(reason, 1000), recoveryState: {
+      status: 'paused', reason: clean(reason, 1000), pendingCheckpointId: checkpoint.id, ...(requestIdArg ? { activeRequestId: requestIdArg } : {}), updatedAt: nowIso(),
+    } });
+    for (const request of this.repo.requestsWithStatus(group.id, 'active')) this.refreshRequest(request.id, true);
+    this.event(group, 'group.recovery.paused', 'Group paused for human review', { checkpointId: checkpoint.id, providerCheckpointId: captured.id, deliveryId: delivery?.id ?? null });
+  }
+
+  private applyCoordinatorReplacement(
+    group: ConversationGroup, replacementId: string, automatic: boolean, checkpointId?: string, requestIdArg?: string,
+    quotaPoolVerification?: 'verified-distinct' | 'unverified',
+  ): void {
+    const target = this.requireMember(group, replacementId);
+    if (group.mode === 'cowork') {
+      const request = requestIdArg ? this.repo.getRequest(requestIdArg) : undefined;
+      if (!request || request.groupId !== group.id || (request.status !== 'active' && request.status !== 'paused')) {
+        throw conflict('Cowork coordinator recovery requires the affected active request ID');
+      }
+      const old = this.requireMember(group, request.plannerMemberId);
+      if (old.id === target.id) return;
+      const sourceSession = this.store.getSession(old.sessionId);
+      const targetSession = this.store.getSession(target.sessionId);
+      const sourceBusy = Boolean(sourceSession && this.sessionBusy(sourceSession));
+      if (!sourceSession || !targetSession || target.held || this.sessionBusy(targetSession)
+        || this.repo.requestDeliveries(request.id, ['queued', 'running']).some((row) => row.memberId === target.id)) {
+        throw conflict(`@${target.handle} must be idle before taking this request's planning lease`);
+      }
+      const oldRequestDeliveries = this.repo.requestDeliveries(request.id, ['running']).filter((row) => row.memberId === old.id);
+      if (sourceBusy && (automatic || sourceSession.worktreePath === targetSession.worktreePath)) throw conflict(`Wait for @${old.handle} to finish cleanup before changing this request's planning lease`);
+      const failed = this.repo.requestDeliveries(request.id, ['failed', 'interrupted']).filter((row) => row.memberId === old.id && row.runId).at(-1);
+      const failure = failed?.runId ? this.recovery?.failureForRun(failed.runId) ?? null : null;
+      const checkpoint = this.recoveryCheckpoint(group, checkpointId, failure, request.id, failed?.id ?? oldRequestDeliveries.at(-1)?.id);
+      if (sourceBusy && sourceSession.worktreePath !== targetSession.worktreePath && !checkpoint) throw conflict('Changing the planning lease across worktrees requires an acknowledged source checkpoint');
+      if (automatic && (sourceSession.policy !== targetSession.policy || sourceSession.worktreePath !== targetSession.worktreePath)) {
+        throw conflict('Automatic cowork fallback requires the same permission policy and worktree');
+      }
+      const epoch = (group.coordinatorEpoch ?? 1) + 1;
+      this.repo.updateRequestPlannerOne(request.id, target.id);
+      const rerouted = this.repo.rerouteQueuedRequestDeliveries(request.id, old.id, target.id, epoch);
+      const previous = group.recoveryState;
+      this.repo.updateGroup(group.id, { coordinatorEpoch: epoch, recoveryState: {
+        status: previous?.pendingCheckpointId ? 'paused' : 'recovering', activeRequestId: request.id,
+        ...(previous?.pendingCheckpointId ? { pendingCheckpointId: previous.pendingCheckpointId, reason: previous.reason } : {}),
+        ...(checkpoint?.id ? { acknowledgedCheckpointId: checkpoint.id } : previous?.acknowledgedCheckpointId ? { acknowledgedCheckpointId: previous.acknowledgedCheckpointId } : {}),
+        ...(previous?.acknowledgedDeliveryIds ? { acknowledgedDeliveryIds: previous.acknowledgedDeliveryIds.slice(-100) } : {}), updatedAt: nowIso(),
+      } as GroupRecoveryState });
+      this.consumeLeadFallback(group, target.id);
+      const currentGroup = this.repo.getGroup(group.id)!;
+      if (failed) this.queueCoordinatorContinuation(currentGroup, request, target, failed, checkpoint?.id);
+      this.event(group, automatic ? 'group.planner.fallback' : 'group.planner.replaced', `Cowork planning lease moved: @${old.handle} → @${target.handle}`,
+        { requestId: request.id, fromMemberId: old.id, toMemberId: target.id, coordinatorEpoch: epoch, rerouted, automatic, checkpointId: checkpoint?.id ?? null });
+      return;
+    }
+
+    const currentLeadId = group.orchestratorMemberId ?? (group.mode === 'current-leads' ? this.repo.members(group.id, false).find((member) => member.sessionId === group.anchorSessionId)?.id : null);
+    const old = currentLeadId ? this.requireMember(group, currentLeadId) : undefined;
+    if (!old) throw conflict('This group has no active coordinator');
+    if (old.id === target.id) return;
+    const sourceSession = this.store.getSession(old.sessionId);
+    const targetSession = this.store.getSession(target.sessionId);
+    const sourceBusy = Boolean(sourceSession && this.sessionBusy(sourceSession));
+    if (!targetSession || target.held || this.sessionBusy(targetSession) || this.repo.memberDeliveries(target.id, ['queued', 'running']).length) throw conflict(`@${target.handle} must be active and idle before becoming coordinator`);
+    if (!sourceSession || (sourceBusy && (automatic || sourceSession.worktreePath === targetSession.worktreePath))) {
+      throw conflict(`Wait for @${old.handle} to finish provider cleanup before replacing the coordinator in this worktree`);
+    }
+    this.assertNoTargetTaskConflict(group, target, targetSession.worktreePath, [], '');
+    const lastFailureDelivery = this.repo.memberDeliveries(old.id, ['failed', 'interrupted']).filter((row) => row.runId).at(-1);
+    const activeOld = this.repo.memberDeliveries(old.id, ['running']).at(-1);
+    const contextDelivery = lastFailureDelivery ?? activeOld;
+    const failure = contextDelivery?.runId ? this.recovery?.failureForRun(contextDelivery.runId) ?? null : null;
+    const checkpoint = this.recoveryCheckpoint(group, checkpointId, failure, contextDelivery?.requestId, contextDelivery?.id);
+    if (!automatic && sourceSession.worktreePath !== targetSession.worktreePath && contextDelivery && !checkpoint) {
+      throw conflict('Coordinator replacement across worktrees requires an acknowledged source recovery checkpoint');
+    }
+    if (checkpoint && sourceSession.worktreePath !== targetSession.worktreePath) {
+      const providerCheckpointId = typeof checkpoint.payload.providerCheckpointId === 'string' ? checkpoint.payload.providerCheckpointId : undefined;
+      const nativeCheckpoint = providerCheckpointId ? this.recovery?.latest(sourceSession.id) : null;
+      if (!nativeCheckpoint || nativeCheckpoint.id !== providerCheckpointId) throw conflict('The acknowledged checkpoint does not contain source worktree references');
+    }
+    if (automatic && (sourceSession.policy !== targetSession.policy || sourceSession.worktreePath !== targetSession.worktreePath)) {
+      throw conflict(`Automatic coordinator fallback requires the same permission policy and worktree as @${old.handle}`);
+    }
+    const runningOld = this.repo.memberDeliveries(old.id, ['running']).map((row) => row.id);
+    const epoch = (group.coordinatorEpoch ?? 1) + 1;
+    const convertsCurrentLead = group.mode === 'current-leads';
+    const nextMode: GroupMode = convertsCurrentLead ? 'orchestrated' : group.mode;
+    for (const member of this.repo.members(group.id, false)) {
+      const role: GroupMember['role'] = member.id === target.id ? 'orchestrator' : 'worker';
+      if (member.role !== role) this.repo.updateMember(member.id, { role });
+    }
+    this.repo.updateGroup(group.id, { mode: nextMode, orchestratorMemberId: target.id, coordinatorEpoch: epoch,
+      recoveryState: { status: group.recoveryState?.pendingCheckpointId ? 'paused' : 'recovering',
+        ...(group.recoveryState?.pendingCheckpointId ? { pendingCheckpointId: group.recoveryState.pendingCheckpointId, reason: group.recoveryState.reason } : {}),
+        ...(checkpoint?.id ? { acknowledgedCheckpointId: checkpoint.id } : group.recoveryState?.acknowledgedCheckpointId ? { acknowledgedCheckpointId: group.recoveryState.acknowledgedCheckpointId } : {}),
+        ...(group.recoveryState?.acknowledgedDeliveryIds ? { acknowledgedDeliveryIds: group.recoveryState.acknowledgedDeliveryIds.slice(-100) } : {}), updatedAt: nowIso() } as GroupRecoveryState });
+    this.consumeLeadFallback(group, target.id);
+    this.repo.updateRequestPlanner(group.id, null, target.id);
+    const rerouted = this.repo.rerouteQueuedCoordinatorWork(group.id, old.id, target.id, epoch);
+    const updatedGroup = this.repo.getGroup(group.id)!;
+    for (const request of this.repo.requests(group.id, 1000)) {
+      if (request.status === 'completed') continue;
+      const failed = this.repo.memberDeliveries(old.id, ['failed', 'interrupted']).find((row) => row.requestId === request.id);
+      if (!failed) continue;
+      this.queueCoordinatorContinuation(updatedGroup, request, target, failed, checkpoint?.id);
+    }
+    this.event(group, automatic ? 'group.coordinator.fallback' : 'group.coordinator.replaced',
+      automatic ? `Coordinator fallback: @${old.handle} → @${target.handle}` : `Coordinator replaced: @${old.handle} → @${target.handle}`,
+      { fromMemberId: old.id, toMemberId: target.id, coordinatorEpoch: epoch, rerouted, automatic, convertedFromCurrentLeads: convertsCurrentLead,
+        sourceProvider: sourceSession.provider, targetProvider: targetSession.provider, sourceModel: sourceSession.model, targetModel: targetSession.model,
+        sourcePolicy: sourceSession.policy, targetPolicy: targetSession.policy, checkpointId: checkpoint?.id ?? null,
+        quotaPoolVerification: quotaPoolVerification ?? (automatic ? 'verified' : undefined),
+        fallbackUncertainty: quotaPoolVerification === 'unverified' ? 'Distinct provider quota pools were not reported; this single explicitly configured fallback does not assert that the replacement has quota available.' : undefined });
+    for (const id of runningOld) this.fencedCoordinatorDeliveries.add(id);
+  }
+
+  private queueCoordinatorContinuation(group: ConversationGroup, request: ReturnType<GroupRepo['getRequest']> & object, member: MemberRow, failed: DeliveryRow, checkpointId?: string): boolean {
+    if (this.repo.deliverySuccessor(group.id, failed.id)) { this.repo.setDelivery(failed.id, { retryable: false }); return true; }
+    const existing = this.repo.requestDeliveries(request.id, ['queued', 'running']).some((row) => row.memberId === member.id && (row.kind === 'request' || row.kind === 'result'));
+    if (existing) {
+      const candidate = this.repo.requestDeliveries(request.id, ['queued', 'running']).find((row) => row.memberId === member.id && (row.kind === 'request' || row.kind === 'result'));
+      const linked = candidate ? this.repo.linkDeliverySuccessor(group.id, request.id, failed.id, candidate.id) : true;
+      if (linked) this.repo.setDelivery(failed.id, { retryable: false });
+      return linked;
+    }
+    const hop = failed.hop + 1;
+    const limit = effectiveTurnLimit(group);
+    if (hop > group.maxHops || (limit !== null && request.turnsUsed + this.repo.requestDeliveries(request.id, ['queued']).length >= limit)) {
+      const reason = 'The coordinator was replaced, but its continuation needs another turn or hop beyond the current group limit. The request remains retained for review.';
+      this.repo.updateRequest(request.id, { status: 'paused' });
+      this.repo.updateGroup(group.id, { recoveryState: { status: 'paused', reason, activeRequestId: request.id, updatedAt: nowIso() } });
+      this.repo.insertMessage({ groupId: group.id, senderMemberId: null, recipients: [], kind: 'status', requestId: request.id, content: reason });
+      this.event(group, 'group.coordinator.continuation.blocked', reason, { requestId: request.id, failedDeliveryId: failed.id });
+      return false;
+    }
+    const failure = failed.runId ? this.recovery?.failureForRun(failed.runId) : null;
+    const original = this.repo.getMessage(request.messageId)?.content ?? '';
+    const source = this.repo.getMember(failed.memberId);
+    const sourceSession = source ? this.store.getSession(source.sessionId) : undefined;
+    const targetSession = this.store.getSession(member.sessionId);
+    let sourceReferences = '';
+    if (sourceSession && targetSession && sourceSession.worktreePath !== targetSession.worktreePath) {
+      const groupCheckpoint = checkpointId ? this.repo.getRecoveryCheckpoint(group.id, checkpointId) : undefined;
+      const providerCheckpointId = typeof groupCheckpoint?.payload.providerCheckpointId === 'string' ? groupCheckpoint.payload.providerCheckpointId : undefined;
+      const nativeCheckpoint = providerCheckpointId ? this.recovery?.latest(sourceSession.id) : null;
+      if (!nativeCheckpoint || nativeCheckpoint.id !== providerCheckpointId) {
+        const reason = 'Coordinator continuation is waiting for an acknowledged source checkpoint because replacement worktrees differ.';
+        this.repo.updateGroup(group.id, { recoveryState: { status: 'paused', reason, activeRequestId: request.id, updatedAt: nowIso() } });
+        this.event(group, 'group.coordinator.continuation.blocked', reason, { requestId: request.id, failedDeliveryId: failed.id });
+        return false;
+      }
+      sourceReferences = `Source checkpoint worktree: ${nativeCheckpoint.worktree.path}; branch ${nativeCheckpoint.worktree.branch ?? 'unknown'}; HEAD ${nativeCheckpoint.worktree.head ?? 'unknown'}; dirty paths ${nativeCheckpoint.worktree.dirtyPaths.slice(0, 50).join(', ') || 'none reported'}${nativeCheckpoint.worktree.dirtyPathsTruncated ? ' (list truncated)' : ''}. These references are not copied into the replacement worktree; inspect or integrate them explicitly.\n`;
+    }
+    const taskContext = this.repo.requestAssignments(request.id).slice(0, 20).map((assignment) => {
+      const task = this.store.getTask(assignment.taskId);
+      const owner = this.repo.getMember(assignment.toMemberId);
+      if (!task) return `- ${assignment.taskId}: unavailable`;
+      const dependencies = task.dependsOn.map((id) => `${id} [${this.store.getTask(id)?.status ?? 'missing'}]`).join(', ') || 'none';
+      return `- ${task.id} [${task.status}] ${clean(task.title, 160)}; owner @${owner?.handle ?? 'unknown'}; accepts: ${clean(task.acceptanceCriteria, 500)}; depends on: ${dependencies}`;
+    });
+    const artifactPaths = this.repo.artifactsForRequest(request.id).slice(0, 30).map((artifact) => `- ${artifact.path} @ ${artifact.commitId.slice(0, 12)} → @${this.repo.getMember(artifact.toMemberId)?.handle ?? 'unknown'}`);
+    const queuedResults = this.repo.requestDeliveries(request.id, ['queued']).filter((row) => row.kind === 'result').slice(0, 10)
+      .map((row) => `- ${clean(this.repo.getMessage(row.messageId)?.content ?? '', 1000)}`);
+    const content = truncate(`Continue request ${request.id} after coordinator recovery. Inspect current task and artifact state before acting; do not repeat assignments or side effects already recorded.\n${failure ? `Prior failure (${failure.kind}): ${clean(failure.message, 500)}\n` : ''}${checkpointId ? `Acknowledged group checkpoint: ${checkpointId}\n` : ''}${sourceReferences}\nOriginal objective:\n${clean(original, 4000)}\n\nAssignments, owners, dependencies, and acceptance:\n${taskContext.join('\n') || '- none'}\n\nVerified artifact paths:\n${artifactPaths.join('\n') || '- none'}\n\nQueued results:\n${queuedResults.join('\n') || '- none'}`, 16_000);
+    const message = this.repo.insertMessage({ groupId: group.id, senderMemberId: null, recipients: [member.id], kind: 'status', requestId: request.id, content });
+    const nextId = deliveryId();
+    this.repo.insertDelivery({ id: nextId, groupId: group.id, requestId: request.id, messageId: message.id, memberId: member.id, kind: 'result', hop, coordinatorEpoch: group.coordinatorEpoch });
+    this.linkRecoverySuccessor(group, failed, nextId);
+    this.repo.setDelivery(failed.id, { retryable: false });
+    this.repo.updateRequest(request.id, { status: 'active' });
+    this.event(group, 'group.coordinator.continuation', `Recovery continuation queued for @${member.handle}`, { requestId: request.id, failedDeliveryId: failed.id, checkpointId: checkpointId ?? null });
+    return true;
+  }
+
+  private setFallbackBlocked(group: ConversationGroup, failure: ProviderFailure, reason: string): void {
+    const bounded = clean(reason, 1000);
+    if (group.recoveryState?.lastFailureId === failure.id && group.recoveryState.reason === bounded && group.recoveryState.status === 'paused') return;
+    this.repo.updateGroup(group.id, { recoveryState: {
+      status: 'paused', reason: bounded, lastFailureId: failure.id,
+      ...(group.recoveryState?.activeRequestId ? { activeRequestId: group.recoveryState.activeRequestId } : {}),
+      ...(group.recoveryState?.pendingCheckpointId ? { pendingCheckpointId: group.recoveryState.pendingCheckpointId } : {}), updatedAt: nowIso(),
+    } });
+    this.event(group, 'group.recovery.fallback-blocked', bounded, { failureId: failure.id, kind: failure.kind });
+  }
+
+  private quotaFallbackPoolCheck(group: ConversationGroup, source: ProviderFailure, target: Session): { ok: true; verification: 'verified-distinct' | 'unverified' } | { ok: false; reason: string } {
+    const targetFailure = this.recovery?.failure(target.id);
+    if (targetFailure?.kind === 'quota_exhausted') return { ok: false, reason: `Automatic quota fallback was blocked because @${target.id} has a current quota-exhausted provider failure.` };
+    const sourcePool = source.quotaPool?.trim();
+    const targetPool = targetFailure?.quotaPool?.trim();
+    if (sourcePool && targetPool) {
+      return sourcePool === targetPool
+        ? { ok: false, reason: 'Automatic quota fallback was blocked because both members report the same exhausted quota pool.' }
+        : { ok: true, verification: 'verified-distinct' };
+    }
+    if (source.provider === target.provider) {
+      return { ok: false, reason: 'Automatic quota fallback was blocked because this provider uses the same runtime authentication and did not report distinct quota pools.' };
+    }
+    const optedIn = (group.recoveryPolicy as QuotaRecoveryPolicy | undefined)?.allowUnverifiedQuotaFallback === true;
+    if (!optedIn) return { ok: false, reason: 'Quota-pool identity is unreported. Enable the explicit unverified-pool fallback option to allow one cross-provider attempt.' };
+    return { ok: true, verification: 'unverified' };
+  }
+
+  private attemptAutomaticLeadFallback(group: ConversationGroup): boolean {
+    if (!group.recoveryPolicy?.automaticFallback || !group.recoveryPolicy.leadFallbackMemberId) return false;
+    const coworkRequest = group.mode === 'cowork'
+      ? this.repo.requests(group.id, 1000).find((request) => request.status !== 'completed'
+        && this.repo.requestDeliveries(request.id, ['failed', 'interrupted']).some((row) => row.memberId === request.plannerMemberId && row.runId))
+      : undefined;
+    const leadId = group.mode === 'cowork' ? coworkRequest?.plannerMemberId
+      : group.orchestratorMemberId ?? (group.mode === 'current-leads' ? this.repo.members(group.id, false).find((member) => member.sessionId === group.anchorSessionId)?.id : undefined);
+    const lead = leadId ? this.repo.getMember(leadId) : undefined;
+    if (!lead) return false;
+    const failed = group.mode === 'cowork' && coworkRequest
+      ? this.repo.requestDeliveries(coworkRequest.id, ['failed', 'interrupted']).filter((row) => row.memberId === lead.id && row.runId).at(-1)
+      : this.repo.memberDeliveries(lead.id, ['failed', 'interrupted']).filter((row) => row.runId).at(-1);
+    const failure = failed?.runId ? this.recovery?.failureForRun(failed.runId) : null;
+    if (!failure || failure.actor !== 'lead' || failure.kind !== 'quota_exhausted') return false;
+    if (failure.outcomeUnknown !== false || failure.continuationSafety !== 'safe' || failure.dispatchState === 'unknown') {
+      this.setFallbackBlocked(group, failure, 'Automatic coordinator fallback is waiting for a human because the provider outcome is not proven safe to continue.');
+      return false;
+    }
+    const target = this.repo.getMember(group.recoveryPolicy.leadFallbackMemberId);
+    if (!target || target.groupId !== group.id || target.removedAt || target.held) {
+      this.setFallbackBlocked(group, failure, 'Automatic coordinator fallback is unavailable: the configured replacement is not an active, available group member.');
+      return false;
+    }
+    const sourceSession = this.store.getSession(lead.sessionId);
+    const targetSession = this.store.getSession(target.sessionId);
+    if (!sourceSession || this.sessionBusy(sourceSession)) return false;
+    if (!targetSession || this.sessionBusy(targetSession) || this.repo.memberDeliveries(target.id, ['queued', 'running']).length) return false;
+    if (sourceSession.policy !== targetSession.policy || sourceSession.worktreePath !== targetSession.worktreePath) {
+      this.setFallbackBlocked(group, failure, `Automatic coordinator fallback was blocked: @${target.handle} must share @${lead.handle}'s permission policy and worktree.`);
+      return false;
+    }
+    const pool = this.quotaFallbackPoolCheck(group, failure, targetSession);
+    if (!pool.ok) { this.setFallbackBlocked(group, failure, pool.reason); return false; }
+    try {
+      this.applyCoordinatorReplacement(group, target.id, true, undefined, coworkRequest?.id, pool.verification);
+      return true;
+    } catch (error) {
+      if (error instanceof HttpError) {
+        this.setFallbackBlocked(group, failure, error.message);
+        return false;
+      }
+      return false;
+    }
+  }
+
+  private attemptAutomaticWorkerFallback(group: ConversationGroup, delivery: DeliveryRow): boolean {
+    if (!group.recoveryPolicy?.automaticFallback || delivery.kind !== 'assignment' || !delivery.assignmentId || !delivery.runId) return false;
+    const source = this.repo.getMember(delivery.memberId);
+    const assignment = this.repo.getAssignment(delivery.assignmentId);
+    if (!source || !assignment || assignment.deliveryId !== delivery.id || this.repo.deliverySuccessor(group.id, delivery.id)) return false;
+    const failure = this.recovery?.failureForRun(delivery.runId);
+    if (!failure || failure.actor !== 'worker' || failure.kind !== 'quota_exhausted' || failure.outcomeUnknown !== false || failure.continuationSafety !== 'safe' || failure.dispatchState === 'unknown') return false;
+    const replacementId = group.recoveryPolicy.workerFallbacks?.[source.id];
+    if (!replacementId) return false;
+    const target = this.repo.getMember(replacementId);
+    const task = this.store.getTask(assignment.taskId);
+    const sourceSession = this.store.getSession(source.sessionId);
+    const targetSession = target ? this.store.getSession(target.sessionId) : undefined;
+    if (!target || target.groupId !== group.id || target.removedAt || target.held || !task || task.status === 'done' || task.status === 'running') return false;
+    if (!sourceSession || this.sessionBusy(sourceSession) || this.repo.memberDeliveries(source.id, ['running']).length) return false;
+    if (!targetSession || this.sessionBusy(targetSession) || this.repo.memberDeliveries(target.id, ['queued', 'running']).length) return false;
+    if (sourceSession.policy !== targetSession.policy || sourceSession.worktreePath !== targetSession.worktreePath) {
+      this.setFallbackBlocked(group, failure, `Automatic reassignment for @${source.handle} was blocked: @${target.handle} does not have the same permission policy and worktree.`);
+      return false;
+    }
+    const pool = this.quotaFallbackPoolCheck(group, failure, targetSession);
+    if (!pool.ok) { this.setFallbackBlocked(group, failure, pool.reason); return false; }
+    try { this.assertNoTargetTaskConflict(group, target, targetSession.worktreePath, assignment.scope, assignment.id); }
+    catch (error) {
+      if (error instanceof HttpError) this.setFallbackBlocked(group, failure, error.message);
+      return false;
+    }
+    const request = this.repo.getRequest(delivery.requestId);
+    if (!request) return false;
+    const oldText = this.repo.getMessage(delivery.messageId)?.content ?? task.description;
+    const message = this.repo.insertMessage({ groupId: group.id, senderMemberId: null, recipients: [target.id], kind: 'assignment', requestId: request.id,
+      content: truncate(`Automatic quota fallback for task ${task.id}: ${task.title}. Continue in the same worktree and inspect current changes; do not repeat completed side effects.\nScope: ${assignment.scope.join(', ')}\n${clean(oldText, 6000)}`, 12_000) });
+    const nextId = deliveryId();
+    this.store.updateTask(task.id, { sessionId: target.sessionId });
+    this.repo.insertDelivery({ id: nextId, groupId: group.id, requestId: request.id, messageId: message.id, memberId: target.id, kind: 'assignment', hop: delivery.hop, assignmentId: assignment.id, taskId: task.id, coordinatorEpoch: group.coordinatorEpoch });
+    this.repo.reassignAssignment(assignment.id, target.id, nextId);
+    this.linkRecoverySuccessor(group, delivery, nextId);
+    this.repo.setDelivery(delivery.id, { retryable: false });
+    this.repo.updateMember(source.id, { held: true });
+    this.repo.updateGroup(group.id, { recoveryState: { status: 'recovering', activeRequestId: request.id, updatedAt: nowIso() } });
+    this.event(group, 'group.assignment.fallback', `Quota fallback: @${source.handle} → @${target.handle}`, { assignmentId: assignment.id, failedDeliveryId: delivery.id, replacementDeliveryId: nextId, failureId: failure.id }, target.sessionId);
+    return true;
+  }
+
+  private acknowledgeCheckpoint(group: ConversationGroup, checkpointId: string): void {
+    const checkpoint = this.repo.getRecoveryCheckpoint(group.id, checkpointId);
+    if (!checkpoint) throw notFound('Recovery checkpoint not found in this group');
+    if (checkpoint.state === 'pending') this.repo.acknowledgeRecoveryCheckpoint(group.id, checkpoint.id);
+    const acknowledged = this.repo.getRecoveryCheckpoint(group.id, checkpoint.id)!;
+    const prior = this.repo.getGroup(group.id)?.recoveryState;
+    const deliveryIds = Array.isArray(acknowledged.payload.deliveryIds) ? acknowledged.payload.deliveryIds.filter((id): id is string => typeof id === 'string') : [];
+    const merged = [...new Set([...(prior?.acknowledgedDeliveryIds ?? []), ...deliveryIds])].slice(-100);
+    const pending = this.repo.latestPendingRecoveryCheckpoint(group.id);
+    const unresolved = this.repo.deliveries(group.id, ['failed', 'interrupted']).some((row) => !row.retryable && !this.repo.deliverySuccessor(group.id, row.id));
+    const status = unresolved ? 'degraded' : pending ? 'paused' : 'healthy';
+    this.repo.updateGroup(group.id, { recoveryState: {
+      status, ...(unresolved && prior?.reason ? { reason: prior.reason } : pending ? { reason: pending.reason } : {}),
+      ...(unresolved && prior?.lastFailureId ? { lastFailureId: prior.lastFailureId } : {}),
+      ...(pending?.id ? { pendingCheckpointId: pending.id } : {}), ...(checkpoint.requestId ? { activeRequestId: checkpoint.requestId } : {}),
+      acknowledgedDeliveryIds: merged, acknowledgedCheckpointId: checkpoint.id, updatedAt: nowIso(),
+    } as GroupRecoveryState });
+    this.event(group, 'group.checkpoint.acknowledged', 'Recovery checkpoint acknowledged', { checkpointId, kind: checkpoint.kind, deliveryIds: deliveryIds.slice(0, 20) });
+  }
+
+  private applyRecoveryResume(group: ConversationGroup): void {
+    const pending = this.repo.latestPendingRecoveryCheckpoint(group.id);
+    if (pending) this.acknowledgeCheckpoint(group, pending.id);
+    this.repo.updateGroup(group.id, { paused: false, pauseReason: null });
+    let requeued = 0;
+    for (const delivery of this.repo.deliveries(group.id, ['failed', 'interrupted'])) {
+      if (!delivery.retryable) continue;
+      const member = this.repo.getMember(delivery.memberId);
+      if (!member || member.removedAt) { this.repo.setDelivery(delivery.id, { status: 'cancelled', retryable: false, error: 'Member removed from the group' }); continue; }
+      const session = this.store.getSession(member.sessionId);
+      if (!session || this.sessionBusy(session)) continue;
+      if (this.repo.deliverySuccessor(group.id, delivery.id)) { this.repo.setDelivery(delivery.id, { retryable: false }); continue; }
+      const existing = this.existingRecoveryContinuation(group, delivery);
+      if (existing) {
+        this.linkRecoverySuccessor(group, delivery, existing.id);
+        this.repo.setDelivery(delivery.id, { retryable: false });
+        this.repo.updateMember(member.id, { held: false });
+        requeued++;
+        continue;
+      }
+      const successorId = deliveryId();
+      this.repo.insertDelivery({ id: successorId, groupId: group.id, requestId: delivery.requestId, messageId: delivery.messageId, memberId: member.id,
+        kind: delivery.kind, hop: delivery.hop, assignmentId: delivery.assignmentId, taskId: delivery.taskId, coordinatorEpoch: group.coordinatorEpoch });
+      if (delivery.assignmentId) this.repo.reassignAssignment(delivery.assignmentId, member.id, successorId);
+      this.repo.setDelivery(delivery.id, { retryable: false });
+      this.linkRecoverySuccessor(group, delivery, successorId);
+      this.repo.updateMember(member.id, { held: false });
+      requeued++;
+    }
+    for (const request of this.repo.requests(group.id, 1000)) if (request.status !== 'completed') this.refreshRequest(request.id);
+    const unresolved = this.repo.deliveries(group.id, ['failed', 'interrupted']).some((row) => !row.retryable && !this.repo.deliverySuccessor(group.id, row.id));
+    this.repo.updateGroup(group.id, { recoveryState: unresolved ? { status: 'degraded', reason: group.recoveryState?.reason ?? 'Some deliveries still need recovery.', ...(group.recoveryState?.lastFailureId ? { lastFailureId: group.recoveryState.lastFailureId } : {}), updatedAt: nowIso() } : { status: 'recovering', updatedAt: nowIso() } });
+    this.event(group, 'group.recovery.resumed', 'Group resumed after recovery action', { requeued });
+  }
+
+  /** Explicit resume acknowledges any pending checkpoint and requeues only work marked retryable. */
   resume(groupId: string): GroupSnapshot {
     this.assertOpen();
     const group = this.requireGroup(groupId);
-    this.store.tx(() => {
-      this.repo.updateGroup(group.id, { paused: false, pauseReason: null });
-      this.repo.clearHolds(group.id);
-      const members = new Set(this.repo.members(group.id, false).map((m) => m.id));
-      let requeued = 0;
-      for (const d of this.repo.deliveries(group.id, ['failed', 'interrupted'])) {
-        if (!d.retryable) continue;
-        if (!members.has(d.memberId)) { this.repo.setDelivery(d.id, { status: 'cancelled', error: 'Member removed from the group', retryable: false }); continue; }
-        if (this.repo.transitionDelivery(d.id, d.status, 'queued', { runId: null, error: null, retryable: false })) requeued++;
-      }
-      for (const request of this.repo.requests(group.id, 1000)) if (request.status !== 'completed') this.refreshRequest(request.id);
-      this.event(group, 'group.resumed', 'Group resumed', { requeued });
-    });
+    this.store.tx(() => this.applyRecoveryResume(group));
     this.schedule(group.id);
     return this.get(group.id);
   }
@@ -516,7 +1143,20 @@ export class GroupService {
       this.repo.updateMember(member.id, { held: false });
       for (const d of this.repo.memberDeliveries(member.id, ['failed', 'interrupted'])) {
         if (!d.retryable) continue;
-        this.repo.setDelivery(d.id, { status: 'queued', runId: null, error: null, retryable: false });
+        if (this.repo.deliverySuccessor(group.id, d.id)) { this.repo.setDelivery(d.id, { retryable: false }); continue; }
+        const existing = this.existingRecoveryContinuation(group, d);
+        if (existing) {
+          this.linkRecoverySuccessor(group, d, existing.id);
+          this.repo.setDelivery(d.id, { retryable: false });
+          this.refreshRequest(d.requestId);
+          continue;
+        }
+        const nextId = deliveryId();
+        this.repo.insertDelivery({ id: nextId, groupId: group.id, requestId: d.requestId, messageId: d.messageId, memberId: member.id,
+          kind: d.kind, hop: d.hop, assignmentId: d.assignmentId, taskId: d.taskId, coordinatorEpoch: group.coordinatorEpoch });
+        if (d.assignmentId) this.repo.reassignAssignment(d.assignmentId, member.id, nextId);
+        this.repo.setDelivery(d.id, { retryable: false });
+        this.linkRecoverySuccessor(group, d, nextId);
         this.refreshRequest(d.requestId);
       }
       this.event(group, 'group.member.resumed', `Agent resumed: @${member.handle}`, { memberId: member.id }, member.sessionId);
@@ -564,6 +1204,9 @@ export class GroupService {
     this.unsubscribe();
     this.pending.clear();
     this.reserved.clear();
+    for (const timer of this.safeRetryTimers.values()) clearTimeout(timer);
+    this.safeRetryTimers.clear();
+    this.fencedCoordinatorDeliveries.clear();
   }
 
   // ---------------------------------------------------------------- runtime hooks
@@ -582,7 +1225,7 @@ export class GroupService {
     const instructions = buildInstructions({
       title: group.title, mode: group.mode, self: roster.find((r) => r.you)!, roster, canAssign: this.mayAssign(group, member, request.plannerMemberId), leaseHolder: lease,
       requestExcerpt: this.repo.getMessage(request.messageId)?.content ?? '', deliveryKind: delivery.kind, hop: delivery.hop, maxHops: group.maxHops,
-      turnsUsed: request.turnsUsed, maxTurns: group.maxTurns, unread: this.repo.countAddressedAfter(group.id, member.id, member.lastReadSeq),
+      turnsUsed: request.turnsUsed, maxTurns: effectiveTurnLimit(group), unread: this.repo.countAddressedAfter(group.id, member.id, member.lastReadSeq),
       assignment: assignment ? { id: assignment.id, taskId: assignment.taskId, scope: assignment.scope } : null,
     });
     return { groupId: group.id, memberId: member.id, requestId: request.id, deliveryId: delivery.id, hop: delivery.hop, instructions };
@@ -606,6 +1249,7 @@ export class GroupService {
       }
     }
     if (!delivery || delivery.status !== 'running') return;
+    if (outcome === 'completed') this.recovery?.clearFailure(sessionId);
     this.settle(delivery, outcome);
   }
 
@@ -634,11 +1278,17 @@ export class GroupService {
     const group = this.repo.getGroup(delivery.groupId);
     const member = this.repo.getMember(delivery.memberId);
     if (!group || !member) return;
+    const fencedCoordinator = this.fencedCoordinatorDeliveries.has(delivery.id);
+    const request = this.repo.getRequest(delivery.requestId);
     const session = this.store.getSession(member.sessionId, true);
+    const providerFailure = delivery.runId ? this.recovery?.failureForRun(delivery.runId) ?? null : null;
     const failure = outcome === 'failed' ? clean(session?.error ?? 'The run failed', 500) : outcome === 'interrupted' ? 'The run was interrupted' : null;
+    const verifiedProgress = this.verifiedProgress(delivery, member);
+    const repeatedActionStall = delivery.runId && verifiedProgress.length === 0 ? this.recordRepeatedToolFailures(group, member, delivery) : false;
+    const safeRetryAt = outcome === 'failed' && !group.paused && !member.held && !repeatedActionStall ? this.safeRetryAt(providerFailure, delivery) : null;
     try {
       this.store.tx(() => {
-        if (!this.repo.transitionDelivery(delivery.id, 'running', outcome, { error: failure, retryable: outcome !== 'completed' })) return;
+        if (!this.repo.transitionDelivery(delivery.id, 'running', outcome, { error: failure, retryable: outcome === 'interrupted' || Boolean(safeRetryAt) })) return;
         const assignment = delivery.assignmentId ? this.repo.getAssignment(delivery.assignmentId) : undefined;
         if (assignment || delivery.taskId) {
           const taskId = assignment?.taskId ?? delivery.taskId!;
@@ -648,8 +1298,19 @@ export class GroupService {
           if (task && task.status === 'ready' && unfinishedDeps(task.dependsOn, (dep) => this.store.getTask(dep)?.status).length) this.store.updateTask(task.id, { status: 'blocked' });
         }
         if (outcome === 'failed') {
-          if (!group.paused) this.repo.updateGroup(group.id, { paused: true, pauseReason: `@${member.handle} failed: ${failure}. Resume to retry.` });
-          this.event(group, 'group.delivery.failed', `Delivery failed: @${member.handle}`, { deliveryId: delivery.id, error: failure }, member.sessionId);
+          this.repo.updateMember(member.id, { held: true });
+          const isPlanner = !fencedCoordinator && Boolean(request && this.hasPlannerAuthority(group, member, request.plannerMemberId));
+          const reason = clean(`@${member.handle} failed: ${failure}. Other members may continue; this agent remains on hold until recovery.`, 1000);
+          const previous = group.recoveryState;
+          if (!fencedCoordinator) this.repo.updateGroup(group.id, { recoveryState: {
+            status: 'degraded', reason, ...(providerFailure ? { lastFailureId: providerFailure.id } : {}),
+            ...(request ? { activeRequestId: request.id } : {}), ...(previous?.pendingCheckpointId ? { pendingCheckpointId: previous.pendingCheckpointId } : {}),
+            ...(previous?.acknowledgedDeliveryIds ? { acknowledgedDeliveryIds: previous.acknowledgedDeliveryIds.slice(-100) } : {}), updatedAt: nowIso(),
+          } });
+          this.event(group, fencedCoordinator ? 'group.coordinator.stale-run.failed' : isPlanner ? 'group.coordinator.degraded' : 'group.delivery.failed', fencedCoordinator ? `Former coordinator run failed: @${member.handle}` : isPlanner ? `Coordinator unavailable: @${member.handle}` : `Delivery failed: @${member.handle}`, {
+            deliveryId: delivery.id, error: failure, failureId: providerFailure?.id ?? null, failureKind: providerFailure?.kind ?? null,
+            isolatedByStallGuard: repeatedActionStall, retryAt: safeRetryAt,
+          }, member.sessionId);
         } else if (outcome === 'interrupted') {
           // An interruption outside a group stop still holds the member so it is not restarted behind the user's back.
           if (!group.paused && !member.held) {
@@ -659,13 +1320,158 @@ export class GroupService {
         } else {
           this.event(group, 'group.delivery.completed', `Delivery completed: @${member.handle}`, { deliveryId: delivery.id, kind: delivery.kind }, member.sessionId);
         }
+        if (verifiedProgress.length) this.event(group, 'group.progress.verified', `Verified progress recorded for @${member.handle}`, {
+          requestId: delivery.requestId, memberId: member.id, deliveryId: delivery.id, runId: delivery.runId, evidence: verifiedProgress,
+        }, member.sessionId);
+        if (verifiedProgress.length) this.repo.clearStallEvidence(group.id, member.id, delivery.requestId);
         this.refreshRequest(delivery.requestId, outcome !== 'completed');
-        if (outcome === 'completed') this.notifyCoordinator(delivery.requestId);
       });
     } catch (error) {
       this.log('error', `Could not record group delivery outcome for ${delivery.id}`, error);
     }
+    if (fencedCoordinator) {
+      const currentGroup = this.repo.getGroup(group.id);
+      const currentRequest = this.repo.getRequest(delivery.requestId);
+      const plannerId = currentGroup?.mode === 'cowork' ? currentRequest?.plannerMemberId : currentGroup?.orchestratorMemberId;
+      const replacement = plannerId ? this.repo.getMember(plannerId) : undefined;
+      if (currentGroup && currentRequest && replacement && replacement.id !== member.id && currentRequest.status !== 'completed') {
+        const state = currentGroup.recoveryState;
+        this.store.tx(() => this.queueCoordinatorContinuation(currentGroup, currentRequest, replacement, delivery, state?.acknowledgedCheckpointId));
+      }
+      this.fencedCoordinatorDeliveries.delete(delivery.id);
+    }
+    if (safeRetryAt) this.scheduleSafeRetry(delivery.id, safeRetryAt);
+    if (outcome === 'completed' || outcome === 'failed' || outcome === 'interrupted') this.notifyCoordinator(delivery.requestId);
+    if (outcome === 'completed') this.refreshRecoveryState(group.id);
     this.schedule(group.id);
+  }
+
+  private refreshRecoveryState(groupId: string): void {
+    const group = this.repo.getGroup(groupId);
+    const prior = group?.recoveryState;
+    if (!group || !prior || prior.status === 'healthy') return;
+    const unresolved = this.repo.deliveries(group.id, ['failed', 'interrupted']).some((row) => !row.retryable && !this.repo.deliverySuccessor(group.id, row.id));
+    if (unresolved) return;
+    const pendingCheckpoint = this.repo.latestPendingRecoveryCheckpoint(group.id);
+    const recoveryPending = this.repo.deliveries(group.id, ['queued', 'running']).some((row) => Boolean(this.repo.deliverySource(group.id, row.id)));
+    const status: GroupRecoveryState['status'] = pendingCheckpoint || group.paused ? 'paused' : recoveryPending ? 'recovering' : 'healthy';
+    this.repo.updateGroup(group.id, { recoveryState: {
+      status, ...(pendingCheckpoint?.reason ? { reason: pendingCheckpoint.reason } : group.paused && group.pauseReason ? { reason: group.pauseReason } : {}),
+      ...(prior.lastFailureId && unresolved ? { lastFailureId: prior.lastFailureId } : {}),
+      ...(pendingCheckpoint?.id ? { pendingCheckpointId: pendingCheckpoint.id } : {}),
+      ...(prior.acknowledgedCheckpointId ? { acknowledgedCheckpointId: prior.acknowledgedCheckpointId } : {}),
+      ...(prior.acknowledgedDeliveryIds ? { acknowledgedDeliveryIds: prior.acknowledgedDeliveryIds.slice(-100) } : {}),
+      ...(prior.activeRequestId ? { activeRequestId: prior.activeRequestId } : {}), updatedAt: nowIso(),
+    } });
+  }
+
+  /** Only provider-proven non-dispatch may be retried automatically, and only once within the bounded retry window. */
+  private safeRetryAt(failure: ProviderFailure | null, delivery: DeliveryRow): string | null {
+    if (!failure || !failure.retryable || failure.safeToRetry !== true || failure.dispatchState !== 'not-dispatched'
+      || failure.outcomeUnknown !== false || !failure.retryAt || delivery.attempts > MAX_SAFE_RETRIES
+      || this.repo.deliverySource(delivery.groupId, delivery.id) !== undefined) return null;
+    const retryAt = Date.parse(failure.retryAt);
+    const now = Date.now();
+    return Number.isFinite(retryAt) && retryAt > now && retryAt <= now + MAX_SAFE_RETRY_DELAY_MS ? new Date(retryAt).toISOString() : null;
+  }
+
+  private scheduleSafeRetry(deliveryIdArg: string, retryAt: string): void {
+    const prior = this.safeRetryTimers.get(deliveryIdArg);
+    if (prior) clearTimeout(prior);
+    const delay = Math.max(0, Date.parse(retryAt) - Date.now());
+    const timer = setTimeout(() => {
+      this.safeRetryTimers.delete(deliveryIdArg);
+      if (this.closed) return;
+      const delivery = this.repo.getDelivery(deliveryIdArg);
+      const group = delivery ? this.repo.getGroup(delivery.groupId) : undefined;
+      const member = delivery ? this.repo.getMember(delivery.memberId) : undefined;
+      const request = delivery ? this.repo.getRequest(delivery.requestId) : undefined;
+      const failure = delivery?.runId ? this.recovery?.failureForRun(delivery.runId) : null;
+      if (!delivery || !group || !member || !request || delivery.status !== 'failed' || !delivery.retryable || group.paused
+        || !failure || failure.retryAt !== retryAt || group.recoveryState?.lastFailureId !== failure.id || this.repo.deliverySuccessor(group.id, delivery.id)) return;
+      this.store.tx(() => {
+        const successorId = deliveryId();
+        this.repo.insertDelivery({ id: successorId, groupId: group.id, requestId: request.id, messageId: delivery.messageId, memberId: member.id,
+          kind: delivery.kind, hop: delivery.hop, assignmentId: delivery.assignmentId, taskId: delivery.taskId, coordinatorEpoch: group.coordinatorEpoch });
+        if (delivery.assignmentId) this.repo.reassignAssignment(delivery.assignmentId, member.id, successorId);
+        this.repo.setDelivery(delivery.id, { retryable: false });
+        this.linkRecoverySuccessor(group, delivery, successorId);
+        this.repo.updateRequest(request.id, { status: 'active' });
+        this.repo.updateMember(member.id, { held: false });
+        this.repo.updateGroup(group.id, { recoveryState: { status: 'recovering', activeRequestId: request.id, updatedAt: nowIso() } });
+        this.event(group, 'group.delivery.safe-retry', `Retrying a delivery that the provider confirmed was not dispatched: @${member.handle}`, {
+          deliveryId: delivery.id, successorDeliveryId: successorId, failureId: failure.id, retryAt,
+        }, member.sessionId);
+      });
+      this.schedule(group.id);
+    }, Math.min(delay, MAX_SAFE_RETRY_DELAY_MS));
+    timer.unref?.();
+    this.safeRetryTimers.set(deliveryIdArg, timer);
+  }
+
+  /** Progress signals are host records, never message count or model-declared success. */
+  private verifiedProgress(delivery: DeliveryRow, member: MemberRow): string[] {
+    if (!delivery.runId) return [];
+    const run = this.store.getRun(delivery.runId);
+    const tools = this.store.listRunTools(delivery.runId, 1000);
+    const evidence: string[] = [];
+    const check = tools.find((tool) => tool.category === 'command' && tool.status === 'completed' && tool.exitCode === 0
+      && /\b(test|check|lint|typecheck|build|verify|validate|compile|tsc|pytest|cargo\s+check)\b/i.test(`${tool.name} ${tool.command ?? ''}`));
+    if (check) evidence.push(`successful-check:${check.id}`);
+    const startedAt = run?.startedAt ?? delivery.startedAt ?? delivery.createdAt;
+    const taskTransition = this.store.listEvents({ projectId: this.repo.getGroup(delivery.groupId)?.projectId, limit: 5000 }).find((event) =>
+      event.sessionId === member.sessionId && event.type === 'group.status' && event.createdAt >= startedAt
+      && event.payload.groupId === delivery.groupId && event.payload.changed === true);
+    if (taskTransition) evidence.push(`task-transition:${taskTransition.id}`);
+    const artifact = this.repo.artifactsForRequest(delivery.requestId).find((row) => row.fromMemberId === member.id && row.createdAt >= startedAt);
+    if (artifact) evidence.push(`verified-artifact:${artifact.id}`);
+    return evidence.slice(0, 5);
+  }
+
+  /** Count the same failed native action only across separate runs of the same assignment/member. */
+  private recordRepeatedToolFailures(group: ConversationGroup, member: MemberRow, delivery: DeliveryRow): boolean {
+    if (!delivery.runId) return false;
+    const assignmentId = delivery.assignmentId ?? delivery.taskId ?? delivery.requestId;
+    const failed = this.store.listRunTools(delivery.runId, 1000).filter((tool) => tool.status === 'failed' || (tool.status === 'completed' && tool.exitCode !== null && tool.exitCode !== 0));
+    let stalled = false;
+    for (const tool of failed) {
+      const signature = createHash('sha256').update(JSON.stringify([tool.category, tool.name, tool.command ?? '', tool.input ?? '', tool.exitCode])).digest('hex');
+      stalled = this.recordStallSignal(group, member, delivery.requestId, 'repeated-tool-failure', `${assignmentId}:${signature}`, delivery.runId,
+        [tool.id], `The same native action has failed in ${STALL_RUN_THRESHOLD} separate runs for this assignment.`) || stalled;
+    }
+    return stalled;
+  }
+
+  /** Durable, bounded event-backed evidence works on both newly-created and already-open databases. */
+  private recordStallSignal(
+    group: ConversationGroup, member: MemberRow, requestIdArg: string, signal: string, fingerprint: string, runId: string | null,
+    evidenceIds: string[], reason: string,
+  ): boolean {
+    const delivery = runId ? this.repo.deliveryByRun(runId) : undefined;
+    const evidence = this.repo.recordStallEvidence({
+      groupId: group.id, memberId: member.id, requestId: requestIdArg, deliveryId: delivery?.id ?? null,
+      assignmentId: delivery?.assignmentId ?? null, fingerprint, signalClass: signal, reason: clean(reason, 500),
+      sourceRunId: runId, sourceToolId: signal === 'repeated-tool-failure' ? evidenceIds[0] ?? null : null,
+      sourceTaskId: delivery?.taskId ?? (delivery?.assignmentId ? this.repo.getAssignment(delivery.assignmentId)?.taskId : null),
+    });
+    if (evidence.duplicate) return member.held;
+    const count = evidence.consecutiveCount;
+    const current = this.repo.getMember(member.id);
+    if (count <= STALL_RUN_THRESHOLD) this.event(group, 'group.stall.evidence', `Stall evidence recorded for @${member.handle}`, {
+      signal, fingerprint, requestId: requestIdArg, memberId: member.id, runId,
+      evidenceIds: evidenceIds.slice(0, 5), count, threshold: STALL_RUN_THRESHOLD, reason: clean(reason, 500),
+    }, member.sessionId);
+    if (count < STALL_RUN_THRESHOLD) return false;
+    if (!current || current.held) return Boolean(current?.held);
+    const notice = clean(`Paused @${member.handle}: ${reason} Further work for this member stays queued; review the evidence, change the scope, or explicitly resume the member.`, 1000);
+    this.store.tx(() => {
+      this.repo.updateMember(member.id, { held: true });
+      this.repo.insertMessage({ groupId: group.id, senderMemberId: null, recipients: [member.id], kind: 'status', requestId: requestIdArg, content: notice });
+      this.event(group, 'group.stall.detected', `Stall guard held @${member.handle}`, {
+        signal, fingerprint, requestId: requestIdArg, memberId: member.id, runId, count, threshold: STALL_RUN_THRESHOLD, reason: clean(reason, 500),
+      }, member.sessionId);
+    });
+    return true;
   }
 
   // ---------------------------------------------------------------- queue
@@ -686,8 +1492,19 @@ export class GroupService {
 
   private async pump(groupId: string): Promise<void> {
     try {
-      const group = this.repo.getGroup(groupId);
+      let group = this.repo.getGroup(groupId);
       if (!group || group.paused) return;
+      if (group.recoveryPolicy?.automaticFallback) {
+        for (const failed of this.repo.deliveries(groupId, ['failed'])) {
+          const moved = this.store.tx(() => this.attemptAutomaticWorkerFallback(group!, failed));
+          if (moved) group = this.repo.getGroup(groupId) ?? group;
+        }
+      }
+      if (group.recoveryState?.status === 'degraded' && group.recoveryPolicy?.automaticFallback) {
+        this.store.tx(() => this.attemptAutomaticLeadFallback(group!));
+        group = this.repo.getGroup(groupId);
+        if (!group || group.paused) return;
+      }
       const queued = this.repo.deliveries(groupId, ['queued']);
       if (!queued.length) return;
       // An interrupted delivery can still own a provider cleanup lock. It continues to consume a parallel slot.
@@ -786,7 +1603,8 @@ export class GroupService {
       this.holdBudget(group, request.id, `A queued delivery needs hop ${d.hop}, above the current ${group.maxHops} hop limit. Raise the hop limit and resume, or cancel the affected agent's pending work.`);
       return false;
     }
-    if (request.turnsUsed >= group.maxTurns) {
+    const turnLimit = effectiveTurnLimit(group);
+    if (turnLimit !== null && request.turnsUsed >= turnLimit) {
       this.exhaustBudget(group, request.id);
       return false;
     }
@@ -818,9 +1636,10 @@ export class GroupService {
         if (latestDelivery?.status === 'queued') this.cancel(d, 'The selected agent or its settings changed while the native action was queued. Select it again.');
         return false;
       }
-      if (latestDelivery?.status !== 'queued' || !latestRequest || latestRequest.status !== 'active') return false;
+      if (latestDelivery?.status !== 'queued' || latestDelivery.memberId !== d.memberId || !latestRequest || latestRequest.status !== 'active') return false;
       if (latestGroup.paused || latestMember.held || this.sessionBusy(latestSession)) return false;
-      if (latestRequest.turnsUsed >= latestGroup.maxTurns) { this.exhaustBudget(latestGroup, latestRequest.id); return false; }
+      const latestTurnLimit = effectiveTurnLimit(latestGroup);
+      if (latestTurnLimit !== null && latestRequest.turnsUsed >= latestTurnLimit) { this.exhaustBudget(latestGroup, latestRequest.id); return false; }
       if (d.hop > latestGroup.maxHops) {
         this.holdBudget(latestGroup, latestRequest.id, `A queued delivery needs hop ${d.hop}, above the current ${latestGroup.maxHops} hop limit. Raise the hop limit and resume, or cancel the affected agent's pending work.`);
         return false;
@@ -848,10 +1667,12 @@ export class GroupService {
           this.repo.updateRequest(request.id, { turnsDelta: -1 });
           return;
         }
-        this.repo.transitionDelivery(d.id, 'running', 'failed', { error: message, retryable: true, attemptsDelta: 0 });
+        this.repo.transitionDelivery(d.id, 'running', 'failed', { error: message, retryable: false, attemptsDelta: 0 });
         this.repo.updateRequest(request.id, { status: 'paused', turnsDelta: -1 });
-        this.repo.updateGroup(group.id, { paused: true, pauseReason: `Could not start @${member.handle}: ${message}. Resume to retry.` });
-        this.event(group, 'group.delivery.failed', `Could not start @${member.handle}`, { deliveryId: d.id, error: message }, session.id);
+        this.repo.updateMember(member.id, { held: true });
+        const reason = clean(`Could not start @${member.handle}: ${message}. Other group members may continue; recover this member explicitly.`, 1000);
+        this.repo.updateGroup(group.id, { recoveryState: { status: 'degraded', reason, activeRequestId: request.id, updatedAt: nowIso() } });
+        this.event(group, 'group.delivery.failed', `Could not start @${member.handle}`, { deliveryId: d.id, error: message, dispatchState: 'not-dispatched' }, session.id);
       });
       this.log('warn', `Group delivery ${d.id} could not start`, error);
       return false;
@@ -863,16 +1684,20 @@ export class GroupService {
   }
 
   private exhaustBudget(group: ConversationGroup, requestIdArg: string): void {
-    this.holdBudget(group, requestIdArg, `A request used all ${group.maxTurns} allowed model turns. Pending work is retained. Raise the turn limit and resume, or cancel the affected agent's pending work and send a new request.`);
+    const limit = effectiveTurnLimit(group);
+    this.holdBudget(group, requestIdArg, `A request used all ${limit ?? 'configured'} allowed model turns. Pending work is retained. Raise the turn limit and resume, or cancel the affected agent's pending work and send a new request.`);
   }
 
   private holdBudget(group: ConversationGroup, requestIdArg: string, reason: string): void {
-    this.store.tx(() => {
-      this.repo.updateRequest(requestIdArg, { status: 'paused' });
-      this.repo.updateGroup(group.id, { paused: true, pauseReason: reason });
-      this.repo.insertMessage({ groupId: group.id, senderMemberId: null, recipients: [], kind: 'status', content: reason, requestId: requestIdArg });
-      this.event(group, 'group.budget.exhausted', 'Coordination budget reached; queued work is retained', { requestId: requestIdArg, maxTurns: group.maxTurns, maxHops: group.maxHops });
-    });
+    this.store.tx(() => this.holdBudgetRecord(group, requestIdArg, reason));
+  }
+
+  /** Caller already owns Store.tx. */
+  private holdBudgetRecord(group: ConversationGroup, requestIdArg: string, reason: string): void {
+    this.repo.updateRequest(requestIdArg, { status: 'paused' });
+    this.repo.updateGroup(group.id, { paused: true, pauseReason: reason });
+    this.repo.insertMessage({ groupId: group.id, senderMemberId: null, recipients: [], kind: 'status', content: reason, requestId: requestIdArg });
+    this.event(group, 'group.budget.exhausted', 'Coordination budget reached; queued work is retained', { requestId: requestIdArg, maxTurns: effectiveTurnLimit(group), maxHops: group.maxHops });
   }
 
   private cancel(d: DeliveryRow, reason: string): void {
@@ -942,16 +1767,18 @@ export class GroupService {
     const fresh = assignments.filter((a) => !a.notified);
     if (!fresh.length) return;
     const deliveries = new Map(assignments.map((a) => [a.id, this.repo.getDelivery(a.deliveryId)]));
-    // The batch is complete only when nothing is queued, running or awaiting an explicit retry.
-    if ([...deliveries.values()].some((d) => !d || UNSETTLED_DELIVERY.includes(d.status))) return;
+    // A batch settles on terminal outcomes; only a retry that is explicitly safe remains outstanding.
+    if ([...deliveries.values()].some((d) => !d || OPEN_DELIVERY.includes(d.status) || ((d.status === 'failed' || d.status === 'interrupted') && d.retryable))) return;
     for (const delegator of new Set(fresh.map((a) => a.fromMemberId))) {
       const batch = fresh.filter((a) => a.fromMemberId === delegator);
-      const target = this.repo.getMember(delegator);
+      const currentPlanner = group.mode === 'cowork' ? request.plannerMemberId : group.orchestratorMemberId;
+      const target = this.repo.getMember(currentPlanner ?? delegator) ?? this.repo.getMember(delegator);
       const hop = Math.max(...batch.map((a) => deliveries.get(a.id)!.hop)) + 1;
       this.repo.markNotified(batch.map((a) => a.id));
       if (!target || target.removedAt) continue;
-      const committed = request.turnsUsed + this.repo.requestDeliveries(request.id, ['queued']).length;
-      const blockedByBudget = hop > group.maxHops || committed >= group.maxTurns;
+        const committed = request.turnsUsed + this.repo.requestDeliveries(request.id, ['queued']).length;
+       const turnLimit = effectiveTurnLimit(group);
+       const blockedByBudget = hop > group.maxHops || (turnLimit !== null && committed >= turnLimit);
       const lines: ResultLine[] = batch.map((a) => {
         const d = deliveries.get(a.id)!;
         const worker = this.repo.getMember(a.toMemberId);
@@ -997,7 +1824,9 @@ export class GroupService {
     const { group, member, request, delivery } = this.live(ctx);
     return {
       you: member.handle, role: member.role, mode: group.mode, canAssign: this.mayAssign(group, member, request.plannerMemberId),
-      request: { id: request.id, turnsUsed: request.turnsUsed, maxTurns: group.maxTurns, hop: delivery.hop, maxHops: group.maxHops },
+      autonomy: { mode: group.autonomy?.mode ?? 'balanced', emergencyTurnLimit: effectiveTurnLimit(group) },
+      recovery: group.recoveryState ? { status: group.recoveryState.status, ...(group.recoveryState.reason ? { reason: group.recoveryState.reason } : {}) } : { status: 'healthy' },
+      request: { id: request.id, turnsUsed: request.turnsUsed, maxTurns: effectiveTurnLimit(group), hop: delivery.hop, maxHops: group.maxHops },
       members: this.roster(group, member),
     };
   }
@@ -1031,7 +1860,8 @@ export class GroupService {
     if (this.repo.countRunMessages(group.id, member.id, delivery.runId!, 'assignment') >= MAX_ASSIGNMENTS_PER_RUN) throw conflict('Too many assignments in one turn');
     const hop = delivery.hop + 1;
     if (hop > group.maxHops) throw conflict(`The message hop limit (${group.maxHops}) has been reached for this request`);
-    if (request.turnsUsed + this.repo.requestDeliveries(request.id, ['queued']).length >= group.maxTurns) throw conflict(`The request turn budget (${group.maxTurns}) has been reached`);
+    const turnLimit = effectiveTurnLimit(group);
+    if (turnLimit !== null && request.turnsUsed + this.repo.requestDeliveries(request.id, ['queued']).length >= turnLimit) throw conflict(`The request turn budget (${turnLimit}) has been reached`);
 
     const scope = normalizeScopes(input.scope);
     const dependsOn = [...new Set(input.dependsOn ?? [])].sort();
@@ -1043,11 +1873,26 @@ export class GroupService {
     }
     const inputs = [...wanted.values()].sort((a, b) => `${a.taskId}${a.path}`.localeCompare(`${b.taskId}${b.path}`));
     const title = clean(input.title.trim(), 200);
+    const acceptanceProvenance = input.acceptanceCriteria.trim() ? 'explicit' : 'derived';
+    const acceptanceCriteria = clean(input.acceptanceCriteria.trim() || deriveAcceptanceCriteria(input.objective, scope), 10_000);
+    const milestones = this.assignmentMilestones(acceptanceCriteria, acceptanceProvenance);
     const fingerprint = createHash('sha256').update(JSON.stringify([request.id, recipient.id, title.toLowerCase().replace(/\s+/g, ' '), input.objective.trim(), input.acceptanceCriteria.trim(), scope, dependsOn, inputs])).digest('hex');
 
     const active = this.repo.activeAssignments(group.id);
     const same = active.find((a) => a.fingerprint === fingerprint);
     if (same) return { assignmentId: same.id, taskId: same.taskId, deliveryId: same.deliveryId, recipient: recipient.handle, status: 'queued-or-active', deduplicated: true };
+    const previous = this.repo.requestAssignments(request.id).find((assignment) => assignment.fingerprint === fingerprint);
+    if (previous) {
+      const priorDelivery = this.repo.getDelivery(previous.deliveryId);
+      this.recordStallSignal(group, member, request.id, 'delegation-loop', fingerprint, delivery.runId, [previous.id, previous.deliveryId],
+        'The same assignment objective and scope was proposed again after its prior delivery settled.');
+      return {
+        assignmentId: previous.id, taskId: previous.taskId, deliveryId: previous.deliveryId, recipient: recipient.handle,
+        status: priorDelivery?.status ?? 'unavailable', deduplicated: true,
+      };
+    }
+    const checkpoint = this.assignmentCheckpointRequired(group, request.id, delivery, scope);
+    if (checkpoint) return { status: 'awaiting-human-ack', checkpointId: checkpoint.id, reason: checkpoint.reason, queued: false };
     for (const other of active) {
       const otherMember = this.repo.getMember(other.toMemberId);
       const otherSession = otherMember ? this.store.getSession(otherMember.sessionId) : undefined;
@@ -1057,10 +1902,13 @@ export class GroupService {
     }
 
     const created = this.store.tx(() => {
-      this.live(ctx);
+      const current = this.live(ctx);
+      if (!this.mayAssign(current.group, current.member, current.request.plannerMemberId)) {
+        throw forbidden(current.group.mode === 'cowork' ? 'This request planning lease changed before the assignment was recorded' : 'Coordinator authority changed before the assignment was recorded');
+      }
       const task = this.tasks.create({
         projectId: group.projectId, title, description: clean(`${input.objective.trim()}\n\nEdit scope:\n${scope.map((s) => `- ${s}`).join('\n')}`, 20_000),
-        acceptanceCriteria: clean(input.acceptanceCriteria ?? '', 10_000), sessionId: recipient.sessionId, dependsOn,
+        acceptanceCriteria, sessionId: recipient.sessionId, dependsOn,
       });
       const id = assignmentId();
       const deliveryIdValue = deliveryId();
@@ -1068,12 +1916,12 @@ export class GroupService {
       const message = this.repo.insertMessage({
         groupId: group.id, senderMemberId: member.id, recipients: [recipient.id], kind: 'assignment', requestId: request.id, sourceRunId: delivery.runId,
         content: assignmentText({
-          id, taskId: task.id, from: member.handle, to: recipient.handle, title, objective: input.objective, acceptance: input.acceptanceCriteria ?? '', scope,
+          id, taskId: task.id, from: member.handle, to: recipient.handle, title, objective: input.objective, acceptance: acceptanceCriteria, scope,
           request: this.repo.getMessage(request.messageId)?.content ?? '', dependsOn: dependencies, inputs: inputs.map((i) => ({ ...i, reference: null })),
         }),
       });
       this.repo.insertDelivery({ id: deliveryIdValue, groupId: group.id, requestId: request.id, messageId: message.id, memberId: recipient.id, kind: 'assignment', hop, assignmentId: id });
-      this.repo.insertAssignment({ id, groupId: group.id, requestId: request.id, fromMemberId: member.id, toMemberId: recipient.id, taskId: task.id, deliveryId: deliveryIdValue, scope, fingerprint });
+       this.repo.insertAssignment({ id, groupId: group.id, requestId: request.id, fromMemberId: member.id, toMemberId: recipient.id, taskId: task.id, deliveryId: deliveryIdValue, scope, fingerprint, acceptanceProvenance, milestones });
       const assignment = this.repo.getAssignment(id)!;
       for (const wantedInput of inputs) {
         const producer = this.store.getTask(wantedInput.taskId);
@@ -1108,7 +1956,8 @@ export class GroupService {
     const hop = delivery.hop + 1;
     if (wake) {
       if (hop > group.maxHops) throw conflict(`The message hop limit (${group.maxHops}) has been reached; send an informational message instead`);
-      if (request.turnsUsed + this.repo.requestDeliveries(request.id, ['queued']).length >= group.maxTurns) throw conflict(`The request turn budget (${group.maxTurns}) has been reached`);
+       const turnLimit = effectiveTurnLimit(group);
+       if (turnLimit !== null && request.turnsUsed + this.repo.requestDeliveries(request.id, ['queued']).length >= turnLimit) throw conflict(`The request turn budget (${turnLimit}) has been reached`);
     }
     const result = this.store.tx(() => {
       this.live(ctx);
@@ -1166,7 +2015,7 @@ export class GroupService {
         this.store.recordEvent({ projectId: next.projectId, sessionId: next.sessionId, type: `task.${input.status}`, summary: `Task ${input.status} (reported by @${member.handle}): ${next.title}`, payload: { taskId: next.id, from: task.status, to: next.status, groupId: group.id } });
       }
       this.repo.touchGroup(group.id);
-      this.event(group, 'group.status', `@${member.handle}: ${input.status}`, { taskId: task.id, status: input.status }, session.id);
+      this.event(group, 'group.status', `@${member.handle}: ${input.status}`, { taskId: task.id, status: input.status, changed: next.status !== task.status }, session.id);
       return next;
     });
     // A producer reaching Review can unblock consumers that opted into its published artifacts.
@@ -1246,6 +2095,61 @@ export class GroupService {
     return { artifactId: row.id, path: row.path, revision: row.commitId, blob: row.blob.slice(0, 12), reference: row.reference, taskId: row.taskId, deduplicated };
   }
 
+  /** Milestones remain pending until host-backed evidence or human task acceptance arrives. */
+  private assignmentMilestones(criteria: string, provenance: 'explicit' | 'derived'): GroupMilestone[] {
+    const lines = criteria.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+      .filter((line) => !/^derived by mingle/i.test(line) && !/^permitted edit scope:?$/i.test(line) && !line.startsWith('- '))
+      .map((line) => line.replace(/^\d+[.)]\s*/, '').slice(0, 300));
+    const labels = (lines.length ? lines : [criteria.trim()]).slice(0, 8);
+    return labels.map((label) => ({ id: newId('msg'), label: clean(label, 300), status: 'pending', acceptanceProvenance: provenance }));
+  }
+
+  private assignmentCheckpointRequired(group: ConversationGroup, requestIdArg: string, delivery: DeliveryRow, nextScope: string[]): GroupRecoveryCheckpointRow | null {
+    const mode = group.autonomy?.mode ?? 'balanced';
+    if (mode === 'extended') return null;
+    const pending = this.repo.latestPendingRecoveryCheckpoint(group.id);
+    if (pending) return pending;
+    const currentRunAssignments = this.repo.assignmentsCreatedByRun(requestIdArg, delivery.runId ?? '');
+    if (currentRunAssignments.length) return null;
+    const latest = this.repo.latestAssignmentBatch(requestIdArg);
+    if (!latest.length) return null;
+    const unsettled = latest.some((assignment) => {
+      const row = this.repo.getDelivery(assignment.deliveryId);
+      return !row || OPEN_DELIVERY.includes(row.status) || ((row.status === 'failed' || row.status === 'interrupted') && row.retryable);
+    });
+    if (unsettled) return null;
+    if (mode === 'balanced') {
+      const withinPriorScope = nextScope.every((wanted) => latest.some((assignment) => assignment.scope.some((prior) => wanted === prior || wanted.startsWith(`${prior}/`))));
+      if (withinPriorScope) return null;
+    }
+    const batchIds = latest.map((assignment) => assignment.deliveryId).sort();
+    const keyHash = createHash('sha256').update(JSON.stringify([mode, requestIdArg, batchIds])).digest('hex').slice(0, 20);
+    const idempotencyKey = `autonomy:${mode}:${requestIdArg}:${keyHash}`.slice(0, 100);
+    const existing = this.repo.getRecoveryCheckpointByKey(group.id, idempotencyKey);
+    if (existing?.state === 'acknowledged') return null;
+    if (existing) return existing;
+    const reason = mode === 'supervised'
+      ? 'Acknowledge the completed delegation batch before the coordinator can start another batch.'
+      : 'This assignment expands beyond the accepted edit scope. Acknowledge the completed batch before continuing.';
+    let checkpoint!: GroupRecoveryCheckpointRow;
+    this.store.tx(() => {
+      checkpoint = this.repo.insertRecoveryCheckpoint({
+        id: newId('msg'), groupId: group.id, requestId: requestIdArg, batchId: batchIds[0] ?? null,
+        kind: 'supervised-batch', reason, idempotencyKey,
+        payload: { mode, deliveryIds: batchIds.slice(0, 100), assignmentIds: latest.map((row) => row.id).slice(0, 100), nextScope: nextScope.slice(0, 40) },
+      });
+      const prior = group.recoveryState;
+      this.repo.updateGroup(group.id, { recoveryState: {
+        status: 'paused', reason, pendingCheckpointId: checkpoint.id, activeRequestId: requestIdArg,
+        ...(prior?.lastFailureId ? { lastFailureId: prior.lastFailureId } : {}),
+        ...(prior?.acknowledgedDeliveryIds ? { acknowledgedDeliveryIds: prior.acknowledgedDeliveryIds.slice(-100) } : {}), updatedAt: nowIso(),
+      } });
+      this.repo.insertMessage({ groupId: group.id, senderMemberId: null, recipients: [], kind: 'status', requestId: requestIdArg, content: reason });
+      this.event(group, 'group.checkpoint.required', reason, { checkpointId: checkpoint.id, requestId: requestIdArg, mode, deliveryIds: batchIds.slice(0, 20) });
+    });
+    return checkpoint;
+  }
+
   // ---------------------------------------------------------------- helpers
 
   /** Verifies, against durable state on every call, that this context is a running delivery of an active member. */
@@ -1254,6 +2158,7 @@ export class GroupService {
     const delivery = this.repo.getDelivery(ctx.deliveryId);
     if (!delivery || delivery.status !== 'running' || !delivery.runId || delivery.groupId !== ctx.groupId || delivery.memberId !== ctx.memberId
       || delivery.requestId !== ctx.requestId || delivery.hop !== ctx.hop) throw conflict('This team connection is no longer tied to an active delivery');
+    if (this.fencedCoordinatorDeliveries.has(delivery.id)) throw conflict('Coordinator authority changed while this run was active; start a new delivery to continue');
     const group = this.repo.getGroup(delivery.groupId);
     const member = this.repo.getMember(delivery.memberId);
     const request = this.repo.getRequest(delivery.requestId);
@@ -1270,6 +2175,10 @@ export class GroupService {
     return group.mode === 'cowork' ? plannerId === member.id : group.orchestratorMemberId === member.id;
   }
 
+  private hasPlannerAuthority(group: ConversationGroup, member: MemberRow, plannerId: string): boolean {
+    return group.mode === 'cowork' ? plannerId === member.id : group.orchestratorMemberId === member.id;
+  }
+
   private activeByHandle(group: ConversationGroup, handle: string): MemberRow {
     const found = this.repo.members(group.id).find((m) => m.handle === handle.toLowerCase());
     if (!found) throw unprocessable(`Unknown recipient @${handle}. Call team_members to see valid handles.`);
@@ -1279,6 +2188,53 @@ export class GroupService {
 
   private event(group: ConversationGroup, type: string, summary: string, payload: Record<string, unknown> = {}, sessionId?: string) {
     return this.store.recordEvent({ projectId: group.projectId, sessionId: sessionId ?? null, type, summary: clean(summary, 1000), payload: JSON.parse(redactSecrets(JSON.stringify({ groupId: group.id, ...payload }))) as Record<string, unknown> });
+  }
+
+  private validateRecoveryPolicy(group: ConversationGroup, members: MemberRow[], policy: GroupRecoveryPolicy): void {
+    const byId = new Map(members.map((member) => [member.id, member]));
+    const workerFallbacks = policy.workerFallbacks ?? {};
+    if (policy.automaticFallback && !policy.leadFallbackMemberId && !Object.keys(workerFallbacks).length) {
+      throw unprocessable('Automatic fallback needs an explicitly selected lead or worker replacement');
+    }
+    if (policy.leadFallbackMemberId) {
+      const target = byId.get(policy.leadFallbackMemberId);
+      const leadIds = group.mode === 'cowork'
+        ? new Set(this.repo.requests(group.id, 1000).filter((request) => request.status !== 'completed').map((request) => request.plannerMemberId))
+        : new Set([group.orchestratorMemberId ?? (group.mode === 'current-leads' ? members.find((member) => member.sessionId === group.anchorSessionId)?.id : null)].filter((id): id is string => Boolean(id)));
+      if (!target || leadIds.has(target.id)) throw unprocessable('Choose another active group member as the lead or request-planner fallback');
+      if (policy.automaticFallback) {
+        const targetSession = this.store.getSession(target.sessionId);
+        const sources = [...leadIds].map((id) => this.store.getSession(byId.get(id)?.sessionId ?? '')).filter((session): session is Session => Boolean(session));
+        if (!targetSession || sources.some((sourceSession) => sourceSession.policy !== targetSession.policy || sourceSession.worktreePath !== targetSession.worktreePath)) {
+          throw unprocessable('Automatic lead fallback requires the same permission policy and worktree as current coordinators/planners');
+        }
+      }
+    }
+    for (const [sourceId, targetId] of Object.entries(workerFallbacks)) {
+      const source = byId.get(sourceId);
+      const target = byId.get(targetId);
+      if (!source || !target || source.id === target.id || source.role === 'orchestrator') throw unprocessable('Worker fallback mappings must reference two different active worker members');
+      if (!policy.automaticFallback) continue;
+      const sourceSession = this.store.getSession(source.sessionId);
+      const targetSession = this.store.getSession(target.sessionId);
+      if (!sourceSession || !targetSession || sourceSession.policy !== targetSession.policy || sourceSession.worktreePath !== targetSession.worktreePath) {
+        throw unprocessable('Automatic worker fallback requires the same permission policy and shared worktree');
+      }
+    }
+  }
+
+  private consumeLeadFallback(group: ConversationGroup, targetId: string): void {
+    const policy = group.recoveryPolicy;
+    if (!policy || policy.leadFallbackMemberId !== targetId) return;
+    const hasWorkerFallbacks = Object.keys(policy.workerFallbacks ?? {}).length > 0;
+    const nextPolicy: GroupRecoveryPolicy = {
+      automaticFallback: hasWorkerFallbacks && policy.automaticFallback,
+      allowUnverifiedQuotaFallback: policy.allowUnverifiedQuotaFallback,
+      leadFallbackMemberId: null,
+      ...(hasWorkerFallbacks ? { workerFallbacks: policy.workerFallbacks } : {}),
+    };
+    this.repo.updateGroup(group.id, { recoveryPolicy: nextPolicy });
+    this.event(group, 'group.recovery-policy.consumed', 'Configured lead fallback was consumed by coordinator takeover', { replacementMemberId: targetId, recoveryPolicy: nextPolicy });
   }
 
   private assertOpen(): void { if (this.closed) throw conflict('Mingle is shutting down'); }

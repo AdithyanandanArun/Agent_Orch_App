@@ -1,6 +1,7 @@
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import type {
-  ConversationGroup, GroupAssignment, GroupDelivery, GroupMember, GroupMessage, GroupMode, GroupRequest, GroupInvocation,
+  AutonomyConfig, ConversationGroup, GroupAssignment, GroupDelivery, GroupMember, GroupMessage, GroupMode, GroupRequest,
+  GroupInvocation, GroupMilestone, GroupRecoveryPolicy, GroupRecoveryState, ProviderFailure, RecoveryActionRequest, RecoveryActionResult,
 } from '@mingle/contracts';
 import { AttachmentRepo } from '../attachments/repo.ts';
 import { newId as baseId, nowIso } from '../util.ts';
@@ -16,6 +17,16 @@ export const UNSETTLED_DELIVERY: DeliveryStatus[] = ['queued', 'running', 'faile
 export interface MemberRow extends GroupMember { held: boolean; lastReadSeq: number }
 export interface DeliveryRow extends GroupDelivery { kind: DeliveryKind; assignmentId: string | null; taskId: string | null; attempts: number; retryable: boolean; startedAt: string | null }
 export interface AssignmentRow extends GroupAssignment { fingerprint: string; notified: boolean }
+export interface StallEvidenceRow {
+  id: string; groupId: string; memberId: string | null; requestId: string | null; deliveryId: string | null; assignmentId: string | null;
+  fingerprint: string; signalClass: string; consecutiveCount: number; reason: string; sourceRunId: string | null;
+  sourceToolId: string | null; sourceTaskId: string | null; sourceArtifactId: string | null; createdAt: string; updatedAt: string;
+}
+export interface GroupRecoveryCheckpointRow {
+  id: string; groupId: string; requestId: string | null; batchId: string | null; kind: string;
+  state: 'pending' | 'acknowledged' | 'dismissed'; reason: string; payload: Record<string, unknown>;
+  idempotencyKey: string; createdAt: string; updatedAt: string; acknowledgedAt: string | null;
+}
 export interface ArtifactRow {
   id: string; groupId: string; requestId: string; fromMemberId: string; toMemberId: string; taskId: string | null; path: string;
   commitId: string; blob: string; reference: string; handoffEventId: number | null; handoffMessageId: string | null; messageId: string; createdAt: string;
@@ -37,6 +48,10 @@ const mapGroup = (r: Row): ConversationGroup => ({
   mode: r.mode as GroupMode, orchestratorMemberId: (r.orchestrator_member_id as string | null) ?? null, paused: bool(r.paused),
   pauseReason: (r.pause_reason as string | null) ?? null, maxParallel: r.max_parallel as number, maxTurns: r.max_turns as number,
   maxHops: r.max_hops as number, createdAt: r.created_at as string, updatedAt: r.updated_at as string,
+  ...(r.autonomy_policy ? { autonomy: JSON.parse(r.autonomy_policy as string) as AutonomyConfig } : {}),
+  ...(r.recovery_policy ? { recoveryPolicy: JSON.parse(r.recovery_policy as string) as GroupRecoveryPolicy } : {}),
+  ...(r.recovery_state ? { recoveryState: JSON.parse(r.recovery_state as string) as GroupRecoveryState } : {}),
+  coordinatorEpoch: Number(r.coordinator_epoch ?? 1),
 });
 const mapMember = (r: Row): MemberRow => ({
   id: r.id as string, groupId: r.group_id as string, sessionId: r.session_id as string, handle: r.handle as string,
@@ -59,6 +74,7 @@ const mapDelivery = (r: Row): DeliveryRow => ({
   status: r.status as DeliveryStatus, runId: (r.run_id as string | null) ?? null, hop: r.hop as number, error: (r.error as string | null) ?? null,
   createdAt: r.created_at as string, updatedAt: r.updated_at as string, kind: r.kind as DeliveryKind,
   assignmentId: (r.assignment_id as string | null) ?? null, taskId: (r.task_id as string | null) ?? null, attempts: r.attempts as number, retryable: bool(r.retryable), startedAt: (r.started_at as string | null) ?? null,
+  coordinatorEpoch: Number(r.coordinator_epoch ?? 1),
 });
 const mapAssignment = (r: Row): AssignmentRow => ({
   id: r.id as string, groupId: r.group_id as string, requestId: r.request_id as string, fromMemberId: r.from_member_id as string,
@@ -83,17 +99,25 @@ export class GroupRepo {
   private run(sql: string, ...params: SQLInputValue[]): number { return Number(this.db.prepare(sql).run(...params).changes); }
 
   // groups
-  insertGroup(g: { id: string; projectId: string; title: string; anchorSessionId: string; mode: GroupMode; maxParallel: number; maxTurns: number; maxHops: number }): void {
+  insertGroup(g: {
+    id: string; projectId: string; title: string; anchorSessionId: string; mode: GroupMode; maxParallel: number; maxTurns: number; maxHops: number;
+    autonomy?: AutonomyConfig; recoveryPolicy?: GroupRecoveryPolicy;
+  }): void {
     const now = nowIso();
-    this.run(`INSERT INTO conversation_groups(id, project_id, title, anchor_session_id, mode, max_parallel, max_turns, max_hops, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, g.id, g.projectId, g.title, g.anchorSessionId, g.mode, g.maxParallel, g.maxTurns, g.maxHops, now, now);
+    this.run(`INSERT INTO conversation_groups(id, project_id, title, anchor_session_id, mode, max_parallel, max_turns, max_hops, autonomy_policy, recovery_policy, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, g.id, g.projectId, g.title, g.anchorSessionId, g.mode, g.maxParallel, g.maxTurns, g.maxHops,
+    JSON.stringify(g.autonomy ?? { mode: 'balanced' }), JSON.stringify(g.recoveryPolicy ?? { automaticFallback: false }), now, now);
   }
   getGroup(id: string): ConversationGroup | undefined {
     const row = this.get('SELECT g.* FROM conversation_groups g JOIN projects p ON p.id = g.project_id WHERE g.id = ? AND p.archived_at IS NULL', id);
     return row ? mapGroup(row) : undefined;
   }
   listGroups(): ConversationGroup[] { return this.all('SELECT g.* FROM conversation_groups g JOIN projects p ON p.id = g.project_id WHERE p.archived_at IS NULL ORDER BY g.created_at ASC, g.rowid ASC').map(mapGroup); }
-  updateGroup(id: string, patch: { mode?: GroupMode; orchestratorMemberId?: string | null; paused?: boolean; pauseReason?: string | null; maxParallel?: number; maxTurns?: number; maxHops?: number }): void {
+  updateGroup(id: string, patch: {
+    mode?: GroupMode; orchestratorMemberId?: string | null; paused?: boolean; pauseReason?: string | null;
+    maxParallel?: number; maxTurns?: number; maxHops?: number; autonomy?: AutonomyConfig; recoveryPolicy?: GroupRecoveryPolicy;
+    recoveryState?: GroupRecoveryState; coordinatorEpoch?: number;
+  }): void {
     const sets = ['updated_at = ?'];
     const params: SQLInputValue[] = [nowIso()];
     const add = (column: string, value: SQLInputValue | undefined) => { if (value !== undefined) { sets.push(`${column} = ?`); params.push(value); } };
@@ -104,6 +128,10 @@ export class GroupRepo {
     add('max_parallel', patch.maxParallel);
     add('max_turns', patch.maxTurns);
     add('max_hops', patch.maxHops);
+    if (patch.autonomy !== undefined) add('autonomy_policy', JSON.stringify(patch.autonomy));
+    if (patch.recoveryPolicy !== undefined) add('recovery_policy', JSON.stringify(patch.recoveryPolicy));
+    if (patch.recoveryState !== undefined) add('recovery_state', JSON.stringify(patch.recoveryState));
+    add('coordinator_epoch', patch.coordinatorEpoch);
     this.run(`UPDATE conversation_groups SET ${sets.join(', ')} WHERE id = ?`, ...params, id);
   }
   touchGroup(id: string): void { this.run('UPDATE conversation_groups SET updated_at = ? WHERE id = ?', nowIso(), id); }
@@ -219,10 +247,11 @@ export class GroupRepo {
   }
 
   // deliveries
-  insertDelivery(d: { id: string; groupId: string; requestId: string; messageId: string; memberId: string; kind: DeliveryKind; hop: number; assignmentId?: string | null; taskId?: string | null }): void {
+  insertDelivery(d: { id: string; groupId: string; requestId: string; messageId: string; memberId: string; kind: DeliveryKind; hop: number; assignmentId?: string | null; taskId?: string | null; coordinatorEpoch?: number }): void {
     const now = nowIso();
-    this.run(`INSERT INTO group_deliveries(id, group_id, request_id, message_id, member_id, kind, status, hop, assignment_id, task_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`, d.id, d.groupId, d.requestId, d.messageId, d.memberId, d.kind, d.hop, d.assignmentId ?? null, d.taskId ?? null, now, now);
+    this.run(`INSERT INTO group_deliveries(id, group_id, request_id, message_id, member_id, kind, status, hop, assignment_id, task_id, coordinator_epoch, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, COALESCE(?, (SELECT coordinator_epoch FROM conversation_groups WHERE id = ?), 1), ?, ?)`,
+    d.id, d.groupId, d.requestId, d.messageId, d.memberId, d.kind, d.hop, d.assignmentId ?? null, d.taskId ?? null, d.coordinatorEpoch ?? null, d.groupId, now, now);
   }
   getDelivery(id: string): DeliveryRow | undefined {
     const row = this.get('SELECT * FROM group_deliveries WHERE id = ?', id);
@@ -243,6 +272,27 @@ export class GroupRepo {
     if (!statuses) return this.all('SELECT * FROM group_deliveries WHERE request_id = ? ORDER BY rowid ASC', requestId).map(mapDelivery);
     return this.all(`SELECT * FROM group_deliveries WHERE request_id = ? AND status IN (${placeholders(statuses.length)}) ORDER BY rowid ASC`, requestId, ...statuses).map(mapDelivery);
   }
+  updateRequestPlanner(groupId: string, fromMemberId: string | null, toMemberId: string): number {
+    if (fromMemberId === null) return this.run("UPDATE group_requests SET planner_member_id = ?, updated_at = ? WHERE group_id = ? AND status IN ('active', 'paused')", toMemberId, nowIso(), groupId);
+    return this.run("UPDATE group_requests SET planner_member_id = ?, updated_at = ? WHERE group_id = ? AND status IN ('active', 'paused') AND planner_member_id = ?", toMemberId, nowIso(), groupId, fromMemberId);
+  }
+  updateRequestPlannerOne(requestId: string, toMemberId: string): number {
+    return this.run("UPDATE group_requests SET planner_member_id = ?, updated_at = ? WHERE id = ? AND status IN ('active', 'paused')", toMemberId, nowIso(), requestId);
+  }
+  rerouteQueuedRequestDeliveries(requestId: string, fromMemberId: string, toMemberId: string, coordinatorEpoch: number): number {
+    return this.run(`UPDATE group_deliveries SET member_id = ?, coordinator_epoch = ?, updated_at = ? WHERE request_id = ? AND member_id = ?
+      AND status = 'queued' AND kind IN ('request', 'result') AND assignment_id IS NULL AND task_id IS NULL`,
+    toMemberId, coordinatorEpoch, nowIso(), requestId, fromMemberId);
+  }
+  rerouteQueuedResults(groupId: string, fromMemberId: string, toMemberId: string, coordinatorEpoch: number): number {
+    return this.run("UPDATE group_deliveries SET member_id = ?, coordinator_epoch = ?, updated_at = ? WHERE group_id = ? AND member_id = ? AND kind = 'result' AND status = 'queued'",
+      toMemberId, coordinatorEpoch, nowIso(), groupId, fromMemberId);
+  }
+  rerouteQueuedCoordinatorWork(groupId: string, fromMemberId: string, toMemberId: string, coordinatorEpoch: number): number {
+    return this.run(`UPDATE group_deliveries SET member_id = ?, coordinator_epoch = ?, updated_at = ? WHERE group_id = ? AND member_id = ?
+      AND status = 'queued' AND kind IN ('request', 'result') AND assignment_id IS NULL AND task_id IS NULL`,
+    toMemberId, coordinatorEpoch, nowIso(), groupId, fromMemberId);
+  }
   memberDeliveries(memberId: string, statuses: DeliveryStatus[]): DeliveryRow[] {
     return this.all(`SELECT * FROM group_deliveries WHERE member_id = ? AND status IN (${placeholders(statuses.length)}) ORDER BY rowid ASC`, memberId, ...statuses).map(mapDelivery);
   }
@@ -252,7 +302,7 @@ export class GroupRepo {
     for (const row of this.all('SELECT member_id, MAX(started_at) AS at FROM group_deliveries WHERE group_id = ? AND started_at IS NOT NULL GROUP BY member_id', groupId)) map.set(row.member_id as string, row.at as string);
     return map;
   }
-  setDelivery(id: string, patch: { status?: DeliveryStatus; runId?: string | null; error?: string | null; retryable?: boolean; startedAt?: string; attemptsDelta?: number }): void {
+  setDelivery(id: string, patch: { status?: DeliveryStatus; runId?: string | null; error?: string | null; retryable?: boolean; startedAt?: string; attemptsDelta?: number; coordinatorEpoch?: number; messageId?: string; memberId?: string }): void {
     const sets = ['updated_at = ?'];
     const params: SQLInputValue[] = [nowIso()];
     if (patch.status !== undefined) { sets.push('status = ?'); params.push(patch.status); }
@@ -261,10 +311,13 @@ export class GroupRepo {
     if (patch.retryable !== undefined) { sets.push('retryable = ?'); params.push(patch.retryable ? 1 : 0); }
     if (patch.startedAt !== undefined) { sets.push('started_at = ?'); params.push(patch.startedAt); }
     if (patch.attemptsDelta) { sets.push('attempts = attempts + ?'); params.push(patch.attemptsDelta); }
+    if (patch.coordinatorEpoch !== undefined) { sets.push('coordinator_epoch = ?'); params.push(patch.coordinatorEpoch); }
+    if (patch.messageId !== undefined) { sets.push('message_id = ?'); params.push(patch.messageId); }
+    if (patch.memberId !== undefined) { sets.push('member_id = ?'); params.push(patch.memberId); }
     this.run(`UPDATE group_deliveries SET ${sets.join(', ')} WHERE id = ?`, ...params, id);
   }
   /** Compare-and-set a delivery status; returns whether this caller won the transition. */
-  transitionDelivery(id: string, from: DeliveryStatus, to: DeliveryStatus, patch: { runId?: string | null; error?: string | null; retryable?: boolean; startedAt?: string; attemptsDelta?: number } = {}): boolean {
+  transitionDelivery(id: string, from: DeliveryStatus, to: DeliveryStatus, patch: { runId?: string | null; error?: string | null; retryable?: boolean; startedAt?: string; attemptsDelta?: number; coordinatorEpoch?: number; messageId?: string; memberId?: string } = {}): boolean {
     const sets = ['status = ?', 'updated_at = ?'];
     const params: SQLInputValue[] = [to, nowIso()];
     if (patch.runId !== undefined) { sets.push('run_id = ?'); params.push(patch.runId); }
@@ -272,36 +325,175 @@ export class GroupRepo {
     if (patch.retryable !== undefined) { sets.push('retryable = ?'); params.push(patch.retryable ? 1 : 0); }
     if (patch.startedAt !== undefined) { sets.push('started_at = ?'); params.push(patch.startedAt); }
     if (patch.attemptsDelta) { sets.push('attempts = attempts + ?'); params.push(patch.attemptsDelta); }
+    if (patch.coordinatorEpoch !== undefined) { sets.push('coordinator_epoch = ?'); params.push(patch.coordinatorEpoch); }
+    if (patch.messageId !== undefined) { sets.push('message_id = ?'); params.push(patch.messageId); }
+    if (patch.memberId !== undefined) { sets.push('member_id = ?'); params.push(patch.memberId); }
     return this.run(`UPDATE group_deliveries SET ${sets.join(', ')} WHERE id = ? AND status = ?`, ...params, id, from) === 1;
   }
 
   // assignments
-  insertAssignment(a: { id: string; groupId: string; requestId: string; fromMemberId: string; toMemberId: string; taskId: string; deliveryId: string; scope: string[]; fingerprint: string }): void {
+  insertAssignment(a: {
+    id: string; groupId: string; requestId: string; fromMemberId: string; toMemberId: string; taskId: string; deliveryId: string; scope: string[]; fingerprint: string;
+    acceptanceProvenance?: 'explicit' | 'derived'; milestones?: GroupMilestone[];
+  }): void {
     this.run(`INSERT INTO group_assignments(id, group_id, request_id, from_member_id, to_member_id, task_id, delivery_id, scope, fingerprint, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, a.id, a.groupId, a.requestId, a.fromMemberId, a.toMemberId, a.taskId, a.deliveryId, JSON.stringify(a.scope), a.fingerprint, nowIso());
+    const provenance = a.acceptanceProvenance ?? a.milestones?.[0]?.acceptanceProvenance ?? 'explicit';
+    for (const milestone of a.milestones ?? []) this.run(`INSERT INTO group_assignment_milestones(id, group_id, assignment_id, task_id, label, acceptance_source, state, evidence_ref, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, milestone.id || baseId('msg'), a.groupId, a.id, a.taskId, milestone.label.slice(0, 300), milestone.acceptanceProvenance ?? provenance,
+    milestone.status, milestone.evidence?.slice(0, 1000) ?? null, nowIso(), nowIso());
   }
   getAssignment(id: string): AssignmentRow | undefined {
     const row = this.get('SELECT * FROM group_assignments WHERE id = ?', id);
-    return row ? mapAssignment(row) : undefined;
+    return row ? this.withMilestones(mapAssignment(row)) : undefined;
   }
   assignmentByTask(groupId: string, taskId: string): AssignmentRow | undefined {
     const row = this.get('SELECT * FROM group_assignments WHERE group_id = ? AND task_id = ? ORDER BY rowid DESC', groupId, taskId);
-    return row ? mapAssignment(row) : undefined;
+    return row ? this.withMilestones(mapAssignment(row)) : undefined;
   }
   assignments(groupId: string): AssignmentRow[] {
-    return this.all('SELECT * FROM group_assignments WHERE group_id = ? ORDER BY rowid ASC', groupId).map(mapAssignment);
+    return this.all('SELECT * FROM group_assignments WHERE group_id = ? ORDER BY rowid ASC', groupId).map((row) => this.withMilestones(mapAssignment(row)));
   }
   requestAssignments(requestId: string): AssignmentRow[] {
-    return this.all('SELECT * FROM group_assignments WHERE request_id = ? ORDER BY rowid ASC', requestId).map(mapAssignment);
+    return this.all('SELECT * FROM group_assignments WHERE request_id = ? ORDER BY rowid ASC', requestId).map((row) => this.withMilestones(mapAssignment(row)));
+  }
+  assignmentsCreatedByRun(requestId: string, runId: string): AssignmentRow[] {
+    return this.all(`SELECT a.* FROM group_assignments a WHERE a.request_id = ? AND EXISTS (
+      SELECT 1 FROM group_messages m WHERE m.group_id = a.group_id AND m.request_id = a.request_id AND m.source_run_id = ?
+        AND m.kind = 'assignment' AND instr(m.content, 'Assignment ' || a.id || ' ') > 0
+    ) ORDER BY a.rowid ASC`, requestId, runId).map((row) => this.withMilestones(mapAssignment(row)));
+  }
+  latestAssignmentBatch(requestId: string): AssignmentRow[] {
+    const runId = this.get("SELECT source_run_id FROM group_messages WHERE request_id = ? AND kind = 'assignment' AND source_run_id IS NOT NULL ORDER BY seq DESC LIMIT 1", requestId)?.source_run_id as string | undefined;
+    return runId ? this.assignmentsCreatedByRun(requestId, runId) : [];
+  }
+  private withMilestones(assignment: AssignmentRow): AssignmentRow {
+    const milestones = this.all('SELECT id, label, state, evidence_ref, acceptance_source FROM group_assignment_milestones WHERE assignment_id = ? ORDER BY created_at, rowid', assignment.id)
+      .map((row) => ({ id: row.id as string, label: row.label as string, status: row.state as GroupMilestone['status'],
+        ...(row.evidence_ref ? { evidence: row.evidence_ref as string } : {}), acceptanceProvenance: row.acceptance_source as GroupMilestone['acceptanceProvenance'] }));
+    const acceptanceProvenance = milestones[0]?.acceptanceProvenance;
+    return { ...assignment, ...(acceptanceProvenance ? { acceptanceProvenance } : {}), ...(milestones.length ? { milestones } : {}) };
+  }
+  setTaskMilestones(taskId: string, status: 'completed' | 'blocked', evidence: string): void {
+    this.run(`UPDATE group_assignment_milestones SET state = ?, evidence_ref = ?, updated_at = ? WHERE task_id = ? AND state <> 'completed'`,
+      status, evidence.slice(0, 1000), nowIso(), taskId);
+  }
+  updateMilestonesForAssignment(assignmentId: string, status: 'completed' | 'blocked', evidence: string): void {
+    this.run(`UPDATE group_assignment_milestones SET state = ?, evidence_ref = ?, updated_at = ? WHERE assignment_id = ? AND state <> 'completed'`,
+      status, evidence.slice(0, 1000), nowIso(), assignmentId);
+  }
+  hasAssignmentsCreatedByRun(requestId: string, runId: string): boolean {
+    return Boolean(this.get("SELECT 1 AS x FROM group_messages WHERE request_id = ? AND source_run_id = ? AND kind = 'assignment' LIMIT 1", requestId, runId));
   }
   /** Assignments whose delivery has not reached a settled outcome. */
   activeAssignments(groupId: string): AssignmentRow[] {
     return this.all(
       `SELECT a.* FROM group_assignments a JOIN group_deliveries d ON d.id = a.delivery_id
        WHERE a.group_id = ? AND d.status IN ('queued', 'running', 'failed', 'interrupted') ORDER BY a.rowid ASC`, groupId,
-    ).map(mapAssignment);
+    ).map((row) => this.withMilestones(mapAssignment(row)));
   }
   markNotified(ids: string[]): void { for (const id of ids) this.run('UPDATE group_assignments SET notified = 1 WHERE id = ?', id); }
+  reassignAssignment(id: string, memberId: string, deliveryId: string): void {
+    this.run('UPDATE group_assignments SET to_member_id = ?, delivery_id = ? WHERE id = ?', memberId, deliveryId, id);
+  }
+
+  // Durable, idempotent recovery actions and supervised batch acknowledgements.
+  getRecoveryAction(groupId: string, idempotencyKey: string): RecoveryActionResult | undefined {
+    const row = this.get('SELECT result_json FROM group_recovery_actions WHERE group_id = ? AND idempotency_key = ?', groupId, idempotencyKey);
+    return row ? JSON.parse(row.result_json as string) as RecoveryActionResult : undefined;
+  }
+  insertRecoveryAction(input: { id: string; groupId: string; idempotencyKey: string; action: RecoveryActionRequest['action']; result: RecoveryActionResult }): void {
+    this.run('INSERT INTO group_recovery_actions(id, group_id, idempotency_key, action, result_json, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      input.id, input.groupId, input.idempotencyKey, input.action, JSON.stringify(input.result), nowIso());
+  }
+  getRecoveryCheckpoint(groupId: string, checkpointId: string): GroupRecoveryCheckpointRow | undefined {
+    const row = this.get('SELECT * FROM group_recovery_checkpoints WHERE group_id = ? AND id = ?', groupId, checkpointId);
+    return row ? this.mapRecoveryCheckpoint(row) : undefined;
+  }
+  getRecoveryCheckpointByKey(groupId: string, idempotencyKey: string): GroupRecoveryCheckpointRow | undefined {
+    const row = this.get('SELECT * FROM group_recovery_checkpoints WHERE group_id = ? AND idempotency_key = ?', groupId, idempotencyKey);
+    return row ? this.mapRecoveryCheckpoint(row) : undefined;
+  }
+  latestPendingRecoveryCheckpoint(groupId: string): GroupRecoveryCheckpointRow | undefined {
+    const row = this.get("SELECT * FROM group_recovery_checkpoints WHERE group_id = ? AND state = 'pending' ORDER BY created_at DESC, rowid DESC LIMIT 1", groupId);
+    return row ? this.mapRecoveryCheckpoint(row) : undefined;
+  }
+  deliverySuccessor(groupId: string, sourceDeliveryId: string): string | undefined {
+    const row = this.get(`SELECT recovery.successor_delivery_id FROM group_recovery_deliveries recovery
+      JOIN group_deliveries source ON source.id = recovery.source_delivery_id WHERE source.group_id = ? AND source.id = ?`, groupId, sourceDeliveryId);
+    return row?.successor_delivery_id as string | undefined;
+  }
+  deliverySource(groupId: string, successorDeliveryId: string): string | undefined {
+    const row = this.get(`SELECT recovery.source_delivery_id FROM group_recovery_deliveries recovery
+      JOIN group_deliveries successor ON successor.id = recovery.successor_delivery_id WHERE successor.group_id = ? AND successor.id = ?`, groupId, successorDeliveryId);
+    return row?.source_delivery_id as string | undefined;
+  }
+  linkDeliverySuccessor(groupId: string, requestId: string, sourceDeliveryId: string, successorDeliveryId: string): boolean {
+    const existing = this.deliverySuccessor(groupId, sourceDeliveryId);
+    if (existing) return existing === successorDeliveryId;
+    if (this.deliverySource(groupId, successorDeliveryId)) return false;
+    const source = this.getDelivery(sourceDeliveryId);
+    const successor = this.getDelivery(successorDeliveryId);
+    if (!source || !successor || source.groupId !== groupId || successor.groupId !== groupId || source.requestId !== requestId || successor.requestId !== requestId) return false;
+    this.run('INSERT INTO group_recovery_deliveries(source_delivery_id, successor_delivery_id, created_at) VALUES (?, ?, ?)', sourceDeliveryId, successorDeliveryId, nowIso());
+    return true;
+  }
+  insertRecoveryCheckpoint(input: {
+    id: string; groupId: string; requestId: string | null; batchId: string | null; kind: string; reason: string;
+    payload: Record<string, unknown>; idempotencyKey: string;
+  }): GroupRecoveryCheckpointRow {
+    const existing = this.getRecoveryCheckpointByKey(input.groupId, input.idempotencyKey);
+    if (existing) return existing;
+    const now = nowIso();
+    this.run(`INSERT INTO group_recovery_checkpoints(id, group_id, request_id, batch_id, kind, state, reason, payload_json, idempotency_key, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`, input.id, input.groupId, input.requestId, input.batchId, input.kind, input.reason,
+    JSON.stringify(input.payload), input.idempotencyKey, now, now);
+    return this.getRecoveryCheckpoint(input.groupId, input.id)!;
+  }
+  acknowledgeRecoveryCheckpoint(groupId: string, checkpointId: string): boolean {
+    return this.run("UPDATE group_recovery_checkpoints SET state = 'acknowledged', acknowledged_at = ?, updated_at = ? WHERE group_id = ? AND id = ? AND state = 'pending'",
+      nowIso(), nowIso(), groupId, checkpointId) === 1;
+  }
+  private mapRecoveryCheckpoint(row: Row): GroupRecoveryCheckpointRow {
+    return {
+      id: row.id as string, groupId: row.group_id as string, requestId: (row.request_id as string | null) ?? null,
+      batchId: (row.batch_id as string | null) ?? null, kind: row.kind as string, state: row.state as GroupRecoveryCheckpointRow['state'],
+      reason: row.reason as string, payload: JSON.parse(row.payload_json as string) as Record<string, unknown>,
+      idempotencyKey: row.idempotency_key as string, createdAt: row.created_at as string, updatedAt: row.updated_at as string,
+      acknowledgedAt: (row.acknowledged_at as string | null) ?? null,
+    };
+  }
+
+  recordStallEvidence(input: {
+    groupId: string; memberId: string; requestId: string; deliveryId?: string | null; assignmentId?: string | null;
+    fingerprint: string; signalClass: string; reason: string; sourceRunId: string | null; sourceToolId?: string | null;
+    sourceTaskId?: string | null; sourceArtifactId?: string | null;
+  }): { id: string; consecutiveCount: number; duplicate: boolean } {
+    const prior = this.get(`SELECT * FROM group_stall_evidence WHERE group_id = ? AND member_id = ? AND request_id = ? AND fingerprint = ?`,
+      input.groupId, input.memberId, input.requestId, input.fingerprint);
+    if (prior && input.sourceRunId && prior.source_run_id === input.sourceRunId) {
+      return { id: prior.id as string, consecutiveCount: Number(prior.consecutive_count), duplicate: true };
+    }
+    const id = prior?.id as string | undefined ?? baseId('msg');
+    const count = Number(prior?.consecutive_count ?? 0) + 1;
+    const now = nowIso();
+    this.run(`INSERT INTO group_stall_evidence(id, group_id, member_id, request_id, delivery_id, assignment_id, fingerprint, signal_class,
+      consecutive_count, reason, source_run_id, source_tool_id, source_task_id, source_artifact_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(group_id, member_id, request_id, fingerprint) DO UPDATE SET delivery_id = excluded.delivery_id, assignment_id = excluded.assignment_id,
+      signal_class = excluded.signal_class, consecutive_count = excluded.consecutive_count, reason = excluded.reason, source_run_id = excluded.source_run_id,
+      source_tool_id = excluded.source_tool_id, source_task_id = excluded.source_task_id, source_artifact_id = excluded.source_artifact_id, updated_at = excluded.updated_at`,
+    id, input.groupId, input.memberId, input.requestId, input.deliveryId ?? null, input.assignmentId ?? null, input.fingerprint, input.signalClass,
+    count, input.reason.slice(0, 1000), input.sourceRunId, input.sourceToolId ?? null, input.sourceTaskId ?? null, input.sourceArtifactId ?? null,
+     (prior?.created_at as string | undefined) ?? now, now);
+    this.run(`DELETE FROM group_stall_evidence WHERE group_id = ? AND id NOT IN (
+      SELECT id FROM group_stall_evidence WHERE group_id = ? ORDER BY updated_at DESC LIMIT 1000
+    )`, input.groupId, input.groupId);
+    return { id, consecutiveCount: count, duplicate: false };
+  }
+  clearStallEvidence(groupId: string, memberId: string, requestId: string): void {
+    this.run('DELETE FROM group_stall_evidence WHERE group_id = ? AND member_id = ? AND request_id = ?', groupId, memberId, requestId);
+  }
 
   // assignment inputs and artifacts
   insertInput(assignmentId: string, taskId: string, path: string, artifact: string | null): void {
@@ -337,5 +529,8 @@ export class GroupRepo {
   /** Artifacts that satisfy an exact producer-task / recipient / path reference, newest first. */
   matchingArtifacts(groupId: string, toMemberId: string, taskId: string, path: string): ArtifactRow[] {
     return this.all('SELECT * FROM group_artifacts WHERE group_id = ? AND to_member_id = ? AND task_id = ? AND path = ? ORDER BY rowid DESC', groupId, toMemberId, taskId, path).map(mapArtifact);
+  }
+  artifactsForRequest(requestId: string): ArtifactRow[] {
+    return this.all('SELECT * FROM group_artifacts WHERE request_id = ? ORDER BY rowid ASC', requestId).map(mapArtifact);
   }
 }

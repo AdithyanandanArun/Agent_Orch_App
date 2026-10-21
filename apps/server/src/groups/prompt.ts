@@ -14,7 +14,7 @@ export interface RosterEntry { handle: string; role: GroupMember['role']; provid
 
 export interface InstructionData {
   title: string; mode: GroupMode; self: RosterEntry; roster: RosterEntry[]; canAssign: boolean; leaseHolder: string | null;
-  requestExcerpt: string; deliveryKind: DeliveryKind; hop: number; maxHops: number; turnsUsed: number; maxTurns: number; unread: number;
+  requestExcerpt: string; deliveryKind: DeliveryKind; hop: number; maxHops: number; turnsUsed: number; maxTurns: number | null; unread: number;
   assignment: { id: string; taskId: string; scope: string[] } | null;
 }
 
@@ -41,7 +41,7 @@ export function buildInstructions(d: InstructionData): string {
   const context = ['', 'Team:'];
   for (const row of d.roster.slice(0, 12)) context.push(`- @${row.handle} · ${row.role} · ${row.provider}/${clean(row.model, 60)} · ${row.state}${row.you ? ' (you)' : ''}`);
   context.push('', `Request: ${clean(d.requestExcerpt, LIMITS.request)}`);
-  context.push(`This turn: ${d.deliveryKind} delivery, message hop ${d.hop}/${d.maxHops}, request turns used ${d.turnsUsed}/${d.maxTurns}.`);
+  context.push(`This turn: ${d.deliveryKind} delivery, message hop ${d.hop}/${d.maxHops}, request turns used ${d.turnsUsed}/${d.maxTurns ?? 'no emergency ceiling'}.`);
   if (d.assignment) context.push(`Assignment ${d.assignment.id} (task ${d.assignment.taskId}). Edit only within: ${d.assignment.scope.join(', ')}.`);
   if (d.unread > 0) context.push(`${d.unread} unread team message(s) are waiting; call team_inbox.`);
   const rules = [
@@ -83,7 +83,7 @@ export function assignmentText(d: {
     '', 'Original request:', clean(d.request, LIMITS.request),
     '', 'Objective:', clean(d.objective, 6000),
   ];
-  if (d.acceptance.trim()) lines.push('', 'Acceptance criteria:', clean(d.acceptance, 2000));
+  if (d.acceptance.trim()) lines.push('', 'Finish criteria (a finish condition, not proof of completion):', clean(d.acceptance, 2000));
   lines.push('', 'Edit scope (stay inside these paths):', ...d.scope.map((scope) => `- ${scope}`));
   if (d.dependsOn.length) lines.push('', 'Prerequisite tasks:', ...d.dependsOn.map((dep) => `- ${dep.taskId}: ${clean(dep.title, 120)} (${dep.status})`));
   if (d.inputs.length) {
@@ -91,6 +91,19 @@ export function assignmentText(d: {
   }
   lines.push('', 'Report progress with team_status; when ready, finish with one completion (publish required committed handoff files with team_artifact, record team_status review, then summarize changes and actual verification). Unresolved work stays blocked. Review is not Done.');
   return truncate(lines.join('\n'), LIMITS.message);
+}
+
+/** A durable, explicit finish condition when a coordinator supplied none; it is not a completion claim. */
+export function deriveAcceptanceCriteria(objective: string, scope: string[]): string {
+  const target = clean(objective.trim(), 1500);
+  const boundaries = scope.map((entry) => `- ${entry}`).join('\n');
+  return [
+    'Derived by Mingle from the scoped objective; this criterion does not record completion or human acceptance.',
+    `1. Carry out this objective within the permitted edit scope: ${target}`,
+    '2. In the final report, identify the actual changes and distinguish verified results from claims or unrun checks.',
+    '3. Report a blocker or an explicit reason if the objective cannot be completed or applicable verification cannot be run.',
+    'Permitted edit scope:', boundaries,
+  ].join('\n');
 }
 
 export function messageDeliveryText(d: { from: string; content: string }): string {
