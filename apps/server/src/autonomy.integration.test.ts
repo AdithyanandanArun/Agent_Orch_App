@@ -41,23 +41,11 @@ function groupEvents(t: TestApp, groupId: string): Promise<any[]> {
 type TurnHook = (context: any, isLead: boolean, memberTurn: number, emit: (event: any) => void) => Promise<void> | void;
 
 async function driveProviderRuns(t: TestApp, groupId: string, expectedRuns: number): Promise<void> {
-  for (let index = 0; index < expectedRuns; index++) {
-    await waitFor(() => t.fake.runs.length > index, 10_000, `provider run ${index + 1}`);
-    const sessionId = t.fake.runs[index]!.session.id;
-    const delivery = await waitFor(() => {
-      const current = t.app.groups.get(groupId);
-      const member = current.members.find((candidate) => candidate.sessionId === sessionId);
-      return member && current.deliveries.find((candidate) => candidate.memberId === member.id && candidate.status === 'running' && candidate.runId);
-    }, 10_000, `group delivery for provider run ${index + 1}`);
-    const run = await waitFor(async () => {
-      const bootstrap = await t.api('GET', '/api/bootstrap');
-      return (bootstrap.json.runs as any[]).find((candidate) => candidate.id === delivery.runId && candidate.status !== 'running');
-    }, 10_000, `provider run ${index + 1} to finish`);
-
-    // Reconcile the durable delivery through the same host callback used at provider completion.
-    const stillRunning = t.app.groups.get(groupId).deliveries.find((candidate) => candidate.id === delivery.id && candidate.status === 'running');
-    if (stillRunning?.runId) t.app.groups.onRunFinished(sessionId, stillRunning.runId, run.status);
-  }
+  await waitFor(() => {
+    const current = t.app.groups.get(groupId);
+    return t.fake.runs.length >= expectedRuns && t.app.runtime.activeCount() === 0
+      && !current.deliveries.some((delivery) => delivery.status === 'running');
+  }, 10_000, `${expectedRuns} provider runs to finish without running group deliveries`);
 }
 
 async function runAlternatingTurns(t: TestApp, group: GroupSnapshot, turnLimit: number, hook: TurnHook): Promise<void> {
