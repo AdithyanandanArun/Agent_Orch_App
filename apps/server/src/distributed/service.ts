@@ -186,7 +186,7 @@ export class DistributedWorkspaceService {
       const row = this.options.store.db.prepare('SELECT id,status FROM session_runs WHERE session_id = ? AND rowid > ? ORDER BY rowid ASC LIMIT 1')
         .get(sessionId, baseline.sequence) as { id: string; status: string } | undefined;
       if (!row) return;
-      const message = this.options.store.db.prepare("SELECT content FROM messages WHERE session_id = ? AND run_id = ? AND role = 'assistant' ORDER BY created_at DESC LIMIT 1").get(sessionId, row.id) as { content: string } | undefined;
+      const message = this.options.store.db.prepare("SELECT content FROM messages WHERE session_id = ? AND run_id = ? AND role = 'assistant' ORDER BY created_at DESC, rowid DESC LIMIT 1").get(sessionId, row.id) as { content: string } | undefined;
       const signature = `${row.id}:${row.status}`;
       if (row.status !== 'running') {
         if (signature !== lastSignature) listener({ runId: row.id, kind: 'result', status: row.status === 'completed' ? 'completed' : 'failed', terminal: true,
