@@ -15,7 +15,6 @@ const TABS: { id: WorkspaceTab; label: string }[] = [
 ];
 const text = (row: unknown, keys: string[], fallback = 'Not reported') => readText(row, keys, fallback);
 const normalized = (value: string) => value.trim().toLowerCase().replaceAll('_', '-');
-const isPending = (row: unknown) => ['pending', 'awaiting-approval', 'awaiting-owner', 'needs-approval', 'proposed'].includes(normalized(readText(row, ['status', 'state', 'approvalStatus'])));
 
 function recordsFrom(sources: unknown[], keys: string[]): DistributedRecord[] {
   for (const source of sources) {
@@ -50,6 +49,38 @@ function displayStatus(row: unknown, statusKeys: string[] = ['presence', 'status
   if (['offline', 'disconnected', 'revoked'].includes(value)) return { label: value === 'revoked' ? 'Revoked' : 'Offline', tone: 'err' };
   if (['failed', 'error'].includes(value)) return { label: 'Failed', tone: 'err' };
   return { label: 'Presence unknown', tone: 'neutral' };
+}
+
+function invitationStatus(row: unknown): { label: string; tone: 'warn' | 'neutral' | 'err' } {
+  if (readText(row, ['acceptedAt', 'accepted_at'])) return { label: 'Accepted', tone: 'neutral' };
+  const expiresAt = readText(row, ['expiresAt', 'expiry', 'expires_at']);
+  const expiry = expiresAt ? Date.parse(expiresAt) : Number.NaN;
+  if (Number.isFinite(expiry) && expiry <= Date.now()) return { label: 'Expired', tone: 'err' };
+  return { label: 'Pending', tone: 'warn' };
+}
+
+function belongsToLocalDevice(row: unknown, localDeviceId: string, side: 'source' | 'destination'): boolean {
+  if (!localDeviceId) return false;
+  const keys = side === 'destination'
+    ? ['targetDeviceId', 'toDeviceId', 'destinationDeviceId', 'ownerDeviceId']
+    : ['sourceDeviceId', 'fromDeviceId', 'ownerDeviceId'];
+  const reportedOwner = readText(row, keys);
+  return !reportedOwner || reportedOwner === localDeviceId;
+}
+
+function decisionIdentities(snapshot: DistributedSnapshot | null): Map<string, string> {
+  const identities = new Map<string, string>();
+  const add = (rows: DistributedRecord[], digestKeys: string[], scopeKeys: string[]) => {
+    for (const row of rows) {
+      const id = idOf(row, ['id', 'requestId']);
+      if (!id) continue;
+      identities.set(id, [readText(row, digestKeys), ...scopeKeys.map((key) => readText(row, [key])), readText(row, ['status', 'state'])].join('|'));
+    }
+  };
+  add(listSnapshot(snapshot, 'execution', ['requests']), ['digest', 'requestDigest'], ['targetOwnerId', 'targetDeviceId']);
+  add(listSnapshot(snapshot, 'git', ['requests', 'transfers', 'operations']), ['requestDigest', 'digest'], ['direction', 'targetDeviceId', 'peerDeviceId']);
+  add(listSnapshot(snapshot, 'commands', ['requests', 'commandRequests']), ['requestDigest', 'digest'], ['direction', 'targetDeviceId', 'peerDeviceId']);
+  return identities;
 }
 
 function agentDeviceId(row: unknown): string {
@@ -103,12 +134,30 @@ export function TeamWorkspace() {
   const [allowUnverifiedQuota, setAllowUnverifiedQuota] = useState<Record<string, boolean>>({});
   const controller = useRef<AbortController | null>(null);
   const sequence = useRef(0);
+  const operationGeneration = useRef(0);
+  const previousSnapshot = useRef<{ snapshot: DistributedSnapshot; teamId: string; userId: string | null } | null>(null);
+
+  const clearDecisions = () => {
+    setCheckedApprovals({});
+    setShareProgress({});
+    setAllowProviderSpend({});
+    setAllowUnverifiedQuota({});
+  };
+  const clearTeamActionState = () => {
+    operationGeneration.current++;
+    clearDecisions();
+    setResult(null);
+    setNotice(null);
+    setError(null);
+    setErrorStatus(null);
+  };
 
   const teams = useMemo(() => serviceTeamRows(snapshot), [snapshot]);
   const chosenTeamRow = teams.find((team) => idOf(team, ['id', 'teamId']) === selectedTeamId) ?? teams[0];
   const selectedTeam = chosenTeamRow ? unwrap(chosenTeamRow, 'team') : {};
   const selectedTeamKey = idOf(chosenTeamRow, ['id', 'teamId']) || selectedTeamId;
   const teamRows = (rows: DistributedRecord[]) => rows.filter((row) => !readText(row, ['teamId']) || readText(row, ['teamId']) === selectedTeamKey);
+  const canManageTeam = ['owner', 'admin'].includes(readText(selectedTeam, ['role']).toLowerCase());
   const teamContainers = [snapshot?.teams, chosenTeamRow, selectedTeam];
   const bindings = listSnapshot(snapshot, 'execution', ['bindings']);
   const sharedProjects = teamRows(listSnapshot(snapshot, 'teams', ['projects', 'sharedProjects', 'items'], teamContainers)).map((row) => {
@@ -117,19 +166,27 @@ export function TeamWorkspace() {
   });
   const members = teamRows(listSnapshot(snapshot, 'teams', ['members', 'roster', 'people'], [chosenTeamRow, selectedTeam]));
   const invitations = teamRows(listSnapshot(snapshot, 'teams', ['invitations', 'pendingInvitations'], [chosenTeamRow, selectedTeam]));
-  const devices = listSnapshot(snapshot, 'transport', ['devices', 'registeredDevices', 'roster'], teamContainers);
+  const devices = teamRows(listSnapshot(snapshot, 'transport', ['devices', 'registeredDevices', 'roster'], teamContainers));
   const transportSection = asRecord(snapshot?.transport) ?? {};
-  const localDevice = devices.find((device) => idOf(device, ['id', 'deviceId']) === readText(transportSection, ['deviceId'])) ?? asRecord(readValue(transportSection, ['localDevice', 'device'])) ?? {};
-  const links = readList(transportSection, ['links', 'deviceLinks']);
-  const agents = listSnapshot(snapshot, 'execution', ['agents', 'roster', 'remoteAgents'], teamContainers);
-  const messages = listSnapshot(snapshot, 'execution', ['messages', 'conversation', 'chat'], teamContainers);
-  const tasks = listSnapshot(snapshot, 'execution', ['tasks', 'sharedTasks'], teamContainers);
-  const executionRequests = listSnapshot(snapshot, 'execution', ['requests'], teamContainers);
-  const executionEvents = listSnapshot(snapshot, 'execution', ['timeline', 'events', 'deliveries', 'progress'], teamContainers);
-  const gitRequests = listSnapshot(snapshot, 'git', ['requests', 'transfers', 'operations'], teamContainers);
-  const gitAudit = listSnapshot(snapshot, 'git', ['audit', 'audits', 'history'], teamContainers);
-  const commandRequests = listSnapshot(snapshot, 'commands', ['requests', 'commandRequests'], teamContainers);
-  const commandAudit = listSnapshot(snapshot, 'commands', ['audit', 'audits', 'history', 'outcomes'], teamContainers);
+  const localDevice = devices.find((device) => idOf(device, ['id', 'deviceId']) === readText(transportSection, ['deviceId'])) ?? {};
+  const links = teamRows(readList(transportSection, ['links', 'deviceLinks']));
+  const agents = teamRows(listSnapshot(snapshot, 'execution', ['agents', 'roster', 'remoteAgents'], teamContainers));
+  const messages = teamRows(listSnapshot(snapshot, 'execution', ['messages', 'conversation', 'chat'], teamContainers));
+  const tasks = teamRows(listSnapshot(snapshot, 'execution', ['tasks', 'sharedTasks'], teamContainers));
+  const executionRequests = teamRows(listSnapshot(snapshot, 'execution', ['requests'], teamContainers));
+  const executionEvents = teamRows(listSnapshot(snapshot, 'execution', ['timeline', 'events', 'deliveries', 'progress'], teamContainers));
+  const gitRequests = teamRows(listSnapshot(snapshot, 'git', ['requests', 'transfers', 'operations'], teamContainers));
+  const gitRequestIds = new Set(gitRequests.map((row) => idOf(row, ['id', 'requestId'])));
+  const gitAudit = listSnapshot(snapshot, 'git', ['audit', 'audits', 'history'], teamContainers).filter((row) => {
+    const rowTeamId = readText(row, ['teamId']);
+    return rowTeamId ? rowTeamId === selectedTeamKey : gitRequestIds.has(readText(row, ['requestId']));
+  });
+  const commandRequests = teamRows(listSnapshot(snapshot, 'commands', ['requests', 'commandRequests'], teamContainers));
+  const commandRequestIds = new Set(commandRequests.map((row) => idOf(row, ['id', 'requestId'])));
+  const commandAudit = listSnapshot(snapshot, 'commands', ['audit', 'audits', 'history', 'outcomes'], teamContainers).filter((row) => {
+    const rowTeamId = readText(row, ['teamId']);
+    return rowTeamId ? rowTeamId === selectedTeamKey : commandRequestIds.has(readText(row, ['requestId']));
+  });
   const selectedLocalProject = projects.find((project) => project.id === activeProjectId);
   const teamSection = asRecord(snapshot?.teams);
   const teamsStatus = teamSection?.error ? { label: 'Unavailable', tone: 'err' as const } : teamSection?.userId ? { label: 'Signed in', tone: 'ok' as const } : { label: snapshot ? 'Signed out' : 'Loading', tone: 'neutral' as const };
@@ -144,13 +201,42 @@ export function TeamWorkspace() {
     try {
       const next = await distributedApi.snapshot(selectedTeamId || undefined, nextController.signal);
       if (sequence.current !== current) return;
-      setSnapshot(next);
       const serviceError = readText(next.teams, ['error']) || readText(next.transport, ['error']);
+      if (serviceError) {
+        previousSnapshot.current = null;
+        clearTeamActionState();
+        setSnapshot(null);
+      } else {
+        const userId = readText(next.teams, ['userId']) || null;
+        const previous = previousSnapshot.current;
+        if (!previous || previous.teamId !== selectedTeamId || previous.userId !== userId) {
+          if (previous && previous.userId !== userId) operationGeneration.current++;
+          clearDecisions();
+          setResult(null);
+          setNotice(null);
+        } else {
+          const before = decisionIdentities(previous.snapshot);
+          const after = decisionIdentities(next);
+          const changed = new Set([...before.keys(), ...after.keys()].filter((id) => before.get(id) !== after.get(id)));
+          if (changed.size) {
+            const retain = (current: Record<string, boolean>) => Object.fromEntries(Object.entries(current).filter(([id]) => !changed.has(id)));
+            setCheckedApprovals(retain);
+            setShareProgress(retain);
+            setAllowProviderSpend(retain);
+            setAllowUnverifiedQuota(retain);
+          }
+        }
+        previousSnapshot.current = { snapshot: next, teamId: selectedTeamId, userId };
+        setSnapshot(next);
+      }
       setError(serviceError || null);
       setErrorStatus(serviceError ? (/sign.?in/i.test(serviceError) ? 401 : 503) : null);
       setUpdatedAt(new Date().toISOString());
     } catch (cause) {
       if (nextController.signal.aborted || sequence.current !== current) return;
+      previousSnapshot.current = null;
+      clearTeamActionState();
+      setSnapshot(null);
       setError(cause instanceof Error ? cause.message : String(cause));
       setErrorStatus(cause instanceof DistributedApiError ? cause.status : null);
     } finally {
@@ -170,6 +256,7 @@ export function TeamWorkspace() {
       window.clearInterval(timer);
       window.removeEventListener('focus', refreshOnReturn);
       document.removeEventListener('visibilitychange', refreshOnReturn);
+      sequence.current++;
       controller.current?.abort();
     };
   }, [refreshSnapshot, eventCount]);
@@ -178,19 +265,31 @@ export function TeamWorkspace() {
     if (!teams.length) return;
     const ids = teams.map((team) => idOf(team, ['id', 'teamId'])).filter(Boolean);
     if (!selectedTeamId && ids[0]) setSelectedTeamId(ids[0]);
-    else if (selectedTeamId && !ids.includes(selectedTeamId)) setSelectedTeamId('');
+    else if (selectedTeamId && !ids.includes(selectedTeamId)) {
+      clearTeamActionState();
+      previousSnapshot.current = null;
+      setSelectedTeamId('');
+    }
   }, [teams, selectedTeamId]);
 
   const perform = async (key: string, success: string, work: () => Promise<unknown>) => {
     if (busy) return;
+    const generation = operationGeneration.current;
     setBusy(key); setError(null); setErrorStatus(null); setNotice(null); setResult(null);
     try {
       const value = await work();
+      if (generation !== operationGeneration.current) return;
       setResult(value);
       setNotice(success);
       await refreshSnapshot(true);
       return value;
     } catch (cause) {
+      if (generation !== operationGeneration.current) return;
+      if (cause instanceof DistributedApiError && cause.status === 409 && /digest/i.test(cause.message)) {
+        previousSnapshot.current = null;
+        clearDecisions();
+        setSnapshot(null);
+      }
       setError(cause instanceof Error ? cause.message : String(cause));
       setErrorStatus(cause instanceof DistributedApiError ? cause.status : null);
     } finally { setBusy(null); }
@@ -199,13 +298,13 @@ export function TeamWorkspace() {
   const deviceOptions = devices.map((device) => ({ value: idOf(device, ['id', 'deviceId']), label: `${nameOf(device, 'Device')} · ${displayStatus(device).label}` })).filter((option) => option.value && option.value !== idOf(localDevice, ['id', 'deviceId']));
 
   const currentTab = <>
-    {tab === 'people' ? <PeoplePanel teamId={selectedTeamKey} team={selectedTeam} members={members} invitations={invitations} busy={busy} result={result} perform={perform} onCreatedTeam={setSelectedTeamId} /> : null}
-    {tab === 'projects' ? <ProjectsPanel teamId={selectedTeamKey} sharedProjects={sharedProjects} localProject={selectedLocalProject} busy={busy} perform={perform} /> : null}
+    {tab === 'people' ? <PeoplePanel teamId={selectedTeamKey} team={selectedTeam} canManageTeam={canManageTeam} members={members} invitations={invitations} busy={busy} result={result} perform={perform} onCreatedTeam={setSelectedTeamId} /> : null}
+    {tab === 'projects' ? <ProjectsPanel teamId={selectedTeamKey} sharedProjects={sharedProjects} localProject={selectedLocalProject} canManageTeam={canManageTeam} busy={busy} perform={perform} /> : null}
     {tab === 'devices' ? <DevicesPanel teamId={selectedTeamKey} localDevice={localDevice} devices={devices} links={links} busy={busy} result={result} perform={perform} /> : null}
     {tab === 'agents' ? <AgentsPanel teamId={selectedTeamKey} sharedProjects={sharedProjects} localProject={selectedLocalProject} localSessions={localSessions} agents={agents} devices={devices} tasks={tasks} members={members} busy={busy} perform={perform} /> : null}
     {tab === 'conversation' ? <ConversationPanel teamId={selectedTeamKey} sharedProjects={sharedProjects} localTasks={(boot?.tasks ?? []).filter((task) => task.projectId === activeProjectId)} messages={messages} tasks={tasks} timeline={executionEvents} busy={busy} perform={perform} /> : null}
     {tab === 'recovery' ? <RecoveryPanel teamId={selectedTeamKey} sharedProjects={sharedProjects} agents={agents} requests={executionRequests} localDeviceId={idOf(localDevice, ['id', 'deviceId'])} localSessions={localSessions} localTasks={(boot?.tasks ?? []).filter((task) => task.projectId === activeProjectId)} runs={boot?.runs ?? []} busy={busy} checkedApprovals={checkedApprovals} setCheckedApprovals={setCheckedApprovals} shareProgress={shareProgress} setShareProgress={setShareProgress} allowProviderSpend={allowProviderSpend} setAllowProviderSpend={setAllowProviderSpend} allowUnverifiedQuota={allowUnverifiedQuota} setAllowUnverifiedQuota={setAllowUnverifiedQuota} perform={perform} /> : null}
-    {tab === 'transfers' ? <TransfersPanel teamId={selectedTeamKey} sharedProjects={sharedProjects} devices={deviceOptions} gitRequests={gitRequests} gitAudit={gitAudit} commandRequests={commandRequests} commandAudit={commandAudit} busy={busy} checkedApprovals={checkedApprovals} setCheckedApprovals={setCheckedApprovals} perform={perform} /> : null}
+    {tab === 'transfers' ? <TransfersPanel teamId={selectedTeamKey} localDeviceId={idOf(localDevice, ['id', 'deviceId'])} sharedProjects={sharedProjects} devices={deviceOptions} gitRequests={gitRequests} gitAudit={gitAudit} commandRequests={commandRequests} commandAudit={commandAudit} busy={busy} checkedApprovals={checkedApprovals} setCheckedApprovals={setCheckedApprovals} perform={perform} /> : null}
   </>;
 
   const noTeam = teams.length === 0;
@@ -213,7 +312,12 @@ export function TeamWorkspace() {
     <header className="distributed__header">
       <div className="distributed__title"><span className="distributed__mark"><Users size={17} aria-hidden="true" /></span><div><h2 id="distributed-heading">Team workspace</h2><p>Share selected work across devices. Your local sessions remain the default.</p></div></div>
       <div className="distributed__header-actions">
-        {teams.length ? <label className="distributed__team-select"><span className="sr-only">Active team</span><select className="input" value={selectedTeamKey} onChange={(event) => setSelectedTeamId(event.target.value)} aria-label="Active team">{teams.map((team) => <option key={idOf(team, ['id', 'teamId'])} value={idOf(team, ['id', 'teamId'])}>{nameOf(team, 'Team')}</option>)}</select></label> : null}
+        {teams.length ? <label className="distributed__team-select"><span className="sr-only">Active team</span><select className="input" value={selectedTeamKey} onChange={(event) => {
+          const nextTeamId = event.target.value;
+          if (nextTeamId === selectedTeamId) return;
+          clearTeamActionState();
+          setSelectedTeamId(nextTeamId);
+        }} aria-label="Active team">{teams.map((team) => <option key={idOf(team, ['id', 'teamId'])} value={idOf(team, ['id', 'teamId'])}>{nameOf(team, 'Team')}</option>)}</select></label> : null}
         <Button size="sm" disabled={Boolean(busy)} busy={busy === 'sync'} onClick={() => void perform('sync', 'Device mailbox checked.', () => distributedApi.sync())}><RefreshCw size={13} /> Sync</Button>
         <Button size="sm" disabled={loading || Boolean(busy)} onClick={() => void refreshSnapshot()}><RefreshCw size={13} /> Refresh</Button>
       </div>
@@ -235,8 +339,8 @@ export function TeamWorkspace() {
   </section>;
 }
 
-function PeoplePanel({ teamId, team, members, invitations, busy, result, perform, onCreatedTeam }: {
-  teamId: string; team: DistributedRecord; members: DistributedRecord[]; invitations: DistributedRecord[]; busy: string | null; result: unknown;
+function PeoplePanel({ teamId, team, canManageTeam, members, invitations, busy, result, perform, onCreatedTeam }: {
+  teamId: string; team: DistributedRecord; canManageTeam: boolean; members: DistributedRecord[]; invitations: DistributedRecord[]; busy: string | null; result: unknown;
   perform: (key: string, success: string, work: () => Promise<unknown>) => Promise<unknown | undefined>;
   onCreatedTeam: (id: string) => void;
 }) {
@@ -247,16 +351,16 @@ function PeoplePanel({ teamId, team, members, invitations, busy, result, perform
   const createdToken = readText(result, ['token', 'inviteToken', 'invitationToken']);
   return <div className="distributed__panel">
     <div className="distributed__grid distributed__grid--forms">
-      <form className="dw-card" onSubmit={(event: FormEvent) => { event.preventDefault(); void perform('create-team', 'Team created. No agents were started.', async () => { const response = await distributedApi.createTeam(teamName.trim()); const id = idOf(response, ['id', 'teamId']) || idOf(asRecord(response)?.team, ['id', 'teamId']); if (id) onCreatedTeam(id); setTeamName(''); return response; }); }}>
+      <form className="dw-card" onSubmit={(event: FormEvent) => { event.preventDefault(); void perform('create-team', 'Team created. No agents were started.', async () => { const response = await distributedApi.createTeam(teamName.trim()); setTeamName(''); return response; }).then((response) => { const id = idOf(response, ['id', 'teamId']) || idOf(asRecord(response)?.team, ['id', 'teamId']); if (id) onCreatedTeam(id); }); }}>
         <div className="dw-card__heading"><span><Plus size={15} /></span><div><h3>Create a team</h3><p>Membership is tied to verified account identity.</p></div></div>
         <TextControl label="Team name" value={teamName} onChange={setTeamName} required maxLength={100} placeholder="Design systems" />
         <Button type="submit" size="sm" disabled={Boolean(busy) || !teamName.trim()} busy={busy === 'create-team'}>Create team</Button>
       </form>
-      <form className="dw-card" onSubmit={(event: FormEvent) => { event.preventDefault(); if (!teamId) return; void perform('invite', 'Invitation created. Share its one-time token with the teammate yourself.', () => distributedApi.invite({ teamId, email: email.trim(), role })); }}>
+      <form className="dw-card" onSubmit={(event: FormEvent) => { event.preventDefault(); if (!teamId || !canManageTeam) return; void perform('invite', 'Invitation created. Share its one-time token with the teammate yourself.', () => distributedApi.invite({ teamId, email: email.trim(), role })); }}>
         <div className="dw-card__heading"><span><Users size={15} /></span><div><h3>Invite someone</h3><p>Invitations expire and can be accepted once by the matching account.</p></div></div>
         <TextControl label="Email" type="email" value={email} onChange={setEmail} required placeholder="teammate@example.com" />
         <SelectControl label="Role" value={role} onChange={setRole} options={[{ value: 'member', label: 'Member' }, { value: 'admin', label: 'Admin' }]} />
-        <Button type="submit" size="sm" disabled={Boolean(busy) || !teamId || !email.trim()} busy={busy === 'invite'}>Create invitation</Button>
+        <Button type="submit" size="sm" disabled={Boolean(busy) || !teamId || !email.trim() || !canManageTeam} why={!canManageTeam ? 'Only a team owner or admin can invite members.' : undefined} busy={busy === 'invite'}>Create invitation</Button>
         {createdToken ? <div className="dw-secret" role="status"><strong>Copy this invitation token now</strong><code>{createdToken}</code><small>It is shown from this creation response only. Send it through a channel you choose.</small></div> : null}
       </form>
       <form className="dw-card" onSubmit={(event: FormEvent) => { event.preventDefault(); if (!token.trim()) return; void perform('accept-invite', 'Invitation accepted. Refreshing team membership.', () => distributedApi.acceptInvite(token.trim())); }}>
@@ -273,15 +377,15 @@ function PeoplePanel({ teamId, team, members, invitations, busy, result, perform
       const memberName = nameOf(member, nameOf(raw, userId || 'Team member'));
       const memberEmail = text(member, ['email'], text(raw, ['email'], 'Email not shared'));
       const memberRole = text(raw, ['role'], 'Role unknown');
-      return <article className="dw-row" key={memberId}><div className="dw-avatar" aria-hidden="true">{memberName.charAt(0).toUpperCase()}</div><div className="dw-row__main"><strong>{memberName}</strong><span>{memberEmail} · {memberRole}</span></div><Button size="sm" variant="danger" disabled={Boolean(busy) || !teamId || !userId} why={!userId ? 'Member identifier is not present in this snapshot' : undefined} onClick={() => { if (window.confirm(`Remove ${memberEmail} from this team? Their devices will lose future team authority.`)) void perform(`revoke-member:${userId}`, 'Team membership revoked.', () => distributedApi.revokeMember({ teamId, userId })); }}>Remove</Button></article>;
+      return <article className="dw-row" key={memberId}><div className="dw-avatar" aria-hidden="true">{memberName.charAt(0).toUpperCase()}</div><div className="dw-row__main"><strong>{memberName}</strong><span>{memberEmail} · {memberRole}</span></div>{canManageTeam ? <Button size="sm" variant="danger" disabled={Boolean(busy) || !teamId || !userId} why={!userId ? 'Member identifier is not present in this snapshot' : undefined} onClick={() => { if (window.confirm(`Remove ${memberEmail} from this team? Their devices will lose future team authority.`)) void perform(`revoke-member:${userId}`, 'Team membership revoked.', () => distributedApi.revokeMember({ teamId, userId })); }}>Remove</Button> : null}</article>;
     })}</div> : <p className="dw-empty">No member roster was reported for this team yet.</p>}
     <div className="dw-section-head"><div><h3>Invitations</h3><p>Only active invitation records are shown.</p></div><Badge>{invitations.length}</Badge></div>
-    {invitations.length ? <div className="dw-list">{invitations.map((row, index) => <article className="dw-row" key={idOf(row) || `invite-${index}`}><div className="dw-row__main"><strong>{text(row, ['email'], 'Invitation recipient not reported')}</strong><span>{text(row, ['role'], 'Role unknown')} · {displayStatus(row, ['status', 'state']).label} · expires {text(row, ['expiresAt', 'expiry'], 'not reported')}</span></div><Badge tone={isPending(row) ? 'warn' : 'neutral'}>{text(row, ['status', 'state'], 'Status unknown')}</Badge></article>)}</div> : <p className="dw-empty">No invitation records are currently listed.</p>}
+    {invitations.length ? <div className="dw-list">{invitations.map((row, index) => { const state = invitationStatus(row); return <article className="dw-row" key={idOf(row) || `invite-${index}`}><div className="dw-row__main"><strong>{text(row, ['email'], 'Invitation recipient not reported')}</strong><span>{text(row, ['role'], 'Role unknown')} · {state.label} · expires {text(row, ['expiresAt', 'expiry', 'expires_at'], 'not reported')}</span></div><Badge tone={state.tone}>{state.label}</Badge></article>; })}</div> : <p className="dw-empty">No invitation records are currently listed.</p>}
   </div>;
 }
 
-function ProjectsPanel({ teamId, sharedProjects, localProject, busy, perform }: {
-  teamId: string; sharedProjects: DistributedRecord[]; localProject?: Project; busy: string | null;
+function ProjectsPanel({ teamId, sharedProjects, localProject, canManageTeam, busy, perform }: {
+  teamId: string; sharedProjects: DistributedRecord[]; localProject?: Project; canManageTeam: boolean; busy: string | null;
   perform: (key: string, success: string, work: () => Promise<unknown>) => Promise<unknown | undefined>;
 }) {
   const [name, setName] = useState('');
@@ -291,11 +395,11 @@ function ProjectsPanel({ teamId, sharedProjects, localProject, busy, perform }: 
   useEffect(() => { if (!sharedProjectId && sharedOptions[0]) setSharedProjectId(sharedOptions[0].value); }, [sharedProjectId, sharedOptions]);
   return <div className="distributed__panel">
     <div className="distributed__grid distributed__grid--forms">
-      <form className="dw-card" onSubmit={(event: FormEvent) => { event.preventDefault(); if (!teamId) return; void perform('create-project', 'Shared project created. No local repository was uploaded.', () => distributedApi.createProject({ teamId, name: name.trim(), ...(repositoryUrl.trim() ? { repositoryUrl: repositoryUrl.trim() } : {}) })); setName(''); setRepositoryUrl(''); }}>
+      <form className="dw-card" onSubmit={(event: FormEvent) => { event.preventDefault(); if (!teamId || !canManageTeam) return; void perform('create-project', 'Shared project created. No local repository was uploaded.', () => distributedApi.createProject({ teamId, name: name.trim(), ...(repositoryUrl.trim() ? { repositoryUrl: repositoryUrl.trim() } : {}) })); setName(''); setRepositoryUrl(''); }}>
         <div className="dw-card__heading"><span><GitBranch size={15} /></span><div><h3>Create shared project</h3><p>Creates a team record; it does not copy files or push Git.</p></div></div>
         <TextControl label="Project name" value={name} onChange={setName} required maxLength={120} placeholder="Web refresh" />
         <TextControl label="Repository URL (optional)" value={repositoryUrl} onChange={setRepositoryUrl} placeholder="https://host/org/repository" />
-        <Button type="submit" size="sm" disabled={Boolean(busy) || !teamId || !name.trim()} busy={busy === 'create-project'}>Create shared project</Button>
+        <Button type="submit" size="sm" disabled={Boolean(busy) || !teamId || !name.trim() || !canManageTeam} why={!canManageTeam ? 'Only a team owner or admin can create shared projects.' : undefined} busy={busy === 'create-project'}>Create shared project</Button>
       </form>
       <form className="dw-card" onSubmit={(event: FormEvent) => { event.preventDefault(); if (!teamId || !sharedProjectId || !localProject) return; void perform('bind-project', 'Project binding saved on this device.', () => distributedApi.bindProject({ teamId, sharedProjectId, localProjectId: localProject.id })); }}>
         <div className="dw-card__heading"><span><ArrowLeftRight size={15} /></span><div><h3>Bind this device’s project</h3><p>Binding is a local mapping. It does not send repository contents.</p></div></div>
@@ -340,8 +444,15 @@ function DevicesPanel({ teamId, localDevice, devices, links, busy, result, perfo
       const state = displayStatus(row);
       const fingerprintValue = readText(row, ['fingerprint'], 'Fingerprint not reported');
       const localId = idOf(localDevice, ['id', 'deviceId']);
+      const localOwnerId = readText(localDevice, ['ownerId']);
+      const ownedByLocalAccount = Boolean(localOwnerId && readText(row, ['ownerId']) === localOwnerId);
       const linked = links.some((link) => link.deviceId === localId && link.peerDeviceId === id && link.mutual === true);
-      return <article className="dw-row dw-row--device" key={id || `device-${index}`}><span className="dw-icon"><Laptop size={15} /></span><div className="dw-row__main"><strong>{nameOf(row, 'Unnamed device')}</strong><span>ID {id || 'not reported'} · {fingerprintValue} · owner {text(row, ['ownerName', 'ownerEmail', 'ownerId'], 'not reported')} · last seen {text(row, ['lastSeenAt', 'last_seen_at'], 'not reported')}</span></div><Badge tone={state.tone}>{state.label}</Badge><Badge tone={linked ? 'ok' : 'neutral'}>{linked ? 'Linked' : 'Not linked'}</Badge>{id && id !== localId ? <Button size="sm" variant="danger" disabled={Boolean(busy)} onClick={() => { if (window.confirm(`Revoke ${nameOf(row, 'this device')}? It will no longer receive future team messages.`)) void perform(`revoke-device:${id}`, 'Device revoked. Future delivery to this device is disabled.', () => distributedApi.revokeDevice({ teamId, deviceId: id })); }}>Revoke</Button> : null}</article>;
+      const actionLabel = ownedByLocalAccount ? 'Revoke device' : 'Unlink device';
+      const actionMessage = ownedByLocalAccount
+        ? `Revoke ${nameOf(row, 'this device')}? It will no longer receive future team messages.`
+        : `Unlink ${nameOf(row, 'this peer')} from this device? Future messages will no longer be delivered across this trust link.`;
+      const actionNotice = ownedByLocalAccount ? 'Device revoked. Future delivery to this device is disabled.' : 'Device link removed. Future messages will not be sent to that peer.';
+      return <article className="dw-row dw-row--device" key={id || `device-${index}`}><span className="dw-icon"><Laptop size={15} /></span><div className="dw-row__main"><strong>{nameOf(row, 'Unnamed device')}</strong><span>ID {id || 'not reported'} · {fingerprintValue} · owner {text(row, ['ownerName', 'ownerEmail', 'ownerId'], 'not reported')} · last seen {text(row, ['lastSeenAt', 'last_seen_at'], 'not reported')}</span></div><Badge tone={state.tone}>{state.label}</Badge><Badge tone={linked ? 'ok' : 'neutral'}>{linked ? 'Linked' : 'Not linked'}</Badge>{id && id !== localId && localOwnerId ? <Button size="sm" variant="danger" disabled={Boolean(busy)} onClick={() => { if (window.confirm(actionMessage)) void perform(`revoke-device:${id}`, actionNotice, () => distributedApi.revokeDevice({ teamId, deviceId: id })); }}>{actionLabel}</Button> : null}</article>;
     })}</div> : <p className="dw-empty">No registered devices were reported.</p>}
   </div>;
 }
@@ -567,8 +678,8 @@ function FallbackCandidates({ response, agents, candidateId, setCandidateId }: {
   return <><p className="dw-owner-note" role="status">Eligibility check only; the service reported these candidates. No remote run has been queued.</p><SelectControl label="Eligible fallback agent" value={candidateId} onChange={setCandidateId} options={options} /></>;
 }
 
-function TransfersPanel({ teamId, sharedProjects, devices, gitRequests, gitAudit, commandRequests, commandAudit, busy, checkedApprovals, setCheckedApprovals, perform }: {
-  teamId: string; sharedProjects: DistributedRecord[]; devices: { value: string; label: string }[]; gitRequests: DistributedRecord[]; gitAudit: DistributedRecord[]; commandRequests: DistributedRecord[]; commandAudit: DistributedRecord[]; busy: string | null; checkedApprovals: Record<string, boolean>; setCheckedApprovals: (value: (current: Record<string, boolean>) => Record<string, boolean>) => void;
+function TransfersPanel({ teamId, localDeviceId, sharedProjects, devices, gitRequests, gitAudit, commandRequests, commandAudit, busy, checkedApprovals, setCheckedApprovals, perform }: {
+  teamId: string; localDeviceId: string; sharedProjects: DistributedRecord[]; devices: { value: string; label: string }[]; gitRequests: DistributedRecord[]; gitAudit: DistributedRecord[]; commandRequests: DistributedRecord[]; commandAudit: DistributedRecord[]; busy: string | null; checkedApprovals: Record<string, boolean>; setCheckedApprovals: (value: (current: Record<string, boolean>) => Record<string, boolean>) => void;
   perform: (key: string, success: string, work: () => Promise<unknown>) => Promise<unknown | undefined>;
 }) {
   const projectOptions = sharedProjects.map((row) => ({ value: idOf(row, ['id', 'projectId']), label: nameOf(row, 'Shared project') })).filter((item) => item.value);
@@ -587,9 +698,13 @@ function TransfersPanel({ teamId, sharedProjects, devices, gitRequests, gitAudit
   const [remoteNames, setRemoteNames] = useState<Record<string, string>>({});
   useEffect(() => { if (!projectId && projectOptions[0]) setProjectId(projectOptions[0].value); }, [projectId, projectOptions]);
   useEffect(() => { if (!deviceId && devices[0]) setDeviceId(devices[0].value); }, [deviceId, devices]);
-  const pendingGit = gitRequests.filter((row) => (row.direction === 'incoming' && row.status === 'awaiting-destination-approval') || ((row.direction === 'outgoing' || row.direction === 'local') && row.status === 'awaiting-source-approval'));
-  const pendingCommands = commandRequests.filter((row) => row.direction === 'incoming' && row.status === 'awaiting-approval');
-  const integrationRequests = gitRequests.filter((row) => row.direction === 'incoming' && row.kind === 'transfer' && row.status === 'imported');
+  const pendingGit = gitRequests.filter((row) => {
+    if (row.direction === 'incoming' && row.status === 'awaiting-destination-approval') return belongsToLocalDevice(row, localDeviceId, 'destination');
+    if ((row.direction === 'outgoing' || row.direction === 'local') && row.status === 'awaiting-source-approval') return belongsToLocalDevice(row, localDeviceId, 'source');
+    return false;
+  });
+  const pendingCommands = commandRequests.filter((row) => row.direction === 'incoming' && row.status === 'awaiting-approval' && belongsToLocalDevice(row, localDeviceId, 'destination'));
+  const integrationRequests = gitRequests.filter((row) => row.direction === 'incoming' && row.kind === 'transfer' && row.status === 'imported' && belongsToLocalDevice(row, localDeviceId, 'destination'));
   const decide = (kind: 'git' | 'command', row: DistributedRecord, value: 'approved' | 'denied') => {
     const id = idOf(row, ['id', 'requestId']);
     const digest = readText(row, ['requestDigest']);

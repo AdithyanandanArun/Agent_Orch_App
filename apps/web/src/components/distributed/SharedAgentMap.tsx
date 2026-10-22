@@ -11,6 +11,15 @@ export function SharedAgentMap({ members, devices, agents, tasks }: {
 }) {
   const theme = useMingle((state) => state.boot?.settings.theme ?? 'dark');
   const [selected, setSelected] = useState<Node | null>(null);
+  // TeamWorkspace filters its snapshot arrays during render. Use only fields
+  // that affect this graph so heartbeats and other timestamp-only polls don't
+  // replace ReactFlow's measured node objects or reset the user's viewport.
+  const graphSignature = JSON.stringify({
+    members: members.map((row) => [readText(row, ['userId'])]),
+    devices: devices.map((row) => [idOf(row), readText(row, ['ownerId']), nameOf(row, 'Device'), readText(row, ['status'], 'unknown')]),
+    agents: agents.map((row) => [idOf(row), readText(row, ['deviceId']), nameOf(row, 'Agent'), readText(row, ['provider']), readText(row, ['presence'], 'unknown'), readText(row, ['quotaState'], 'unknown')]),
+    tasks: tasks.map((row) => [idOf(row), readText(row, ['deviceId']), readText(row, ['sharedProjectId']), nameOf(row, 'Task'), readText(row, ['status'], 'unknown'), readText(row, ['agentId']), Array.isArray(row.dependsOn) ? row.dependsOn : []]),
+  });
   const graph = useMemo(() => {
     const nodes: Node[] = [];
     const edges: Edge[] = [];
@@ -36,10 +45,10 @@ export function SharedAgentMap({ members, devices, agents, tasks }: {
       if (Array.isArray(row.dependsOn)) row.dependsOn.forEach((id) => { if (typeof id === 'string') link(taskKey(row, id), taskKey(row), 'required by'); });
     });
     return { nodes, edges, truncated: ownerIds.length > 40 || devices.length > 60 || agents.length > 80 || tasks.length > 80 };
-  }, [members, devices, agents, tasks]);
+  }, [graphSignature]);
   return <section className="dw-card">
     <div className="dw-section-head"><div><h3>Shared agent map</h3><p>Developers → devices → agents → tasks. Dependency edges use explicit task records.</p></div></div>
-    {graph.nodes.length ? <div className="dw-shared-map"><ReactFlow nodes={graph.nodes} edges={graph.edges} colorMode={theme} fitView minZoom={0.08} maxZoom={1.5} nodesConnectable={false} nodesDraggable={false} onNodeClick={(_, node) => setSelected(node)} aria-label="Shared developers, devices, agents and tasks"><Background /><Controls showInteractive={false} /></ReactFlow></div> : <p className="dw-empty">No shared relationships have been reported.</p>}
+    {graph.nodes.length ? <div className="dw-shared-map"><ReactFlow key={graphSignature} nodes={graph.nodes} edges={graph.edges} colorMode={theme} fitView minZoom={0.08} maxZoom={1.5} nodesConnectable={false} nodesDraggable={false} onNodeClick={(_, node) => setSelected(node)} aria-label="Shared developers, devices, agents and tasks"><Background /><Controls showInteractive={false} /></ReactFlow></div> : <p className="dw-empty">No shared relationships have been reported.</p>}
     {selected && graph.nodes.some((node) => node.id === selected.id) ? <p className="dw-owner-note">{String(selected.data.label)} · {selected.id}</p> : null}
     {graph.truncated ? <p className="dw-owner-note">Map display limited to 40 developers, 60 devices, 80 agents and 80 tasks. The lists retain the remaining records.</p> : null}
   </section>;
