@@ -21,8 +21,10 @@ const name = `mingle-${pkg.version}-${target}`;
 const release = join(root, 'release');
 const stage = join(release, name);
 const cache = join(release, '.cache/node');
-const nodeArchive = join(cache, `node-v${runtime.version}-${target}.${target === 'win32-x64' ? 'zip' : 'tar.xz'}`);
-const nodeDir = join(cache, `node-v${runtime.version}-${target}`);
+// Node's official Windows archives use "win", while process.platform is "win32".
+const nodeTarget = target === 'win32-x64' ? 'win-x64' : target;
+const nodeArchive = join(cache, `node-v${runtime.version}-${nodeTarget}.${target === 'win32-x64' ? 'zip' : 'tar.xz'}`);
+const nodeDir = join(cache, `node-v${runtime.version}-${nodeTarget}`);
 const artifact = join(release, `${name}.tar.gz`);
 
 function run(command, args, options = {}) {
@@ -61,6 +63,7 @@ if (await hash(nodeArchive) !== runtime[target].sha256) throw new Error('Cached 
 await rm(nodeDir, { recursive: true, force: true });
 await run('tar', [target === 'win32-x64' ? '-xf' : '-xJf', nodeArchive, '-C', cache]);
 const node = target === 'win32-x64' ? join(nodeDir, 'node.exe') : join(nodeDir, 'bin/node');
+await access(node);
 const environment = { ...process.env, PATH: `${dirname(node)}${delimiter}${process.env.PATH ?? ''}`, NODE_ENV: 'production' };
 delete environment.NODE_OPTIONS;
 delete environment.NODE_PATH;
