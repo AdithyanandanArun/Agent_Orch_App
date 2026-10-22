@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Activity, ArrowDownToLine, ArrowLeftRight, Check, CircleHelp, GitBranch, Laptop, LockKeyhole, MessageSquare, Plus, RefreshCw, Send, Shield, Users, Workflow } from 'lucide-react';
 import type { Project, Session, Task } from '@mingle/contracts';
+import { api } from '../../lib/api';
 import { useMingle } from '../../store/store';
 import { Button, Badge, EmptyState, InlineError } from '../ui';
 import { createIdempotencyKey, distributedApi, DistributedApiError, type DistributedRecord, type DistributedSnapshot } from './api';
@@ -120,6 +121,7 @@ export function TeamWorkspace() {
   const projects = boot?.projects ?? [];
   const localSessions = boot?.sessions ?? [];
   const [snapshot, setSnapshot] = useState<DistributedSnapshot | null>(null);
+  const [accountIdentity, setAccountIdentity] = useState<{ userId: string; name: string | null; email: string | null } | null>(null);
   const [selectedTeamId, setSelectedTeamId] = useState('');
   const [tab, setTab] = useState<WorkspaceTab>('people');
   const [loading, setLoading] = useState(true);
@@ -156,7 +158,7 @@ export function TeamWorkspace() {
   const teams = useMemo(() => serviceTeamRows(snapshot), [snapshot]);
   const chosenTeamRow = teams.find((team) => idOf(team, ['id', 'teamId']) === selectedTeamId) ?? teams[0];
   const selectedTeam = chosenTeamRow ? unwrap(chosenTeamRow, 'team') : {};
-  const selectedTeamKey = idOf(chosenTeamRow, ['id', 'teamId']) || selectedTeamId;
+  const selectedTeamKey = chosenTeamRow ? idOf(chosenTeamRow, ['id', 'teamId']) : '';
   const teamRows = (rows: DistributedRecord[]) => rows.filter((row) => !readText(row, ['teamId']) || readText(row, ['teamId']) === selectedTeamKey);
   const canManageTeam = ['owner', 'admin'].includes(readText(selectedTeam, ['role']).toLowerCase());
   const teamContainers = [snapshot?.teams, chosenTeamRow, selectedTeam];
@@ -190,8 +192,32 @@ export function TeamWorkspace() {
   });
   const selectedLocalProject = projects.find((project) => project.id === activeProjectId);
   const teamSection = asRecord(snapshot?.teams);
-  const teamsStatus = teamSection?.error ? { label: 'Unavailable', tone: 'err' as const } : teamSection?.userId ? { label: 'Signed in', tone: 'ok' as const } : { label: snapshot ? 'Signed out' : 'Loading', tone: 'neutral' as const };
+  const verifiedUserId = readText(teamSection, ['userId']);
+  const teamsStatus = teamSection?.error || error
+    ? { label: 'Unavailable', tone: 'err' as const }
+    : verifiedUserId
+      ? { label: 'Signed in', tone: 'ok' as const }
+      : snapshot
+        ? { label: 'Signed out', tone: 'neutral' as const }
+        : loading
+          ? { label: 'Loading', tone: 'neutral' as const }
+          : { label: 'Unavailable', tone: 'err' as const };
+  const cloudActionsAvailable = Boolean(snapshot && verifiedUserId && !error && !teamSection?.error);
+  const actionBusy = busy ?? (cloudActionsAvailable ? null : 'cloud-unavailable');
   const transportStatus = displayStatus(snapshot?.transport, ['status', 'state', 'connection']);
+
+  useEffect(() => {
+    let current = true;
+    setAccountIdentity(null);
+    if (!verifiedUserId) return () => { current = false; };
+    void api.account().then((account) => {
+      const user = account.user;
+      if (current && user?.id === verifiedUserId && account.status === 'signed-in') {
+        setAccountIdentity({ userId: user.id, name: user.name, email: user.email });
+      }
+    }).catch(() => { /* Public profile details are optional; the verified team snapshot remains authoritative. */ });
+    return () => { current = false; };
+  }, [verifiedUserId]);
 
   const refreshSnapshot = useCallback(async (quiet = false) => {
     const current = ++sequence.current;
@@ -207,6 +233,7 @@ export function TeamWorkspace() {
         previousSnapshot.current = null;
         clearTeamActionState();
         setSnapshot(null);
+        setUpdatedAt(null);
       } else {
         const userId = readText(next.teams, ['userId']) || null;
         const previous = previousSnapshot.current;
@@ -238,6 +265,7 @@ export function TeamWorkspace() {
       previousSnapshot.current = null;
       clearTeamActionState();
       setSnapshot(null);
+      setUpdatedAt(null);
       setError(cause instanceof Error ? cause.message : String(cause));
       setErrorStatus(cause instanceof DistributedApiError ? cause.status : null);
     } finally {
@@ -274,6 +302,13 @@ export function TeamWorkspace() {
   }, [teams, selectedTeamId]);
 
   const perform = async (key: string, success: string, work: () => Promise<unknown>) => {
+    if (!cloudActionsAvailable) {
+      setError(error || (!snapshot
+        ? 'Refresh the team workspace and wait for a current cloud snapshot before submitting.'
+        : 'Sign in to a verified account before submitting team changes.'));
+      setErrorStatus(errorStatus ?? (snapshot ? 401 : null));
+      return;
+    }
     if (busy) return;
     const generation = operationGeneration.current;
     setBusy(key); setError(null); setErrorStatus(null); setNotice(null); setResult(null);
@@ -299,13 +334,13 @@ export function TeamWorkspace() {
   const deviceOptions = devices.map((device) => ({ value: idOf(device, ['id', 'deviceId']), label: `${nameOf(device, 'Device')} · ${displayStatus(device).label}` })).filter((option) => option.value && option.value !== idOf(localDevice, ['id', 'deviceId']));
 
   const currentTab = <>
-    {tab === 'people' ? <PeoplePanel teamId={selectedTeamKey} team={selectedTeam} canManageTeam={canManageTeam} members={members} invitations={invitations} busy={busy} result={result} perform={perform} onCreatedTeam={setSelectedTeamId} /> : null}
-    {tab === 'projects' ? <ProjectsPanel teamId={selectedTeamKey} sharedProjects={sharedProjects} localProject={selectedLocalProject} canManageTeam={canManageTeam} busy={busy} perform={perform} /> : null}
-    {tab === 'devices' ? <DevicesPanel teamId={selectedTeamKey} localDevice={localDevice} devices={devices} links={links} busy={busy} result={result} perform={perform} /> : null}
-    {tab === 'agents' ? <AgentsPanel teamId={selectedTeamKey} sharedProjects={sharedProjects} localProject={selectedLocalProject} localSessions={localSessions} agents={agents} devices={devices} tasks={tasks} members={members} busy={busy} perform={perform} /> : null}
-    {tab === 'conversation' ? <ConversationPanel teamId={selectedTeamKey} sharedProjects={sharedProjects} localTasks={(boot?.tasks ?? []).filter((task) => task.projectId === activeProjectId)} messages={messages} tasks={tasks} timeline={executionEvents} busy={busy} perform={perform} /> : null}
-    {tab === 'recovery' ? <RecoveryPanel teamId={selectedTeamKey} sharedProjects={sharedProjects} agents={agents} requests={executionRequests} localDeviceId={idOf(localDevice, ['id', 'deviceId'])} localSessions={localSessions} localTasks={(boot?.tasks ?? []).filter((task) => task.projectId === activeProjectId)} runs={boot?.runs ?? []} busy={busy} checkedApprovals={checkedApprovals} setCheckedApprovals={setCheckedApprovals} shareProgress={shareProgress} setShareProgress={setShareProgress} allowProviderSpend={allowProviderSpend} setAllowProviderSpend={setAllowProviderSpend} allowUnverifiedQuota={allowUnverifiedQuota} setAllowUnverifiedQuota={setAllowUnverifiedQuota} perform={perform} /> : null}
-    {tab === 'transfers' ? <TransfersPanel teamId={selectedTeamKey} localDeviceId={idOf(localDevice, ['id', 'deviceId'])} sharedProjects={sharedProjects} devices={deviceOptions} gitRequests={gitRequests} gitAudit={gitAudit} commandRequests={commandRequests} commandAudit={commandAudit} busy={busy} checkedApprovals={checkedApprovals} setCheckedApprovals={setCheckedApprovals} perform={perform} /> : null}
+    {tab === 'people' ? <PeoplePanel teamId={selectedTeamKey} team={selectedTeam} currentUserId={verifiedUserId} accountIdentity={accountIdentity} canManageTeam={canManageTeam} members={members} invitations={invitations} busy={actionBusy} actionsAvailable={cloudActionsAvailable} result={result} perform={perform} onCreatedTeam={setSelectedTeamId} /> : null}
+    {tab === 'projects' ? <ProjectsPanel teamId={selectedTeamKey} sharedProjects={sharedProjects} localProject={selectedLocalProject} canManageTeam={canManageTeam} busy={actionBusy} perform={perform} /> : null}
+    {tab === 'devices' ? <DevicesPanel teamId={selectedTeamKey} localDevice={localDevice} devices={devices} links={links} busy={actionBusy} result={result} perform={perform} /> : null}
+    {tab === 'agents' ? <AgentsPanel teamId={selectedTeamKey} sharedProjects={sharedProjects} localProject={selectedLocalProject} localSessions={localSessions} agents={agents} devices={devices} tasks={tasks} members={members} busy={actionBusy} perform={perform} /> : null}
+    {tab === 'conversation' ? <ConversationPanel teamId={selectedTeamKey} sharedProjects={sharedProjects} localTasks={(boot?.tasks ?? []).filter((task) => task.projectId === activeProjectId)} messages={messages} tasks={tasks} timeline={executionEvents} busy={actionBusy} perform={perform} /> : null}
+    {tab === 'recovery' ? <RecoveryPanel teamId={selectedTeamKey} sharedProjects={sharedProjects} agents={agents} requests={executionRequests} localDeviceId={idOf(localDevice, ['id', 'deviceId'])} localSessions={localSessions} localTasks={(boot?.tasks ?? []).filter((task) => task.projectId === activeProjectId)} runs={boot?.runs ?? []} busy={actionBusy} checkedApprovals={checkedApprovals} setCheckedApprovals={setCheckedApprovals} shareProgress={shareProgress} setShareProgress={setShareProgress} allowProviderSpend={allowProviderSpend} setAllowProviderSpend={setAllowProviderSpend} allowUnverifiedQuota={allowUnverifiedQuota} setAllowUnverifiedQuota={setAllowUnverifiedQuota} perform={perform} /> : null}
+    {tab === 'transfers' ? <TransfersPanel teamId={selectedTeamKey} localDeviceId={idOf(localDevice, ['id', 'deviceId'])} sharedProjects={sharedProjects} devices={deviceOptions} gitRequests={gitRequests} gitAudit={gitAudit} commandRequests={commandRequests} commandAudit={commandAudit} busy={actionBusy} checkedApprovals={checkedApprovals} setCheckedApprovals={setCheckedApprovals} perform={perform} /> : null}
   </>;
 
   const noTeam = teams.length === 0;
@@ -319,7 +354,7 @@ export function TeamWorkspace() {
           clearTeamActionState();
           setSelectedTeamId(nextTeamId);
         }} aria-label="Active team">{teams.map((team) => <option key={idOf(team, ['id', 'teamId'])} value={idOf(team, ['id', 'teamId'])}>{nameOf(team, 'Team')}</option>)}</select></label> : null}
-        <Button size="sm" disabled={Boolean(busy)} busy={busy === 'sync'} onClick={() => void perform('sync', 'Device mailbox checked.', () => distributedApi.sync())}><RefreshCw size={13} /> Sync</Button>
+        <Button size="sm" disabled={Boolean(busy) || !cloudActionsAvailable} busy={busy === 'sync'} onClick={() => void perform('sync', 'Device mailbox checked.', () => distributedApi.sync())}><RefreshCw size={13} /> Sync</Button>
         <Button size="sm" disabled={loading || Boolean(busy)} onClick={() => void refreshSnapshot()}><RefreshCw size={13} /> Refresh</Button>
       </div>
     </header>
@@ -340,8 +375,8 @@ export function TeamWorkspace() {
   </section>;
 }
 
-function PeoplePanel({ teamId, team, canManageTeam, members, invitations, busy, result, perform, onCreatedTeam }: {
-  teamId: string; team: DistributedRecord; canManageTeam: boolean; members: DistributedRecord[]; invitations: DistributedRecord[]; busy: string | null; result: unknown;
+function PeoplePanel({ teamId, team, currentUserId, accountIdentity, canManageTeam, members, invitations, busy, actionsAvailable, result, perform, onCreatedTeam }: {
+  teamId: string; team: DistributedRecord; currentUserId: string; accountIdentity: { userId: string; name: string | null; email: string | null } | null; canManageTeam: boolean; members: DistributedRecord[]; invitations: DistributedRecord[]; busy: string | null; actionsAvailable: boolean; result: unknown;
   perform: (key: string, success: string, work: () => Promise<unknown>) => Promise<unknown | undefined>;
   onCreatedTeam: (id: string) => void;
 }) {
@@ -350,38 +385,59 @@ function PeoplePanel({ teamId, team, canManageTeam, members, invitations, busy, 
   const [role, setRole] = useState('member');
   const [token, setToken] = useState('');
   const createdToken = readText(result, ['token', 'inviteToken', 'invitationToken']);
+  const hasTeam = Boolean(teamId);
+
+  const createTeamForm = <form className="dw-card dw-people-action" onSubmit={(event: FormEvent) => { event.preventDefault(); void perform('create-team', 'Team created. No agents were started.', async () => { const response = await distributedApi.createTeam(teamName.trim()); setTeamName(''); return response; }).then((response) => { const id = idOf(response, ['id', 'teamId']) || idOf(asRecord(response)?.team, ['id', 'teamId']); if (id) onCreatedTeam(id); }); }}>
+    <div className="dw-card__heading"><span><Plus size={15} /></span><div><h3>Create a team</h3><p>Membership is tied to verified account identity.</p></div></div>
+    <TextControl label="Team name" value={teamName} onChange={setTeamName} required maxLength={100} placeholder="Design systems" />
+    <Button type="submit" size="sm" disabled={!actionsAvailable || Boolean(busy) || !teamName.trim()} busy={busy === 'create-team'}>Create team</Button>
+  </form>;
+
+  const acceptInvitationForm = <form className="dw-card dw-people-action" onSubmit={(event: FormEvent) => { event.preventDefault(); if (!token.trim()) return; void perform('accept-invite', 'Invitation accepted. Refreshing team membership.', () => distributedApi.acceptInvite(token.trim())).then((response) => { if (response !== undefined) setToken(''); }); }}>
+    <div className="dw-card__heading"><span><ArrowDownToLine size={15} /></span><div><h3>Accept an invitation</h3><p>Acceptance is checked against the signed-in account by the service.</p></div></div>
+    <TextControl label="Invitation token" value={token} onChange={setToken} required placeholder="Paste the one-time token" />
+    <Button type="submit" size="sm" disabled={!actionsAvailable || Boolean(busy) || !token.trim()} busy={busy === 'accept-invite'}>Accept invitation</Button>
+  </form>;
+
+  const invitationForm = <form className="dw-people-invite" onSubmit={(event: FormEvent) => { event.preventDefault(); if (!teamId || !canManageTeam) return; void perform('invite', 'Invitation created. Share its one-time token with the teammate yourself.', () => distributedApi.invite({ teamId, email: email.trim(), role })); }}>
+    <div className="dw-card__heading"><span><Users size={15} /></span><div><h4>Invite someone</h4><p>Invitations expire and can be accepted once by the matching account.</p></div></div>
+    <TextControl label="Email" type="email" value={email} onChange={setEmail} required placeholder="teammate@example.com" />
+    <SelectControl label="Role" value={role} onChange={setRole} options={[{ value: 'member', label: 'Member' }, { value: 'admin', label: 'Admin' }]} />
+    <Button type="submit" size="sm" disabled={!actionsAvailable || Boolean(busy) || !teamId || !email.trim() || !canManageTeam} why={!canManageTeam ? 'Only a team owner or admin can invite members.' : undefined} busy={busy === 'invite'}>Create invitation</Button>
+    {createdToken ? <div className="dw-secret" role="status"><strong>Copy this invitation token now</strong><code>{createdToken}</code><small>It is shown from this creation response only. Send it through a channel you choose.</small></div> : null}
+  </form>;
+
   return <div className="distributed__panel">
-    <div className="distributed__grid distributed__grid--forms">
-      <form className="dw-card" onSubmit={(event: FormEvent) => { event.preventDefault(); void perform('create-team', 'Team created. No agents were started.', async () => { const response = await distributedApi.createTeam(teamName.trim()); setTeamName(''); return response; }).then((response) => { const id = idOf(response, ['id', 'teamId']) || idOf(asRecord(response)?.team, ['id', 'teamId']); if (id) onCreatedTeam(id); }); }}>
-        <div className="dw-card__heading"><span><Plus size={15} /></span><div><h3>Create a team</h3><p>Membership is tied to verified account identity.</p></div></div>
-        <TextControl label="Team name" value={teamName} onChange={setTeamName} required maxLength={100} placeholder="Design systems" />
-        <Button type="submit" size="sm" disabled={Boolean(busy) || !teamName.trim()} busy={busy === 'create-team'}>Create team</Button>
-      </form>
-      <form className="dw-card" onSubmit={(event: FormEvent) => { event.preventDefault(); if (!teamId || !canManageTeam) return; void perform('invite', 'Invitation created. Share its one-time token with the teammate yourself.', () => distributedApi.invite({ teamId, email: email.trim(), role })); }}>
-        <div className="dw-card__heading"><span><Users size={15} /></span><div><h3>Invite someone</h3><p>Invitations expire and can be accepted once by the matching account.</p></div></div>
-        <TextControl label="Email" type="email" value={email} onChange={setEmail} required placeholder="teammate@example.com" />
-        <SelectControl label="Role" value={role} onChange={setRole} options={[{ value: 'member', label: 'Member' }, { value: 'admin', label: 'Admin' }]} />
-        <Button type="submit" size="sm" disabled={Boolean(busy) || !teamId || !email.trim() || !canManageTeam} why={!canManageTeam ? 'Only a team owner or admin can invite members.' : undefined} busy={busy === 'invite'}>Create invitation</Button>
-        {createdToken ? <div className="dw-secret" role="status"><strong>Copy this invitation token now</strong><code>{createdToken}</code><small>It is shown from this creation response only. Send it through a channel you choose.</small></div> : null}
-      </form>
-      <form className="dw-card" onSubmit={(event: FormEvent) => { event.preventDefault(); if (!token.trim()) return; void perform('accept-invite', 'Invitation accepted. Refreshing team membership.', () => distributedApi.acceptInvite(token.trim())); }}>
-        <div className="dw-card__heading"><span><ArrowDownToLine size={15} /></span><div><h3>Accept an invitation</h3><p>Acceptance is checked against the signed-in account by the service.</p></div></div>
-        <TextControl label="Invitation token" value={token} onChange={setToken} required placeholder="Paste the one-time token" />
-        <Button type="submit" size="sm" disabled={Boolean(busy) || !token.trim()} busy={busy === 'accept-invite'}>Accept invitation</Button>
-      </form>
-    </div>
-    <div className="dw-section-head"><div><h3>{nameOf(team, 'Team')} members</h3><p>Names are for display; authorization uses verified account identifiers.</p></div><Badge>{members.length} listed</Badge></div>
-    {members.length ? <div className="dw-list">{members.map((raw, index) => {
-      const member = unwrap(raw, 'member', 'user');
-      const userId = readText(raw, ['userId', 'accountId']) || readText(member, ['id', 'userId']);
-      const memberId = idOf(raw, ['id', 'memberId']) || userId || `member-${index}`;
-      const memberName = nameOf(member, nameOf(raw, userId || 'Team member'));
-      const memberEmail = text(member, ['email'], text(raw, ['email'], 'Email not shared'));
-      const memberRole = text(raw, ['role'], 'Role unknown');
-      return <article className="dw-row" key={memberId}><div className="dw-avatar" aria-hidden="true">{memberName.charAt(0).toUpperCase()}</div><div className="dw-row__main"><strong>{memberName}</strong><span>{memberEmail} · {memberRole}</span></div>{canManageTeam ? <Button size="sm" variant="danger" disabled={Boolean(busy) || !teamId || !userId} why={!userId ? 'Member identifier is not present in this snapshot' : undefined} onClick={() => { if (window.confirm(`Remove ${memberEmail} from this team? Their devices will lose future team authority.`)) void perform(`revoke-member:${userId}`, 'Team membership revoked.', () => distributedApi.revokeMember({ teamId, userId })); }}>Remove</Button> : null}</article>;
-    })}</div> : <p className="dw-empty">No member roster was reported for this team yet.</p>}
-    <div className="dw-section-head"><div><h3>Invitations</h3><p>Only active invitation records are shown.</p></div><Badge>{invitations.length}</Badge></div>
-    {invitations.length ? <div className="dw-list">{invitations.map((row, index) => { const state = invitationStatus(row); return <article className="dw-row" key={idOf(row) || `invite-${index}`}><div className="dw-row__main"><strong>{text(row, ['email'], 'Invitation recipient not reported')}</strong><span>{text(row, ['role'], 'Role unknown')} · {state.label} · expires {text(row, ['expiresAt', 'expiry', 'expires_at'], 'not reported')}</span></div><Badge tone={state.tone}>{state.label}</Badge></article>; })}</div> : <p className="dw-empty">No invitation records are currently listed.</p>}
+    {!hasTeam ? <div className="distributed__grid distributed__grid--people-onboarding" aria-label="Team onboarding">{createTeamForm}{acceptInvitationForm}</div> : <>
+      <div className="distributed__grid distributed__grid--people-primary">
+        <section className="dw-card dw-people-roster" aria-labelledby="dw-team-members-heading">
+          <div className="dw-section-head"><div><h3 id="dw-team-members-heading">{nameOf(team, 'Team')} members</h3><p>Names are for display; authorization uses verified account identifiers.</p></div><Badge>{members.length} listed</Badge></div>
+          {members.length ? <div className="dw-list">{members.map((raw, index) => {
+            const member = unwrap(raw, 'member', 'user');
+            const userId = readText(raw, ['userId', 'accountId']) || readText(member, ['id', 'userId']);
+            const memberId = idOf(raw, ['id', 'memberId']) || userId || `member-${index}`;
+            const isCurrentUser = Boolean(userId && userId === currentUserId && accountIdentity?.userId === userId);
+            const memberName = nameOf(member, nameOf(raw, isCurrentUser ? accountIdentity?.name || accountIdentity?.email || 'You' : 'Team member'));
+            const memberEmail = text(member, ['email'], text(raw, ['email'], isCurrentUser ? accountIdentity?.email || 'Email not shared' : 'Email not shared'));
+            const memberRole = readText(raw, ['role']) || readText(member, ['role']);
+            const canRemove = Boolean(userId && !isCurrentUser && (
+              readText(team, ['role']).toLowerCase() === 'owner' && ['admin', 'member'].includes(memberRole.toLowerCase())
+              || readText(team, ['role']).toLowerCase() === 'admin' && memberRole.toLowerCase() === 'member'
+            ));
+            return <article className="dw-row" key={memberId}><div className="dw-avatar" aria-hidden="true">{memberName.charAt(0).toUpperCase()}</div><div className="dw-row__main"><strong>{memberName}</strong><span>{memberEmail} · {memberRole || 'Role unknown'}</span></div>{canManageTeam && canRemove ? <Button size="sm" variant="danger" disabled={Boolean(busy) || !teamId} onClick={() => { if (window.confirm(`Remove ${memberEmail} from this team? Their devices will lose future team authority.`)) void perform(`revoke-member:${userId}`, 'Team membership revoked.', () => distributedApi.revokeMember({ teamId, userId })); }}>Remove</Button> : null}</article>;
+          })}</div> : <p className="dw-empty">No member roster was reported for this team yet.</p>}
+        </section>
+        <section className="dw-card dw-people-invitations" aria-labelledby="dw-team-invitations-heading">
+          <div className="dw-section-head"><div><h3 id="dw-team-invitations-heading">Invitations</h3><p>Invitation records, expiry and status for this team.</p></div><Badge>{invitations.length}</Badge></div>
+          {invitationForm}
+          {invitations.length ? <div className="dw-list">{invitations.map((row, index) => { const state = invitationStatus(row); return <article className="dw-row" key={idOf(row) || `invite-${index}`}><div className="dw-row__main"><strong>{text(row, ['email'], 'Invitation recipient not reported')}</strong><span>{text(row, ['role'], 'Role unknown')} · {state.label} · expires {text(row, ['expiresAt', 'expiry', 'expires_at'], 'not reported')}</span></div><Badge tone={state.tone}>{state.label}</Badge></article>; })}</div> : <p className="dw-empty">No invitation records are currently listed.</p>}
+        </section>
+      </div>
+      <details className="dw-people-secondary">
+        <summary><span><strong>More team actions</strong><small>Create another team or join one with an invitation token</small></span><span className="dw-people-secondary__toggle" aria-hidden="true" /></summary>
+        <div className="dw-people-secondary__forms">{createTeamForm}{acceptInvitationForm}</div>
+      </details>
+    </>}
   </div>;
 }
 

@@ -28,6 +28,8 @@ const outputDir = path.join(os.tmpdir(), `mingle-distributed-browser-acceptance-
 const logPath = path.join(outputDir, 'browser-acceptance.log');
 const screenshots = {
   map: path.join(outputDir, 'shared-agent-map.png'),
+  onboarding: path.join(outputDir, 'team-workspace-onboarding.png'),
+  people: path.join(outputDir, 'team-workspace-people.png'),
   team: path.join(outputDir, 'team-workspace-desktop.png'),
   narrow: path.join(outputDir, 'team-workspace-900px.png'),
 };
@@ -240,6 +242,12 @@ async function main() {
     assert.match(await page.locator('[role=alert]').innerText(), /sign.?in|account|authenticated/i);
     assert.equal(await page.getByRole('button', { name: 'Open Account settings', exact: true }).count(), 1);
     assert.equal(await page.getByRole('navigation', { name: 'Team workspace sections' }).getByRole('button').count(), 7);
+    assert.match(await page.locator('.distributed__statusline').innerText(), /Team service: Unavailable/);
+    await page.getByLabel('Team name', { exact: true }).fill('Example gated team');
+    await page.getByLabel('Invitation token', { exact: true }).fill('example-gated-invitation-token');
+    assert.equal(await page.getByRole('button', { name: 'Create team', exact: true }).isDisabled(), true);
+    assert.equal(await page.getByRole('button', { name: 'Accept invitation', exact: true }).isDisabled(), true);
+    assert.equal(await page.getByText('Invite someone', { exact: true }).count(), 0, 'an unavailable team snapshot has no irrelevant invite form');
   });
 
   // Verify 503, Retry, then a second real signed-out read before enabling the
@@ -260,6 +268,7 @@ async function main() {
   await test('visible service error and retry recovery to live signed-out response', async () => {
     assert.ok(localApiResponses.some((response) => response.status >= 400 || response.error));
     assert.match(await page.locator('[role=alert]').innerText(), /sign.?in|account|authenticated/i);
+    assert.match(await page.locator('.distributed__statusline').innerText(), /Team service: Unavailable/);
   });
   await page.unroute('**/api/distributed/snapshot**');
 
@@ -271,6 +280,7 @@ async function main() {
   let betaDelayedResolve;
   let writesMode = 'ok';
   let exampleCreatedTeam = false;
+  let emptyTeamSnapshot = false;
   let timestampOnlySnapshot = false;
   let ambiguousDependency = false;
   await page.route('**/api/distributed/**', async (route) => {
@@ -294,6 +304,7 @@ async function main() {
       }
       if (url.pathname === '/api/distributed/teams') {
         exampleCreatedTeam = true;
+        emptyTeamSnapshot = false;
         await json(route, 200, { id: 'example-created-team' });
         return;
       }
@@ -327,6 +338,12 @@ async function main() {
       await new Promise((resolve) => { betaDelayedResolve = resolve; });
     }
     const body = createExampleSnapshot(localProjectId, teamId);
+    if (emptyTeamSnapshot) {
+      body.teams.teams = [];
+      body.teams.members = [];
+      body.teams.invitations = [];
+      body.teams.projects = [];
+    }
     if (ambiguousDependency) {
       const prerequisite = body.execution.tasks.find((row) => row.teamId === teamId && row.id === `${teamId}-prerequisite`);
       assert.ok(prerequisite, 'example dependency fixture exists');
@@ -383,16 +400,67 @@ async function main() {
   await test('team create, invite, accept, keyboard form submit, and one-time token display', async () => {
     await selectTeam(EXAMPLE.teamA);
     await section('People').click();
+    const ownerRow = page.locator('.dw-people-roster .dw-row').filter({ hasText: 'owner-a@example.invalid' });
+    const ordinaryMemberRow = page.locator('.dw-people-roster .dw-row').filter({ hasText: 'member-b@example.invalid' });
+    assert.equal(await ownerRow.getByRole('button', { name: 'Remove', exact: true }).count(), 0, 'the owner cannot remove themself');
+    assert.equal(await ordinaryMemberRow.getByRole('button', { name: 'Remove', exact: true }).count(), 1, 'the owner can remove an ordinary member');
     assert.equal(await page.getByText('Pending', { exact: true }).count() >= 1, true);
     assert.equal(await page.getByText('Accepted', { exact: true }).count() >= 1, true);
     assert.equal(await page.getByText('Expired', { exact: true }).count() >= 1, true);
+    emptyTeamSnapshot = true;
+    let teamName;
+    try {
+      const emptySnapshotStart = localApiResponses.length;
+      await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+      await waitFor(() => localApiResponses.slice(emptySnapshotStart).some((response) => response.teamId === EXAMPLE.teamA && response.status === 200), 'signed-in empty-team example snapshot');
+      await page.getByRole('button', { name: 'Create team', exact: true }).waitFor();
+      await page.getByRole('combobox', { name: 'Active team' }).waitFor({ state: 'detached' });
+      assert.equal(await page.getByText('Invite someone', { exact: true }).count(), 0, 'teamless onboarding does not show a disabled invite form');
+      teamName = page.getByLabel('Team name', { exact: true });
+      await teamName.fill('');
+      const invitationToken = page.getByLabel('Invitation token', { exact: true });
+      await invitationToken.fill('');
+      assert.equal(await page.getByRole('button', { name: 'Create team', exact: true }).isDisabled(), true, 'empty team names remain disabled');
+      assert.equal(await page.getByRole('button', { name: 'Accept invitation', exact: true }).isDisabled(), true, 'empty invitation tokens remain disabled');
+      const onboardingGeometry = await page.locator('.distributed__grid--people-onboarding').evaluate((grid) => {
+        const cards = [...grid.querySelectorAll(':scope > .dw-card')].map((card) => {
+          const rect = card.getBoundingClientRect();
+          return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+        });
+        return { columns: getComputedStyle(grid).gridTemplateColumns, cards };
+      });
+      assert.equal(onboardingGeometry.cards.length, 2, 'empty-team onboarding shows exactly create and accept cards');
+      assert.equal(onboardingGeometry.cards[0].top, onboardingGeometry.cards[1].top, 'onboarding cards share a row');
+      assert.ok(Math.abs(onboardingGeometry.cards[0].height - onboardingGeometry.cards[1].height) <= 1, `onboarding cards align: ${JSON.stringify(onboardingGeometry)}`);
+      assert.ok(onboardingGeometry.cards[1].left > onboardingGeometry.cards[0].left, 'onboarding cards occupy separate columns');
+      await page.screenshot({ path: screenshots.onboarding, fullPage: true });
+      await teamName.fill('Example form-created team');
+      assert.equal(await page.getByRole('button', { name: 'Create team', exact: true }).isEnabled(), true, 'a verified account with an available empty snapshot can submit a valid team name');
+      await invitationToken.fill('example-gated-invitation-token-123');
+      assert.equal(await page.getByRole('button', { name: 'Accept invitation', exact: true }).isEnabled(), true, 'a verified account with an available empty snapshot can accept an invitation');
+    } finally {
+      emptyTeamSnapshot = false;
+    }
     const startAt = writes.length;
-    const teamName = page.getByLabel('Team name', { exact: true });
-    await teamName.fill('Example form-created team');
     await teamName.press('Enter');
     const created = await waitForWrite('/api/distributed/teams', startAt, { expectNotice: false });
     assert.deepEqual(created.body, { name: 'Example form-created team' });
     await waitFor(async () => await page.getByRole('combobox', { name: 'Active team' }).inputValue() === 'example-created-team', 'new team to become active after its snapshot arrives');
+    const peoplePrimary = page.locator('.distributed__grid--people-primary');
+    const primaryGeometry = await peoplePrimary.evaluate((grid) => ({
+      columns: getComputedStyle(grid).gridTemplateColumns,
+      cards: [...grid.querySelectorAll(':scope > .dw-card')].map((card) => {
+        const rect = card.getBoundingClientRect();
+        return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height };
+      }),
+    }));
+    assert.equal(primaryGeometry.cards.length, 2, 'an active team prioritizes roster and invitation management');
+    assert.ok(primaryGeometry.cards[0].top < primaryGeometry.cards[1].top, 'roster precedes invitation management');
+    assert.ok(primaryGeometry.cards[0].bottom < primaryGeometry.cards[1].top, `roster and invitation sections do not overlap: ${JSON.stringify(primaryGeometry)}`);
+    assert.equal(primaryGeometry.cards[0].left, primaryGeometry.cards[1].left, 'roster and invitation sections share a column');
+    assert.equal(primaryGeometry.cards[0].width, primaryGeometry.cards[1].width, 'roster and invitation sections use the available width');
+    assert.ok(primaryGeometry.cards[0].height < primaryGeometry.cards[1].height, `the compact roster does not stretch to the taller invitation section: ${JSON.stringify(primaryGeometry)}`);
+    assert.equal(await page.locator('.dw-people-secondary').evaluate((details) => details.open), false, 'create/join actions start in the compact secondary disclosure');
     await page.getByLabel('Email', { exact: true }).fill('new-member@example.invalid');
     await selectField('Role').selectOption('admin');
     const inviteStart = writes.length;
@@ -400,11 +468,16 @@ async function main() {
     const invite = await waitForWrite('/api/distributed/invitations', inviteStart);
     assert.deepEqual(invite.body, { teamId: 'example-created-team', email: 'new-member@example.invalid', role: 'admin' });
     await page.getByText('example-only-one-time-invitation-token', { exact: true }).waitFor();
+    await page.locator('.dw-people-secondary > summary').click();
     await page.getByLabel('Invitation token', { exact: true }).fill('example-accepted-token');
     const acceptStart = writes.length;
     await page.getByRole('button', { name: 'Accept invitation', exact: true }).click();
     assert.deepEqual((await waitForWrite('/api/distributed/invitations/accept', acceptStart)).body, { token: 'example-accepted-token' });
+    await page.locator('.dw-people-secondary > summary').click();
     await page.getByRole('combobox', { name: 'Active team' }).selectOption(EXAMPLE.teamA);
+    await page.getByRole('heading', { name: 'Example Team Alpha members', exact: true }).waitFor();
+    await page.getByRole('heading', { name: 'Team workspace', exact: true }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: screenshots.people, fullPage: true });
   });
 
   await test('shared project creation and local project binding payloads', async () => {
@@ -772,7 +845,7 @@ async function main() {
     assert.match(await page.locator('[role=alert]').innerText(), /Google sign-in is required/i);
   });
 
-  await test('desktop and 900px layouts remain within the viewport with no browser errors', async () => {
+  await test('desktop, 900px and narrow invitation layouts remain usable with no browser errors', async () => {
     snapshotMode = 'example';
     await page.getByRole('button', { name: 'Retry', exact: true }).click();
     await page.getByRole('combobox', { name: 'Active team' }).waitFor();
@@ -782,7 +855,27 @@ async function main() {
     await page.setViewportSize({ width: 900, height: 800 });
     const narrow = await page.evaluate(() => ({ width: innerWidth, scrollWidth: document.documentElement.scrollWidth }));
     assert.equal(narrow.scrollWidth <= narrow.width, true, `900px overflow ${JSON.stringify(narrow)}`);
+    const tabsOverflow = await page.locator('.distributed__tabs').evaluate((tabs) => ({
+      overflowY: getComputedStyle(tabs).overflowY,
+      scrollHeight: tabs.scrollHeight,
+      clientHeight: tabs.clientHeight,
+    }));
+    note(`INFO workspace tab strip rendered geometry: ${JSON.stringify(tabsOverflow)}`);
+    assert.equal(tabsOverflow.overflowY, 'hidden', `workspace tabs should not create vertical scrolling: ${JSON.stringify(tabsOverflow)}`);
+    assert.ok(tabsOverflow.scrollHeight <= tabsOverflow.clientHeight, `workspace tab strip has no vertical overflow: ${JSON.stringify(tabsOverflow)}`);
     await page.screenshot({ path: screenshots.narrow, fullPage: true });
+    await selectTeam(EXAMPLE.teamA);
+    await section('People').click();
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const desktopInviteColumns = await page.locator('.dw-people-invite').evaluate((form) => getComputedStyle(form).gridTemplateColumns.trim().split(/\s+/).length);
+    assert.equal(desktopInviteColumns, 3, 'email, role and invitation action align in one desktop row');
+    await page.setViewportSize({ width: 560, height: 800 });
+    const mobileInviteColumns = await page.locator('.dw-people-invite').evaluate((form) => ({
+      columns: getComputedStyle(form).gridTemplateColumns.trim().split(/\s+/).length,
+      width: form.getBoundingClientRect().width,
+    }));
+    assert.equal(mobileInviteColumns.columns, 1, `invitation form fields stack on narrow screens: ${JSON.stringify(mobileInviteColumns)}`);
+    assert.ok(mobileInviteColumns.width > 0, 'narrow invitation form remains rendered');
     assert.deepEqual(pageErrors, [], `page/console runtime errors: ${pageErrors.join('; ')}`);
     const expectedHttpFailures = (response) =>
       (response.pathname === '/api/distributed/snapshot' && [401, 503].includes(response.status))
