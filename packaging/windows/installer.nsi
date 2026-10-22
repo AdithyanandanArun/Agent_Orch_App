@@ -1,6 +1,6 @@
 Unicode true
 RequestExecutionLevel user
-SetCompressor /SOLID lzma
+SetCompressor zlib
 ShowInstDetails show
 ShowUninstDetails show
 
@@ -35,7 +35,8 @@ UninstPage instfiles
 
 Function .onInit
   StrCmp "$INSTDIR" "${EXPECTED_INSTALL_DIR}" install_dir_is_expected 0
-  MessageBox MB_ICONSTOP|MB_OK "Mingle installs per-user under LocalAppData. A custom /D path is not supported."
+  MessageBox MB_ICONSTOP|MB_OK "Mingle installs per-user under LocalAppData. A custom /D path is not supported." /SD IDOK
+  SetErrorLevel 2
   Abort
   install_dir_is_expected:
 FunctionEnd
@@ -63,7 +64,8 @@ SectionEnd
 Function un.onInit
   SetShellVarContext current
   StrCmp "$INSTDIR" "${EXPECTED_INSTALL_DIR}" install_dir_is_expected 0
-  MessageBox MB_ICONSTOP|MB_OK "Refusing to uninstall files outside the Mingle installation directory."
+  MessageBox MB_ICONSTOP|MB_OK "Refusing to uninstall files outside the Mingle installation directory." /SD IDOK
+  SetErrorLevel 2
   Abort
   install_dir_is_expected:
 FunctionEnd

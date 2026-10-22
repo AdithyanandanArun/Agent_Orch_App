@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { access, lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -29,7 +29,7 @@ async function present(path) { try { await access(path); return true; } catch { 
 
 function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd: root, stdio: 'inherit', ...options, shell: false });
+    const child = spawn(command, args, { cwd: root, stdio: 'inherit', timeout: 15 * 60_000, ...options, shell: false });
     child.once('error', reject);
     child.once('exit', (code, signal) => code === 0 ? resolve() : reject(new Error(`${command} failed (${signal ?? code})`)));
   });
@@ -163,13 +163,14 @@ async function smokeInstaller(makensis, smokeRoot) {
   // uninstaller removes only the app directory and leaves the independent user-data sentinel.
   const defines = { INSTALL_DIR: installDir, EXPECTED_INSTALL_DIR: installDir };
   await run(makensis, makensisArgs(testInstaller, defines));
-  await run(testInstaller, ['/S', `/D=${installDir}`], { windowsHide: true });
+  console.log('Testing isolated silent Windows installation...');
+  await run(testInstaller, ['/S', `/D=${installDir}`], { windowsHide: true, timeout: 120_000 });
   for (const payload of ['mingle.exe', 'Uninstall.exe', 'resources/runtime/bin/node.exe', 'resources/workspace/apps/server/dist/index.mjs']) {
     if (!(await present(join(installDir, payload)))) throw new Error(`Fresh silent install omitted ${payload}.`);
   }
   await run(process.execPath, [join(root, 'scripts/smoke-desktop.mjs'), join(installDir, 'mingle.exe')], { windowsHide: true });
   // _?= suppresses NSIS's temp-copy handoff, so this call returns only after uninstall completes.
-  await run(join(installDir, 'Uninstall.exe'), ['/S', `_?=${installDir}`], { windowsHide: true });
+  await run(join(installDir, 'Uninstall.exe'), ['/S', `_?=${installDir}`], { windowsHide: true, timeout: 60_000 });
   if (await present(join(installDir, 'mingle.exe'))) throw new Error('Silent uninstall left the application executable behind.');
   if ((await readFile(preservedData, 'utf8')) !== 'Mingle installer smoke user data must survive uninstall.\n') throw new Error('Silent uninstall changed the isolated user-data sentinel.');
   console.log('Windows installer smoke passed: isolated silent install/uninstall preserved user data.');
@@ -182,7 +183,8 @@ if (await present(join(stage, 'resources/workspace/apps/server/node_modules/.pnp
   throw new Error('Staged pnpm self-reference was not removed; NSIS must not recurse through it.');
 }
 
-const smokeRoot = await mkdtemp(join(tmpdir(), 'mp-'));
+// NSIS normalizes 8.3 aliases; use the canonical temp root for both path guards.
+const smokeRoot = await mkdtemp(join(await realpath(tmpdir()), 'mp-'));
 try {
   await smokeRuntime(smokeRoot);
   await run(makensis, makensisArgs(installer));
