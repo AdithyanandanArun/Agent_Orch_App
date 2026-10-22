@@ -38,7 +38,7 @@ jobs:
           test "$(readlink /usr/bin/mingle)" = /opt/mingle/mingle
           test "$(stat -c '%u:%g:%a' /opt/mingle/chrome-sandbox)" = '0:0:4755'
           node scripts/smoke-packaged-linux.mjs /opt/mingle
-          xvfb-run -a node scripts/smoke-desktop-linux.mjs /opt/mingle/mingle
+          xvfb-run -a node scripts/smoke-desktop.mjs /opt/mingle/mingle
           mkdir -p "$HOME/.config/Mingle"
           echo keep > "$HOME/.config/Mingle/package-check"
           sudo apt-get remove -y mingle

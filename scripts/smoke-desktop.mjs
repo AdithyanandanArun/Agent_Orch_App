@@ -11,7 +11,7 @@ const probe = createServer().listen(0, '127.0.0.1');
 await once(probe, 'listening');
 const port = probe.address().port;
 await new Promise(resolvePromise => probe.close(resolvePromise));
-const environment = { ...process.env, XDG_CONFIG_HOME: scratch, MINGLE_DATA_DIR: join(scratch, 'workspace') };
+const environment = { ...process.env, XDG_CONFIG_HOME: scratch, APPDATA: scratch, LOCALAPPDATA: join(scratch, 'local'), MINGLE_DATA_DIR: join(scratch, 'workspace') };
 delete environment.ELECTRON_RUN_AS_NODE;
 delete environment.NODE_OPTIONS;
 delete environment.NODE_PATH;
