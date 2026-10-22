@@ -107,5 +107,6 @@ jobs:
           EOF
           gh release edit "$DOWNLOAD_TAG" --repo "$GITHUB_REPOSITORY" --title 'Mingle — temporary downloads' --notes-file release-notes.md --draft=true --prerelease --latest=false
           gh release upload "$DOWNLOAD_TAG" "${debs[0]}" "${debs[0]}.sha256" "${exes[0]}" "${exes[0]}.sha256" --repo "$GITHUB_REPOSITORY" --clobber
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$DOWNLOAD_TAG" --jq '.assets[] | {name,size,state,digest}'
+          # The REST release-by-tag endpoint excludes drafts; the CLI can inspect them.
+          gh release view "$DOWNLOAD_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[] | {name,size}'
           gh release edit "$DOWNLOAD_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease --latest=false
