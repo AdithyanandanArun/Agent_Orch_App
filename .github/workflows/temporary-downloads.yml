@@ -23,7 +23,7 @@ permissions:
 
 jobs:
   publish:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     env:
       GH_TOKEN: ${{ github.token }}
       LINUX_RUN: ${{ inputs.linux_run_id }}
