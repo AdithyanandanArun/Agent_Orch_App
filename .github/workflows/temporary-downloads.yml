@@ -21,6 +21,10 @@ permissions:
   actions: read
   contents: write
 
+concurrency:
+  group: temporary-downloads-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-24.04
@@ -64,7 +68,9 @@ jobs:
           expected_sha=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$WINDOWS_RUN" --jq .head_sha)
           tagged_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$DOWNLOAD_TAG" --jq .sha)
           test "$tagged_sha" = "$expected_sha"
-          test "$(gh release view "$DOWNLOAD_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true
+          gh release view "$DOWNLOAD_TAG" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,isPrerelease,assets > release.json
+          test "$(jq -r .tagName release.json)" = "$DOWNLOAD_TAG"
+          test "$(jq -r .isPrerelease release.json)" = true
       - uses: actions/download-artifact@v4
         with:
           name: mingle-linux-x64
@@ -77,7 +83,7 @@ jobs:
           run-id: ${{ inputs.windows_run_id }}
           github-token: ${{ github.token }}
           path: windows
-      - name: Check packages and publish a temporary prerelease
+      - name: Verify packages and publish or verify a temporary prerelease
         shell: bash
         run: |
           debs=(linux/*.deb)
@@ -105,8 +111,33 @@ jobs:
           Debian source: $linux_sha. [Build and checks](https://github.com/$GITHUB_REPOSITORY/actions/runs/$LINUX_RUN).
           Windows source: $windows_sha. [Build and checks](https://github.com/$GITHUB_REPOSITORY/actions/runs/$WINDOWS_RUN).
           EOF
-          gh release edit "$DOWNLOAD_TAG" --repo "$GITHUB_REPOSITORY" --title 'Mingle — temporary downloads' --notes-file release-notes.md --draft=true --prerelease --latest=false
-          gh release upload "$DOWNLOAD_TAG" "${debs[0]}" "${debs[0]}.sha256" "${exes[0]}" "${exes[0]}.sha256" --repo "$GITHUB_REPOSITORY" --clobber
-          # The REST release-by-tag endpoint excludes drafts; the CLI can inspect them.
-          gh release view "$DOWNLOAD_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[] | {name,size}'
-          gh release edit "$DOWNLOAD_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease --latest=false
+          if test "$(jq -r .isDraft release.json)" = true; then
+            gh release edit "$DOWNLOAD_TAG" --repo "$GITHUB_REPOSITORY" --title 'Mingle — temporary downloads' --notes-file release-notes.md --prerelease --latest=false
+            gh release upload "$DOWNLOAD_TAG" "${debs[0]}" "${debs[0]}.sha256" "${exes[0]}" "${exes[0]}.sha256" --repo "$GITHUB_REPOSITORY" --clobber
+          fi
+          # The CLI can inspect drafts as well as published releases. Published
+          # downloads are verified on retries, without replacing their assets.
+          gh release view "$DOWNLOAD_TAG" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,isPrerelease,assets > release.json
+          python3 - release.json "$DOWNLOAD_TAG" "${debs[0]}" "${debs[0]}.sha256" "${exes[0]}" "${exes[0]}.sha256" <<'PY'
+          import hashlib, json, pathlib, sys
+          release = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          assert release['tagName'] == sys.argv[2], 'Release tag changed'
+          assert release['isPrerelease'] is True, 'Expected a temporary prerelease'
+          files = [pathlib.Path(name) for name in sys.argv[3:]]
+          assets = release['assets']
+          assert len(assets) == len(files) == 4, 'Expected exactly four release assets'
+          assert {asset['name'] for asset in assets} == {file.name for file in files}, 'Release asset names differ'
+          by_name = {asset['name']: asset for asset in assets}
+          for file in files:
+              asset = by_name[file.name]
+              assert asset['state'] == 'uploaded', f'Incomplete upload: {file.name}'
+              assert asset['size'] == file.stat().st_size, f'Size mismatch: {file.name}'
+              with file.open('rb') as stream:
+                  digest = 'sha256:' + hashlib.file_digest(stream, 'sha256').hexdigest()
+              assert asset.get('digest') == digest, f'SHA-256 mismatch: {file.name}'
+              print(f'Verified release asset: {file.name} ({digest})')
+          PY
+          if test "$(jq -r .isDraft release.json)" = true; then
+            gh release edit "$DOWNLOAD_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease --latest=false
+          fi
+          echo "Verified temporary downloads: https://github.com/$GITHUB_REPOSITORY/releases/tag/$DOWNLOAD_TAG" >> "$GITHUB_STEP_SUMMARY"
