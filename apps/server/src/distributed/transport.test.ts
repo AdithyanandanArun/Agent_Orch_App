@@ -241,6 +241,7 @@ describe('TransportService authenticated mailbox', () => {
       const id = await first.send(input);
       expect(await first.send(input)).toBe(id);
       await expect(first.send({ ...input, payload: { requestId: 'different' } })).rejects.toMatchObject({ status: 409 });
+      await expect(first.send({ ...input, kind: 'collaboration.message', payload: input.payload })).rejects.toMatchObject({ status: 409 });
       expect(first.snapshot(teamId).outbox[0]).toMatchObject({ status: 'delivered' });
       expect(cloud.envelopes).toHaveLength(1);
       expect(cloud.envelopes[0]!.ciphertext).not.toContain('request-1');

@@ -713,8 +713,12 @@ export class RemoteExecutionService {
       if (existing) {
         const current = this.requestFromRow(existing);
         if (current.digest !== req.digest) throw conflict('This delegation idempotency key already names a different request.');
-        await this.options.transport.send({ teamId: parsed.teamId, toDeviceId: targetDeviceId, kind: 'execution.request',
-          payload: current, idempotencyKey: parsed.idempotencyKey });
+        // A status update mutates the durable request after its original immutable wire payload was sent.
+        // Never try to reuse that transport idempotency key with a changed status/runId/timestamp.
+        if (current.state === 'awaiting-approval') {
+          await this.options.transport.send({ teamId: parsed.teamId, toDeviceId: targetDeviceId, kind: 'execution.request',
+            payload: current, idempotencyKey: parsed.idempotencyKey });
+        }
         return current;
       }
       this.transaction(() => this.insertRequest(req, parsed.idempotencyKey, null));
@@ -964,9 +968,16 @@ export class RemoteExecutionService {
     return this.withTeam(parsed.teamId, async (client, identity) => {
       const binding = await this.binding(identity, parsed.sharedProjectId);
       await this.assertSharedProject(client, parsed.teamId, parsed.sharedProjectId);
+      const dependencies = [...new Set(parsed.dependsOn)];
+      if (dependencies.length !== parsed.dependsOn.length || (parsed.taskId && dependencies.includes(parsed.taskId))) throw conflict('Task dependencies must be unique and cannot depend on themselves.');
       const existing = this.get('SELECT * FROM mingle_remote_messages WHERE team_id = ? AND device_id = ? AND client_key = ?', parsed.teamId, identity.deviceId, parsed.idempotencyKey);
       if (existing) {
         const previous = this.messageFromRow(existing);
+        const sameRequest = previous.sharedProjectId === parsed.sharedProjectId &&
+          previous.content === safeText(parsed.content, MAX_CONTENT) && previous.agentId === (parsed.agentId ?? null) &&
+          previous.groupId === (parsed.groupId ?? null) && previous.taskId === (parsed.taskId ?? null) &&
+          JSON.stringify(previous.dependsOn) === JSON.stringify(dependencies);
+        if (!sameRequest) throw conflict('This collaboration message idempotency key already names a different message.');
         await this.sendCollaboration(client, identity, parsed.sharedProjectId, previous, parsed.idempotencyKey);
         return previous;
       }
@@ -978,8 +989,6 @@ export class RemoteExecutionService {
         agentId = parsed.agentId;
       }
       if (parsed.taskId) this.localTask(parsed.taskId, binding.localProjectId);
-      const dependencies = [...new Set(parsed.dependsOn)];
-      if (dependencies.length !== parsed.dependsOn.length || (parsed.taskId && dependencies.includes(parsed.taskId))) throw conflict('Task dependencies must be unique and cannot depend on themselves.');
       const message = RemoteCollaborationMessageSchema.parse({ id: `rmsg_${uuid().replaceAll('-', '').slice(0, 24)}`,
         teamId: parsed.teamId, sharedProjectId: parsed.sharedProjectId, deviceId: identity.deviceId, ownerId: identity.ownerId,
         agentId, groupId: parsed.groupId ?? null, taskId: parsed.taskId ?? null, dependsOn: dependencies,
@@ -1064,6 +1073,9 @@ export class RemoteExecutionService {
     if (envelope.kind === 'execution.status') return this.receiveStatus(envelope);
     if (envelope.kind === 'collaboration.message') return this.receiveMessage(envelope);
     if (envelope.kind === 'collaboration.task') return this.receiveTask(envelope);
+    // This listener shares the authenticated transport dispatcher with the independently owned Git
+    // and command services. Ignore their namespaces so a valid message can reach the next handler.
+    if (envelope.kind.startsWith('git.') || envelope.kind.startsWith('command.')) return;
     throw new HttpError(400, 'Unsupported remote execution envelope kind.');
   }
 

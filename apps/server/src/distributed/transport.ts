@@ -267,6 +267,7 @@ export class TransportService {
         .get(user.id, request.teamId, own.device_id, request.toDeviceId, request.idempotencyKey) as LocalEnvelopeRow | undefined;
       if (prior) {
         const old = JSON.parse(prior.envelope_json) as SignedEnvelope;
+        if (old.kind !== request.kind) throw new HttpError(409, 'This idempotency key was already used for a different message kind.');
         const priorPayload = openEnvelope({ envelope: old, recipient: keys, senderSigningPublicKey: keys.signingPublicKeyDer, senderEncryptionPublicKey: peer.encryption_public_key });
         if (canonicalJson(priorPayload) !== canonicalJson(request.payload)) throw new HttpError(409, 'This idempotency key was already used for a different message.');
         return prior.id;
@@ -405,6 +406,7 @@ export class TransportService {
         this.db.prepare(`UPDATE mingle_transport_outbox SET attempts = ?, next_attempt_at = ?, error = ? WHERE id = ? AND account_id = ? AND status = 'queued'`)
           .run(attempts, this.now() + retry, message, entry.id, accountId);
         this.lastError = message;
+        this.status = 'offline';
       }
     }
   }
