@@ -61,6 +61,9 @@ jobs:
           print('Native build, installer checks, artifact upload and job cleanup passed.')
           PY
           done
+          expected_sha=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$WINDOWS_RUN" --jq .head_sha)
+          tagged_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$DOWNLOAD_TAG" --jq .sha)
+          test "$tagged_sha" = "$expected_sha"
       - uses: actions/download-artifact@v4
         with:
           name: mingle-linux-x64
@@ -101,6 +104,6 @@ jobs:
           Debian source: $linux_sha. [Build and checks](https://github.com/$GITHUB_REPOSITORY/actions/runs/$LINUX_RUN).
           Windows source: $windows_sha. [Build and checks](https://github.com/$GITHUB_REPOSITORY/actions/runs/$WINDOWS_RUN).
           EOF
-          gh release create "$DOWNLOAD_TAG" "${debs[0]}" "${debs[0]}.sha256" "${exes[0]}" "${exes[0]}.sha256" --repo "$GITHUB_REPOSITORY" --target "$windows_sha" --title 'Mingle — temporary downloads' --notes-file release-notes.md --prerelease --latest=false --draft
+          gh release create "$DOWNLOAD_TAG" "${debs[0]}" "${debs[0]}.sha256" "${exes[0]}" "${exes[0]}.sha256" --repo "$GITHUB_REPOSITORY" --verify-tag --title 'Mingle — temporary downloads' --notes-file release-notes.md --prerelease --latest=false --draft
           gh api "repos/$GITHUB_REPOSITORY/releases/tags/$DOWNLOAD_TAG" --jq '.assets[] | {name,size,state,digest}'
           gh release edit "$DOWNLOAD_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease --latest=false

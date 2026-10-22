@@ -2,11 +2,13 @@
 
 A local development workspace for independent coding-agent sessions. Mingle is the current product name; the original product vision is retained as historical context in [the product vision](docs/vision.md).
 
-This repository establishes the local foundation: an original React workspace, a Node runtime, persistent sessions and events, isolated Git worktrees, provider adapters, task dependencies, artifact handoffs and an Electron desktop app with Linux packaging. Distributed team networking, voice orchestration and automatic integration remain later milestones.
+This repository establishes the local foundation: an original React workspace, a Node runtime, persistent sessions and events, isolated Git worktrees, provider adapters, task dependencies, artifact handoffs and an Electron desktop app with Linux and Windows packaging. Distributed team networking, voice orchestration and automatic integration remain later milestones.
 
-## Desktop app (Arch Linux x86-64)
+## Desktop app (Linux and Windows x64)
 
-Mingle is intended to be installed as a desktop application. Linux packaging now targets a standalone Mingle bundle and the `mingle-bin` Arch package. No Mingle GitHub release or AUR entry has been published. Existing `relay-workspace-*` artifacts are pre-rename builds and keep their original filenames.
+Mingle is intended to be installed as a desktop application. Download available installers from [GitHub releases](https://github.com/AdithyanandanArun/Mingle-dev/releases). Debian/Ubuntu uses an amd64 `.deb`; Windows uses a per-user `.exe` installer. Temporary download prereleases are labeled separately from stable releases. The Windows installer is unsigned. There is no AUR entry yet. Existing `relay-workspace-*` artifacts are pre-rename builds and keep their original filenames.
+
+Build Debian packages with `pnpm package:deb` on Debian/Ubuntu, or Windows installers with `pnpm package:windows` on Windows x64 with NSIS 3.11 available. Both have manual GitHub Actions workflows with native runtime and installation checks; see [desktop distribution](docs/desktop-distribution.md).
 
 Build the installable package on Arch with `base-devel`, Node and pnpm available:
 

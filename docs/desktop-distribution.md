@@ -37,6 +37,16 @@ The package bundles Electron 44.9.0, the official Node 26.8.2 runtime, Mingle's 
 
 The Chromium sandbox helper is installed root-owned with mode `4755`, as required by Electron's Linux sandbox arrangement. The package does not turn off the sandbox. Review the [Arch package dependency guidance](https://wiki.archlinux.org/title/Arch_package_guidelines#Package_dependencies) and [Electron notes](https://wiki.archlinux.org/title/Electron) when maintaining the dependency list.
 
+## Temporary download verification — 2026-10-22
+
+The [Debian build](https://github.com/AdithyanandanArun/Mingle-dev/actions/runs/39784288177) built source `2e559ab` on Ubuntu 22.04 and passed package metadata/ownership checks, extracted and installed Node/PTY/SQLite/API/static-UI checks, sandboxed Electron rendering under Xvfb, and removal preserving a user-data sentinel. No package was installed on the owner's host.
+
+The [Windows build](https://github.com/AdithyanandanArun/Mingle-dev/actions/runs/39792501063) built source `6bad569` on Windows Server 2022. It passed bundled Node/SQLite/API/static-UI and native ConPTY checks, an isolated silent NSIS installation, launching the installed Electron executable and checking its rendered DOM, and uninstallation preserving a separate user-data sentinel. The NSIS executable is unsigned. Native PTY verification runs in a bounded child process because ConPTY cleanup handles can otherwise keep the packaging CLI alive after success.
+
+Windows uses a hoisted production dependency tree to keep installed paths short; Linux retains its existing pnpm layout. The legacy pnpm deployment may resolve versions within manifest ranges, so the packaged `resources/licenses/dependencies.json` records the versions actually distributed. The official Node archives are independently pinned by SHA-256. No paid provider inference ran in these packaging checks.
+
+The temporary prerelease includes `.deb`, `.exe` and their SHA-256 files. Before dispatching the manual publication workflow, create its temporary tag at the Windows build's source commit using an account with tag-push permission. The workflow verifies this binding and the completed native build/upload checks, then checksums the downloaded artifacts inside GitHub. It uploads a draft and publishes a prerelease with `latest=false`; its token does not create source tags. Temporary releases do not expire automatically; remove the temporary release and its tag after the requested downloads are complete.
+
 ## License metadata
 
 The repository does not currently declare a project license. The recipe records this as `unknown` and installs the license notices bundled in each release; it does not claim that those third-party notices license Mingle itself. Set the package license metadata only after the project owner selects and documents a project license. The build inventories both backend dependencies and bundled frontend dependencies and includes their license/notice files.
