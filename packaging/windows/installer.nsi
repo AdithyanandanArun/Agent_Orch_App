@@ -30,7 +30,7 @@ VIAddVersionKey "ProductVersion" "${APP_VERSION}"
 VIAddVersionKey "LegalCopyright" "Mingle"
 
 Page instfiles
-UninstPage un.confirm
+UninstPage uninstConfirm
 UninstPage instfiles
 
 Function .onInit
