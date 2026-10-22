@@ -11,8 +11,12 @@ const probe = createServer().listen(0, '127.0.0.1');
 await once(probe, 'listening');
 const port = probe.address().port;
 await new Promise(resolvePromise => probe.close(resolvePromise));
+const environment = { ...process.env, XDG_CONFIG_HOME: scratch, MINGLE_DATA_DIR: join(scratch, 'workspace') };
+delete environment.ELECTRON_RUN_AS_NODE;
+delete environment.NODE_OPTIONS;
+delete environment.NODE_PATH;
 const child = spawn(resolve(process.argv[2]), [`--remote-debugging-port=${port}`, '--disable-gpu'], {
-  env: { ...process.env, XDG_CONFIG_HOME: scratch, MINGLE_DATA_DIR: join(scratch, 'workspace') },
+  env: environment,
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 let logs = '';
