@@ -38,6 +38,7 @@ class FakeQuery {
   }
 
   private async execute(required: boolean, optional = false): Promise<{ data: unknown; error: { code: string } | null }> {
+    if (this.cloud.queryError) return { data: null, error: { code: this.cloud.queryError } };
     const rows = this.cloud.execute(this.table, this.operation, this.body, this.filters, this.columns);
     if (this.operation === 'delete') return { data: rows, error: null };
     if (required || optional) {
@@ -63,11 +64,14 @@ class FakeCloud {
   acceptedTokenHash: string | null = null;
   verifyCount = 0;
   offline = false;
+  queryError: string | null = null;
+  rpcError: string | null = null;
   private nextId = 0;
 
   readonly client = {
     from: (table: string) => new FakeQuery(this, table),
     rpc: async (name: string, params: Record<string, unknown>) => {
+      if (this.rpcError) return { data: null, error: { code: this.rpcError } };
       if (this.offline) return { data: null, error: { code: '08006' } };
       if (name !== 'accept_mingle_invitation') return { data: null, error: { code: '42883' } };
       const hash = params.p_token_hash;
@@ -153,6 +157,29 @@ it('creates a team with the live account as owner and notifies after persistence
   expect(cloud.verifyCount).toBe(1);
   expect(cloud.rows.mingle_teams).toHaveLength(1);
   expect(changed).toHaveBeenCalledTimes(1);
+});
+
+it.each(['42P01', 'PGRST205'])('reports missing cloud tables (%s) without pretending the workspace is empty or creating a team', async (code) => {
+  const { cloud, service, changed } = setup();
+  cloud.queryError = code;
+  await expect(service.snapshot()).resolves.toMatchObject({
+    configured: true, teams: [], error: expect.stringContaining('Team cloud setup is incomplete'),
+  });
+  await expect(service.createTeam({ name: 'The Tachyons' })).rejects.toMatchObject({
+    status: 503, message: expect.stringContaining('Team cloud setup is incomplete'),
+  });
+  expect(cloud.writes).toHaveLength(0);
+  expect(changed).not.toHaveBeenCalled();
+});
+
+it.each(['42883', 'PGRST202'])('reports missing invitation RPC (%s) without consuming an invitation', async (code) => {
+  const { cloud, service, changed } = setup();
+  cloud.rpcError = code;
+  await expect(service.acceptInvite({ token: 'example-invitation-token-long-enough' })).rejects.toMatchObject({
+    status: 503, message: expect.stringContaining('Team cloud setup is incomplete'),
+  });
+  expect(cloud.acceptedTokenHash).toBeNull();
+  expect(changed).not.toHaveBeenCalled();
 });
 
 it('persists only a SHA-256 invitation hash, returns the one-time token, and enforces seven-day expiry', async () => {

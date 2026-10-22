@@ -30,6 +30,9 @@ type CloudError = { code?: string | null } | null;
 type AccountBridge = Pick<AccountService, 'snapshot' | 'withAuthenticatedClient'>;
 
 function failCloud(error: CloudError, message: string): never {
+  if (['42P01', '42883', 'PGRST202', 'PGRST205'].includes(error?.code ?? '')) {
+    throw new HttpError(503, 'Team cloud setup is incomplete. Ask the workspace administrator to finish team workspace setup, then refresh.');
+  }
   if (error?.code === '23505') throw conflict('That team record already exists. Refresh the team snapshot and try again.');
   if (error?.code === '42501') throw new HttpError(403, 'Your active team role does not allow this operation.');
   if (error?.code === 'P0001') throw conflict('The invitation is invalid, expired, already accepted, or belongs to another account.');
