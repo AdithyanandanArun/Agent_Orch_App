@@ -1,6 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { spawn } from 'node:child_process';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -21,6 +22,10 @@ export class AccountService {
   private callbackWork: Promise<void> | null = null;
   private closing = new AbortController();
   private locked = false;
+  private mutationInProgress = false;
+  private generation = 0;
+  private accountOperations = new AbortController();
+  private readonly authenticatedOperationContext = new AsyncLocalStorage<{ client: SupabaseClient; generation: number }>();
   private state: AccountState = {
     configured: false, connection: null, configurationSource: 'none', status: 'restoring', user: null,
     sessionStorage: 'memory', error: null, authorizationUrl: null, browserError: null,
@@ -62,22 +67,44 @@ export class AccountService {
   }
   private get connectionFile() { return path.join(this.dataDir, 'account-connection.json'); }
   private connect(connection: AccountConnection) {
+    this.fenceAccountOperations();
     this.state.connection = { ...connection, url: new URL(connection.url).origin };
     this.state.configured = true;
     this.client = createClient(connection.url, connection.publishableKey, {
       auth: { flowType: 'pkce', detectSessionInUrl: false, persistSession: true, autoRefreshToken: true, storageKey: STORAGE_KEY, storage: this.vault! },
-      global: { fetch: (input, init) => fetch(input, { ...init, signal: AbortSignal.any([this.closing.signal, AbortSignal.timeout(15_000), ...(init?.signal ? [init.signal] : [])]) }) },
+      global: { fetch: (input, init) => {
+        const context = this.authenticatedOperationContext.getStore();
+        if (context && (this.mutationInProgress || context.generation !== this.generation || context.client !== this.client)) {
+          return Promise.reject(conflict('The account changed while this cloud operation was running. Retry with the current account.'));
+        }
+        return fetch(input, { ...init, signal: AbortSignal.any([this.closing.signal, this.accountOperations.signal, AbortSignal.timeout(15_000), ...(init?.signal ? [init.signal] : [])]) });
+      } },
     });
     this.client.auth.onAuthStateChange((event) => {
-      if (event === 'SIGNED_OUT') this.notify({ user: null, status: 'signed-out', authorizationUrl: null });
+      if (event === 'SIGNED_OUT') {
+        this.fenceAccountOperations();
+        this.notify({ user: null, status: 'signed-out', authorizationUrl: null });
+      }
     });
   }
-  private async exclusive<T>(work: () => Promise<T>): Promise<T> {
+  private fenceAccountOperations() {
+    this.generation++;
+    this.accountOperations.abort();
+    this.accountOperations = new AbortController();
+  }
+  private async exclusive<T>(work: () => Promise<T>, fenceAccount = false): Promise<T> {
     await this.ready;
     if (this.closing.signal.aborted) throw new HttpError(503, 'Account service is shutting down.');
     if (this.locked) throw conflict('An account operation is in progress. Try again when it finishes.');
     this.locked = true;
-    try { return await work(); } finally { this.locked = false; }
+    if (fenceAccount) {
+      this.mutationInProgress = true;
+      this.fenceAccountOperations();
+    }
+    try { return await work(); } finally {
+      this.locked = false;
+      if (fenceAccount) this.mutationInProgress = false;
+    }
   }
   configure(connection: AccountConnection): Promise<AccountState> {
     return this.exclusive(async () => {
@@ -89,18 +116,62 @@ export class AccountService {
       this.connect(connection);
       this.notify({ configurationSource: 'device', error: null });
       return this.snapshot();
-    });
+    }, true);
   }
-  private async verifyUser(): Promise<User> {
-    if (!this.client) throw new HttpError(409, 'Configure the Supabase account connection first.');
-    const { data, error } = await this.client.auth.getUser();
+  private async verifyUser(client: SupabaseClient | null = this.client): Promise<User> {
+    if (!client) throw new HttpError(409, 'Configure the Supabase account connection first.');
+    const { data, error } = await client.auth.getUser();
     if (error || !data.user || data.user.is_anonymous || !data.user.identities?.some((identity) => identity.provider === 'google')) {
       throw new HttpError(401, 'Google sign-in is required. Sign in again.');
     }
     const user = data.user;
     const name = user.user_metadata?.full_name;
-    this.notify({ user: { id: user.id, email: user.email ?? null, name: typeof name === 'string' ? name.slice(0, 200) : null } });
+    const verifiedUser = { id: user.id, email: user.email ?? null, name: typeof name === 'string' ? name.slice(0, 200) : null };
+    if (this.state.user?.id !== verifiedUser.id || this.state.user.email !== verifiedUser.email || this.state.user.name !== verifiedUser.name) {
+      this.notify({ user: verifiedUser });
+    }
     return user;
+  }
+  /**
+   * Server-only bridge for account-scoped cloud operations. It verifies the live
+   * Supabase user for each call and fences work against sign-in/sign-out so a
+   * stale account cannot be used after a local authority change.
+   *
+   * Keep callback results inside the server. In particular, never serialize the
+   * Supabase client, session, access token or refresh token to the renderer.
+   */
+  async withAuthenticatedClient<T>(callback: (client: SupabaseClient, user: User) => Promise<T>): Promise<T> {
+    await this.ready;
+    if (this.closing.signal.aborted) throw new HttpError(503, 'Account service is shutting down.');
+    if (this.mutationInProgress || this.attempt) throw conflict('An account change is in progress. Try again when it finishes.');
+    const client = this.client;
+    if (!client) throw new HttpError(409, 'Configure the Supabase account connection first.');
+    const generation = this.generation;
+    let user: User;
+    try {
+      user = await this.verifyUser(client);
+    } catch (error) {
+      this.assertAccountGeneration(client, generation);
+      throw error;
+    }
+    this.assertAccountGeneration(client, generation, user.id);
+    let result: T;
+    try {
+      result = await this.authenticatedOperationContext.run({ client, generation }, () => callback(client, user));
+    } catch (error) {
+      this.assertAccountGeneration(client, generation, user.id);
+      throw error;
+    }
+    this.assertAccountGeneration(client, generation, user.id);
+    return result;
+  }
+  private assertAccountGeneration(client: SupabaseClient, generation: number, userId?: string) {
+    if (this.closing.signal.aborted) throw new HttpError(503, 'Account service is shutting down.');
+    if (this.mutationInProgress || this.generation !== generation || this.client !== client) {
+      throw conflict('The account changed while this cloud operation was running. Retry with the current account.');
+    }
+    if (userId && this.state.user?.id !== userId) throw conflict('The signed-in account changed while this cloud operation was running. Retry with the current account.');
+    if (this.attempt) throw conflict('An account change is in progress. Try again when it finishes.');
   }
   startSignIn(): Promise<AccountState> {
     return this.exclusive(async () => {
@@ -170,7 +241,7 @@ export class AccountService {
         this.notify({ status: 'signed-out', error: 'Could not start Google sign-in. Check the Supabase connection and Google provider configuration.' });
       }
       return this.snapshot();
-    });
+    }, true);
   }
   private async openBrowser(url: string) {
     const executable = process.platform === 'darwin' ? '/usr/bin/open' : process.platform === 'win32' ? path.join(process.env.SystemRoot ?? 'C:\\Windows', 'explorer.exe') : 'xdg-open';
@@ -190,7 +261,7 @@ export class AccountService {
       this.finishAttempt();
       this.notify({ status: this.state.user ? 'signed-in' : 'signed-out', error: null });
       return this.snapshot();
-    });
+    }, true);
   }
   private finishAttempt() {
     if (this.attempt) { clearTimeout(this.attempt.timer); this.attempt.server.close(); this.attempt.server.closeIdleConnections(); }
@@ -209,7 +280,7 @@ export class AccountService {
       if (this.state.connection) this.connect(this.state.connection);
       this.notify({ user: null, status: 'signed-out', error: result?.error ? 'Signed out on this device. The server could not confirm remote session revocation.' : null });
       return this.snapshot();
-    });
+    }, true);
   }
   loadPreferences(): Promise<SavedAccountPreferences | null> {
     return this.exclusive(async () => {
