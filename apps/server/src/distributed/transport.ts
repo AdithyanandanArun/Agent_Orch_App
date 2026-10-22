@@ -1,0 +1,824 @@
+import { createHash, randomUUID } from 'node:crypto';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import type { SupabaseClient, User } from '@supabase/supabase-js';
+import {
+  DistributedMessageKindSchema, LinkDeviceSchema, RegisterDeviceSchema, RevokeDeviceSchema,
+  SendDistributedMessageSchema,
+  type AuthenticatedTransportMessage, type DistributedDevice, type DistributedDeviceLink,
+  type DistributedMessageKind, type DistributedOutboxItem, type LinkDeviceInput,
+  type RegisterDeviceInput, type RevokeDeviceInput, type SendDistributedMessageInput,
+  type TransportSnapshot, type TransportStatus,
+} from '../../../../packages/contracts/src/devices.ts';
+import type { DatabaseSync } from 'node:sqlite';
+import { HttpError } from '../util.ts';
+import {
+  canonicalJson, fingerprintForPublicKeys, generateDeviceKeyMaterial, MAX_DISTRIBUTED_PAYLOAD_BYTES,
+  openEnvelope, restoreDeviceKeyMaterial, sealEnvelope,
+  type DeviceKeyMaterial, type SignedEnvelope,
+} from './crypto.ts';
+
+const DEVICE_COLUMNS = 'id,team_id,owner_id,name,signing_public_key,encryption_public_key,fingerprint,last_seen_at,revoked_at,created_at';
+const LINK_COLUMNS = 'team_id,device_id,peer_device_id,peer_fingerprint,created_at';
+const ENVELOPE_COLUMNS = 'id,team_id,from_device_id,to_device_id,idempotency_key,kind,ciphertext,nonce,signature,created_at,expires_at,received_at';
+// Keep a margin below the SQL seven-day maximum for network transit and database processing time.
+const DEFAULT_MESSAGE_TTL_MS = 7 * 24 * 60 * 60 * 1000 - 5 * 60 * 1000;
+const ONLINE_WINDOW_MS = 90_000;
+const MAX_RETRY_MS = 60 * 60 * 1000;
+const PAGE_SIZE = 100;
+const MAX_MAILBOX_ROWS_PER_SYNC = 10_000;
+const ALLOWED_CLOCK_SKEW_MS = 2 * 60 * 1000;
+
+/** The account bridge is deliberately structural so transport can be built before AccountService is integrated. */
+export interface AuthenticatedTransportAccount {
+  withAuthenticatedClient<T>(callback: (client: SupabaseClient, user: User) => Promise<T>): Promise<T>;
+  snapshot?(): { status?: string; user?: { id: string } | null };
+}
+
+export interface TransportStore { db: DatabaseSync }
+export interface TransportServiceOptions {
+  account: AuthenticatedTransportAccount;
+  store: TransportStore;
+  dataDir: string;
+  changed?: () => void;
+  now?: () => number;
+  retryBaseMs?: number;
+  onlineWindowMs?: number;
+  messageTtlMs?: number;
+  syncIntervalMs?: number;
+}
+
+export type TransportMessageHandler = (message: AuthenticatedTransportMessage) => void | Promise<void>;
+
+interface CloudError { code?: string; message?: string }
+interface CloudResult<T> { data: T | null; error: CloudError | null }
+interface CloudDeviceRow {
+  id: string; team_id: string; owner_id: string; name: string; signing_public_key: string; encryption_public_key: string;
+  fingerprint: string; last_seen_at: string | null; revoked_at: string | null; created_at: string;
+}
+interface CloudLinkRow { team_id: string; device_id: string; peer_device_id: string; peer_fingerprint: string; created_at: string }
+interface CloudEnvelopeRow {
+  id: string; team_id: string; from_device_id: string; to_device_id: string; idempotency_key: string; kind: string;
+  ciphertext: string; nonce: string; signature: string; created_at: string; expires_at: string; received_at: string;
+}
+interface LocalDeviceRow { account_id: string; team_id: string; device_id: string; name: string; registered: number }
+interface LocalEnvelopeRow {
+  id: string; account_id: string; team_id: string; from_device_id: string; to_device_id: string;
+  idempotency_key: string; kind: string; envelope_json: string; status: string; attempts: number;
+  next_attempt_at: number; error: string | null; created_at: string; expires_at: string; received_at?: string;
+}
+interface StoredKeyFile {
+  version: 1;
+  accountId: string;
+  signingPrivateKeyDer: string;
+  signingPublicKeyDer: string;
+  encryptionPrivateKeyDer: string;
+  encryptionPublicKeyDer: string;
+}
+
+/**
+ * Outbound-only, authenticated cloud mailbox. SQLite rows contain ciphertext and public metadata only;
+ * private X25519/Ed25519 key material is kept in an account-scoped 0600 file under the runtime data dir.
+ */
+export class TransportService {
+  private readonly db: DatabaseSync;
+  private readonly handlers = new Set<TransportMessageHandler>();
+  private readonly keyCache = new Map<string, DeviceKeyMaterial>();
+  private activeAccountId: string | null = null;
+  private status: TransportStatus = 'unregistered';
+  private lastError: string | null = null;
+  private lastSyncAt: number | null = null;
+  private syncPromise: Promise<void> | null = null;
+  private timer: NodeJS.Timeout | null = null;
+  private closed = false;
+  private readonly now: () => number;
+  private readonly retryBaseMs: number;
+  private readonly onlineWindowMs: number;
+  private readonly messageTtlMs: number;
+
+  constructor(private readonly options: TransportServiceOptions) {
+    this.db = options.store.db;
+    this.now = options.now ?? Date.now;
+    this.retryBaseMs = Math.max(0, options.retryBaseMs ?? 1_000);
+    this.onlineWindowMs = options.onlineWindowMs ?? ONLINE_WINDOW_MS;
+    this.messageTtlMs = Math.min(DEFAULT_MESSAGE_TTL_MS, Math.max(1, options.messageTtlMs ?? DEFAULT_MESSAGE_TTL_MS));
+    this.ensureTables();
+  }
+
+  /** Starts the optional outbound polling loop; no inbound listener or network port is opened. */
+  start(): void {
+    if (this.closed || this.timer) return;
+    const intervalMs = this.options.syncIntervalMs ?? 20_000;
+    void this.sync();
+    this.timer = setInterval(() => { void this.sync(); }, Math.max(1_000, intervalMs));
+    this.timer.unref();
+  }
+
+  snapshot(teamId?: string): TransportSnapshot {
+    const accountId = this.currentAccountId();
+    if (!accountId) return { deviceId: null, devices: [], links: [], outbox: [], status: 'signed-out', error: null };
+    const localDevices = this.db.prepare(`SELECT * FROM mingle_transport_local_devices WHERE account_id = ?${teamId ? ' AND team_id = ?' : ''} ORDER BY team_id`)
+      .all(...(teamId ? [accountId, teamId] : [accountId])) as unknown as LocalDeviceRow[];
+    const chosen = localDevices.find((row) => row.registered === 1) ?? null;
+    const devices = (this.db.prepare(`SELECT * FROM mingle_transport_devices_cache WHERE account_id = ?${teamId ? ' AND team_id = ?' : ''} ORDER BY created_at,id`)
+      .all(...(teamId ? [accountId, teamId] : [accountId])) as Record<string, unknown>[]).map((row) => this.publicDevice(row));
+    const links = (this.db.prepare(`SELECT * FROM mingle_transport_links_cache WHERE account_id = ?${teamId ? ' AND team_id = ?' : ''} ORDER BY created_at,device_id,peer_device_id`)
+      .all(...(teamId ? [accountId, teamId] : [accountId])) as Record<string, unknown>[]).map((row) => this.publicLink(row));
+    const outbox = (this.db.prepare(`SELECT id,team_id,to_device_id,kind,created_at,expires_at,status,attempts,error FROM mingle_transport_outbox WHERE account_id = ?${teamId ? ' AND team_id = ?' : ''} ORDER BY created_at DESC LIMIT 100`)
+      .all(...(teamId ? [accountId, teamId] : [accountId])) as Record<string, unknown>[]).map((row) => this.publicOutbox(row));
+    const hasActiveDevice = localDevices.some((row) => row.registered === 1);
+    let status = this.status;
+    if (!hasActiveDevice) status = 'unregistered';
+    else if (this.lastSyncAt !== null && this.now() - this.lastSyncAt > this.onlineWindowMs && status === 'ready') status = 'offline';
+    return { deviceId: chosen?.device_id ?? null, devices, links, outbox, status, error: this.lastError };
+  }
+
+  register(input: RegisterDeviceInput): Promise<DistributedDevice> {
+    const request = RegisterDeviceSchema.parse(input);
+    return this.withAccount(async (client, user, keys) => {
+      let identity = this.ensureLocalIdentity(user.id, request);
+      let existing = await this.query<CloudDeviceRow | null>(
+        client.from('mingle_devices').select(DEVICE_COLUMNS).eq('team_id', request.teamId).eq('id', identity.device_id).maybeSingle(),
+        'Device registration could not be checked in the cloud.',
+      );
+      if (existing?.revoked_at) {
+        identity = this.rotateLocalIdentity(user.id, request);
+        existing = null;
+      }
+      let row: CloudDeviceRow;
+      if (existing) {
+        if (existing.owner_id !== user.id) throw new HttpError(409, 'This device identifier belongs to another account.');
+        if (existing.fingerprint !== keys.fingerprint || existing.signing_public_key !== keys.signingPublicKeyDer || existing.encryption_public_key !== keys.encryptionPublicKeyDer) {
+          throw new HttpError(409, 'The registered device keys no longer match this runtime identity.');
+        }
+        if (existing.name !== request.name) throw new HttpError(409, 'Device names are immutable after registration; revoke and register a new device identity to rename it.');
+        const updated = await this.query<CloudDeviceRow | null>(client.from('mingle_devices')
+          .update({ last_seen_at: this.isoNow() }).eq('team_id', request.teamId).eq('id', identity.device_id)
+          .eq('owner_id', user.id).is('revoked_at', null).select(DEVICE_COLUMNS).maybeSingle(),
+        'Device registration could not be refreshed.');
+        if (!updated) throw new HttpError(403, 'This account cannot refresh the registered device.');
+        row = updated;
+      } else {
+        const created = await this.query<CloudDeviceRow | null>(client.from('mingle_devices').insert({
+          id: identity.device_id, team_id: request.teamId, owner_id: user.id, name: request.name,
+          signing_public_key: keys.signingPublicKeyDer, encryption_public_key: keys.encryptionPublicKeyDer,
+          fingerprint: keys.fingerprint, last_seen_at: this.isoNow(), created_at: this.isoNow(),
+        }).select(DEVICE_COLUMNS).maybeSingle(), 'Device registration failed. Confirm active team membership and cloud schema.');
+        if (!created) throw new HttpError(502, 'The cloud did not confirm device registration.');
+        row = created;
+      }
+      this.db.prepare('UPDATE mingle_transport_local_devices SET name = ?, registered = 1 WHERE account_id = ? AND team_id = ? AND device_id = ?')
+        .run(request.name, user.id, request.teamId, identity.device_id);
+      this.cacheDevice(user.id, row);
+      this.markHealthy();
+      return this.publicDevice(this.deviceCacheRow(user.id, request.teamId, identity.device_id)!);
+    }).then(async (device) => { await this.sync(); return device; });
+  }
+
+  /** Adds this device's unilateral fingerprint pin; delivery is enabled only after the peer pins us too. */
+  link(input: LinkDeviceInput): Promise<DistributedDeviceLink> {
+    const request = LinkDeviceSchema.parse(input);
+    return this.withAccount(async (client, user) => {
+      const own = this.requireLocalDevice(user.id, request.teamId);
+      if (own.device_id === request.deviceId) throw new HttpError(400, 'A device cannot be linked to itself.');
+      const peer = await this.query<CloudDeviceRow | null>(client.from('mingle_devices').select(DEVICE_COLUMNS)
+        .eq('team_id', request.teamId).eq('id', request.deviceId).maybeSingle(), 'The peer device could not be checked.');
+      if (!peer || peer.revoked_at) throw new HttpError(404, 'The peer device is not active in this team.');
+      if (fingerprintForPublicKeys(peer.signing_public_key, peer.encryption_public_key) !== peer.fingerprint || peer.fingerprint !== request.fingerprint) {
+        throw new HttpError(409, 'Peer fingerprint verification failed. Compare the fingerprint before linking.');
+      }
+      const current = await this.query<CloudLinkRow | null>(client.from('mingle_device_links').select(LINK_COLUMNS)
+        .eq('team_id', request.teamId).eq('device_id', own.device_id).eq('peer_device_id', peer.id).maybeSingle(), 'The device link could not be checked.');
+      if (current && current.peer_fingerprint !== peer.fingerprint) {
+        // Re-pairing is an explicit delete + insert because the cloud link table has no UPDATE grant.
+        await this.query<unknown>(client.from('mingle_device_links').delete().eq('team_id', request.teamId)
+          .eq('device_id', own.device_id).eq('peer_device_id', peer.id), 'The stale device fingerprint pin could not be removed.');
+      }
+      if (!current || current.peer_fingerprint !== peer.fingerprint) {
+        const inserted = await this.query<CloudLinkRow | null>(client.from('mingle_device_links').insert({
+          team_id: request.teamId, device_id: own.device_id, peer_device_id: peer.id,
+          peer_fingerprint: peer.fingerprint, created_at: this.isoNow(),
+        }).select(LINK_COLUMNS).maybeSingle(), 'Device linking failed. Confirm team membership and active device status.');
+        if (!inserted) throw new HttpError(502, 'The cloud did not confirm the device link.');
+      }
+      await this.refreshTeam(client, user.id, request.teamId, own.device_id);
+      const link = this.linkCacheRow(user.id, request.teamId, own.device_id, peer.id);
+      if (!link) throw new HttpError(502, 'The cloud did not return the device link.');
+      this.markHealthy();
+      return this.publicLink(link);
+    });
+  }
+
+  /** Revokes a device owned by this account, or removes this device's pin to another account's device. */
+  revoke(input: RevokeDeviceInput): Promise<void> {
+    const request = RevokeDeviceSchema.parse(input);
+    return this.withAccount(async (client, user) => {
+      const target = await this.query<CloudDeviceRow | null>(client.from('mingle_devices').select(DEVICE_COLUMNS)
+        .eq('team_id', request.teamId).eq('id', request.deviceId).maybeSingle(), 'The device could not be checked for revocation.');
+      if (!target) throw new HttpError(404, 'The device is not visible in this team.');
+      if (target.owner_id === user.id) {
+        if (!target.revoked_at) {
+          const updated = await this.query<CloudDeviceRow | null>(client.from('mingle_devices')
+            .update({ revoked_at: this.isoNow() }).eq('team_id', request.teamId).eq('id', request.deviceId)
+            .eq('owner_id', user.id).is('revoked_at', null).select(DEVICE_COLUMNS).maybeSingle(),
+          'Device revocation failed.');
+          if (!updated) throw new HttpError(403, 'This account cannot revoke that device.');
+          this.cacheDevice(user.id, updated);
+        }
+        this.db.prepare('UPDATE mingle_transport_local_devices SET registered = 0 WHERE account_id = ? AND team_id = ? AND device_id = ?')
+          .run(user.id, request.teamId, request.deviceId);
+        this.db.prepare(`UPDATE mingle_transport_outbox SET status = 'expired', error = 'Sender device was revoked.'
+          WHERE account_id = ? AND team_id = ? AND from_device_id = ? AND status = 'queued'`)
+          .run(user.id, request.teamId, request.deviceId);
+        await this.query<unknown>(client.from('mingle_device_links').delete().eq('team_id', request.teamId).eq('device_id', request.deviceId), 'Device trust links could not be removed.');
+      } else {
+        const own = this.requireLocalDevice(user.id, request.teamId);
+        await this.query<unknown>(client.from('mingle_device_links').delete().eq('team_id', request.teamId)
+          .eq('device_id', own.device_id).eq('peer_device_id', request.deviceId), 'The peer device link could not be revoked.');
+        this.db.prepare('DELETE FROM mingle_transport_links_cache WHERE account_id = ? AND team_id = ? AND device_id = ? AND peer_device_id = ?')
+          .run(user.id, request.teamId, own.device_id, request.deviceId);
+      }
+      this.lastError = null;
+      this.options.changed?.();
+    });
+  }
+
+  /** Persists an encrypted envelope before attempting the cloud insert; returned id survives restarts. */
+  send(input: SendDistributedMessageInput): Promise<string> {
+    const request = SendDistributedMessageSchema.parse(input);
+    let payloadJson: string;
+    try { payloadJson = canonicalJson(request.payload); }
+    catch { throw new HttpError(400, 'Distributed payload must be a finite JSON value.'); }
+    if (Buffer.byteLength(payloadJson, 'utf8') > MAX_DISTRIBUTED_PAYLOAD_BYTES) throw new HttpError(413, 'Distributed payload exceeds the 256 KiB limit.');
+    return this.withAccount(async (client, user, keys) => {
+      const own = this.requireLocalDevice(user.id, request.teamId);
+      if (own.registered !== 1) throw new HttpError(409, 'Register this device in the team before sending.');
+      await this.refreshTeam(client, user.id, request.teamId, own.device_id);
+      const peer = this.deviceCacheRow(user.id, request.teamId, request.toDeviceId);
+      if (!peer || peer.revoked_at) throw new HttpError(409, 'The destination device is not currently active in the cached team roster. Sync and verify it before sending.');
+      const peerFingerprint = fingerprintForPublicKeys(peer.signing_public_key, peer.encryption_public_key);
+      if (peerFingerprint !== peer.fingerprint) throw new HttpError(409, 'The destination device key fingerprint is invalid.');
+      const ownPin = this.linkCacheRow(user.id, request.teamId, own.device_id, request.toDeviceId);
+      const peerPin = this.linkCacheRow(user.id, request.teamId, request.toDeviceId, own.device_id);
+      if (!ownPin || ownPin.peer_fingerprint !== peer.fingerprint || !peerPin || peerPin.peer_fingerprint !== this.ownFingerprint(user.id, request.teamId)) {
+        throw new HttpError(403, 'Device-to-device delivery requires both devices to pin each other\'s current fingerprints.');
+      }
+      const prior = this.db.prepare(`SELECT * FROM mingle_transport_outbox WHERE account_id = ? AND team_id = ? AND from_device_id = ? AND to_device_id = ? AND idempotency_key = ?`)
+        .get(user.id, request.teamId, own.device_id, request.toDeviceId, request.idempotencyKey) as LocalEnvelopeRow | undefined;
+      if (prior) {
+        const old = JSON.parse(prior.envelope_json) as SignedEnvelope;
+        const priorPayload = openEnvelope({ envelope: old, recipient: keys, senderSigningPublicKey: keys.signingPublicKeyDer, senderEncryptionPublicKey: peer.encryption_public_key });
+        if (canonicalJson(priorPayload) !== canonicalJson(request.payload)) throw new HttpError(409, 'This idempotency key was already used for a different message.');
+        return prior.id;
+      }
+      const createdAt = this.isoNow();
+      const header = {
+        id: randomUUID(), teamId: request.teamId, fromDeviceId: own.device_id, toDeviceId: request.toDeviceId,
+        idempotencyKey: request.idempotencyKey, kind: request.kind, createdAt,
+        expiresAt: new Date(this.now() + this.messageTtlMs).toISOString(),
+      };
+      const envelope = sealEnvelope({ header, payload: request.payload, sender: keys, recipientEncryptionPublicKey: peer.encryption_public_key });
+      this.db.prepare(`INSERT INTO mingle_transport_outbox
+        (id,account_id,team_id,from_device_id,to_device_id,idempotency_key,kind,envelope_json,status,attempts,next_attempt_at,error,created_at,expires_at)
+        VALUES (?,?,?,?,?,?,?,?, 'queued',0,?,NULL,?,?)`)
+        .run(envelope.id, user.id, request.teamId, own.device_id, request.toDeviceId, request.idempotencyKey,
+          request.kind, JSON.stringify(envelope), this.now(), envelope.createdAt, envelope.expiresAt);
+      await this.flushOutbox(client, user.id, request.teamId, own.device_id);
+      this.options.changed?.();
+      return envelope.id;
+    });
+  }
+
+  onMessage(handler: TransportMessageHandler): () => void {
+    if (this.closed) throw new Error('Transport service is closed.');
+    this.handlers.add(handler);
+    void this.sync();
+    return () => this.handlers.delete(handler);
+  }
+
+  /** Pulls all teams registered by the active account, refreshes trust/presence, then drains durable inbox work. */
+  sync(): Promise<void> {
+    if (this.closed) return Promise.resolve();
+    if (this.syncPromise) return this.syncPromise;
+    this.syncPromise = this.runSync().catch((error: unknown) => {
+      this.recordFailure(this.isSignedIn() ? 'The distributed mailbox is temporarily unavailable.' : 'Sign in to the Mingle account to sync devices.');
+      if (this.isSignedIn()) this.status = 'offline';
+      this.options.changed?.();
+    }).finally(() => { this.syncPromise = null; });
+    return this.syncPromise;
+  }
+
+  async close(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+    await this.syncPromise;
+    this.handlers.clear();
+    this.keyCache.clear();
+  }
+
+  private async runSync(): Promise<void> {
+    await this.withAccount(async (client, user) => {
+      this.lastError = null;
+      const localDevices = this.localDevices(user.id).filter((row) => row.registered === 1);
+      if (localDevices.length === 0) {
+        this.activeAccountId = user.id;
+        this.status = 'unregistered';
+        this.lastError = null;
+        this.options.changed?.();
+        return;
+      }
+      for (const local of localDevices) {
+        try {
+          await this.refreshTeam(client, user.id, local.team_id, local.device_id);
+          await this.flushOutbox(client, user.id, local.team_id, local.device_id);
+          await this.pullInbox(client, user.id, local.team_id, local.device_id);
+        } catch {
+          this.recordFailure('A team mailbox could not be synchronized.');
+        }
+      }
+      this.lastSyncAt = this.now();
+      if (this.lastError) this.status = 'offline';
+      else this.markHealthy();
+      // Do not invoke external handlers while the account bridge holds its authenticated-client callback.
+      await Promise.resolve();
+      this.options.changed?.();
+    });
+    if (this.handlers.size > 0) await this.deliverPending();
+  }
+
+  private async refreshTeam(client: SupabaseClient, accountId: string, teamId: string, deviceId: string): Promise<void> {
+    const heartbeat = await this.query<CloudDeviceRow | null>(client.from('mingle_devices')
+      .update({ last_seen_at: this.isoNow() }).eq('team_id', teamId).eq('id', deviceId).eq('owner_id', accountId)
+      .is('revoked_at', null).select(DEVICE_COLUMNS).maybeSingle(), 'The local device is no longer active in this team.');
+    if (!heartbeat) {
+      this.db.prepare('UPDATE mingle_transport_local_devices SET registered = 0 WHERE account_id = ? AND team_id = ? AND device_id = ?')
+        .run(accountId, teamId, deviceId);
+      this.db.prepare(`UPDATE mingle_transport_outbox SET status = 'expired', error = 'Sender device is no longer active.'
+        WHERE account_id = ? AND team_id = ? AND from_device_id = ? AND status = 'queued'`)
+        .run(accountId, teamId, deviceId);
+      throw new HttpError(403, 'The local device is no longer active.');
+    }
+    const [devices, links] = await Promise.all([
+      this.query<CloudDeviceRow[]>(client.from('mingle_devices').select(DEVICE_COLUMNS).eq('team_id', teamId).order('created_at', { ascending: true }), 'The team device roster could not be loaded.'),
+      this.query<CloudLinkRow[]>(client.from('mingle_device_links').select(LINK_COLUMNS).eq('team_id', teamId).order('created_at', { ascending: true }), 'The team trust links could not be loaded.'),
+    ]);
+    const rows = (devices ?? []).map((row) => ({ ...row }));
+    // The heartbeat response is authoritative for this device even if a policy omits it from the roster query.
+    if (!rows.some((row) => row.id === deviceId)) rows.push(heartbeat);
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db.prepare('DELETE FROM mingle_transport_devices_cache WHERE account_id = ? AND team_id = ?').run(accountId, teamId);
+      for (const row of rows) this.insertCachedDevice(accountId, row);
+      this.db.prepare('DELETE FROM mingle_transport_links_cache WHERE account_id = ? AND team_id = ?').run(accountId, teamId);
+      for (const link of links ?? []) this.insertCachedLink(accountId, link, false);
+      this.recomputeMutualLinks(accountId, teamId);
+      this.db.exec('COMMIT');
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+    this.cacheDevice(accountId, heartbeat);
+  }
+
+  private async flushOutbox(client: SupabaseClient, accountId: string, teamId: string, deviceId: string): Promise<void> {
+    const entries = this.db.prepare(`SELECT * FROM mingle_transport_outbox WHERE account_id = ? AND team_id = ? AND from_device_id = ? AND status = 'queued' AND next_attempt_at <= ? ORDER BY created_at,id LIMIT 100`)
+      .all(accountId, teamId, deviceId, this.now()) as unknown as LocalEnvelopeRow[];
+    for (const entry of entries) {
+      if (Date.parse(entry.expires_at) <= this.now()) {
+        this.db.prepare(`UPDATE mingle_transport_outbox SET status = 'expired', error = 'Message expired before delivery.' WHERE id = ? AND account_id = ?`).run(entry.id, accountId);
+        continue;
+      }
+      const envelope = JSON.parse(entry.envelope_json) as SignedEnvelope;
+      const record = this.toCloudEnvelope(envelope);
+      try {
+        // The mailbox RLS policy intentionally hides sender-side envelope reads. ON CONFLICT DO NOTHING
+        // makes an identical retry after an uncertain network result an accepted idempotent write.
+        const { error } = await client.from('mingle_envelopes').upsert(record, {
+          onConflict: 'team_id,from_device_id,to_device_id,idempotency_key', ignoreDuplicates: true,
+        });
+        if (error) throw new Error('cloud-insert');
+        this.db.prepare(`UPDATE mingle_transport_outbox SET status = 'delivered', attempts = attempts + 1, next_attempt_at = 0, error = NULL WHERE id = ? AND account_id = ?`)
+          .run(entry.id, accountId);
+      } catch (error) {
+        const attempts = entry.attempts + 1;
+        const retry = Math.min(MAX_RETRY_MS, this.retryBaseMs * (2 ** Math.min(20, attempts - 1)));
+        const message = 'Mailbox delivery is waiting for a cloud retry.';
+        this.db.prepare(`UPDATE mingle_transport_outbox SET attempts = ?, next_attempt_at = ?, error = ? WHERE id = ? AND account_id = ? AND status = 'queued'`)
+          .run(attempts, this.now() + retry, message, entry.id, accountId);
+        this.lastError = message;
+      }
+    }
+  }
+
+  private async pullInbox(client: SupabaseClient, accountId: string, teamId: string, deviceId: string): Promise<void> {
+    const cutoff = new Date(this.now()).toISOString();
+    let total = 0;
+    while (total < MAX_MAILBOX_ROWS_PER_SYNC) {
+      const rows = await this.query<CloudEnvelopeRow[]>(client.from('mingle_envelopes').select(ENVELOPE_COLUMNS)
+        .eq('team_id', teamId).eq('to_device_id', deviceId).gte('expires_at', cutoff)
+        .order('received_at', { ascending: true }).order('id', { ascending: true }).range(0, PAGE_SIZE - 1),
+      'Incoming mailbox messages could not be loaded.');
+      const page = rows ?? [];
+      const durableIds: string[] = [];
+      for (const row of page) {
+        if (!this.persistIncoming(accountId, teamId, deviceId, row)) {
+          this.lastError = 'An inbox item could not be durably saved; it will remain in the cloud mailbox for retry.';
+          return;
+        }
+        durableIds.push(row.id);
+      }
+      if (durableIds.length > 0) {
+        // Local inbox inserts commit before this recipient-owned cloud delete. If deletion fails,
+        // the next page re-reads the rows and SQLite deduplication preserves pending work.
+        const { error } = await client.from('mingle_envelopes').delete()
+          .eq('team_id', teamId).eq('to_device_id', deviceId).in('id', durableIds);
+        if (error) {
+          this.lastError = 'A durably received mailbox item could not be acknowledged; it will be retried.';
+          return;
+        }
+      }
+      total += page.length;
+      if (page.length < PAGE_SIZE) return;
+    }
+    const remaining = await this.query<Array<{ id: string }>>(client.from('mingle_envelopes').select('id')
+      .eq('team_id', teamId).eq('to_device_id', deviceId).gte('expires_at', cutoff)
+      .order('received_at', { ascending: true }).order('id', { ascending: true }).range(0, 0),
+    'Remaining mailbox work could not be checked.');
+    if (remaining?.length) this.lastError = 'The mailbox exceeds the per-sync scan limit; remaining messages will continue on the next sync.';
+  }
+
+  private async deliverPending(): Promise<void> {
+    const accountId = this.currentAccountId();
+    if (!accountId) return;
+    const pending = this.db.prepare(`SELECT * FROM mingle_transport_inbox WHERE account_id = ? AND status = 'pending' AND next_attempt_at <= ? ORDER BY received_at,id LIMIT 100`)
+      .all(accountId, this.now()) as unknown as LocalEnvelopeRow[];
+    for (const row of pending) {
+      if (Date.parse(row.expires_at) <= this.now()) {
+        this.db.prepare(`UPDATE mingle_transport_inbox SET status = 'rejected', error = 'Message expired before delivery.' WHERE account_id = ? AND team_id = ? AND id = ?`)
+          .run(accountId, row.team_id, row.id);
+        continue;
+      }
+      const envelope = JSON.parse(row.envelope_json) as SignedEnvelope;
+      try {
+        // Refresh authenticated membership, device revocation and both fingerprint pins for every
+        // dispatch. RLS supplies the current account identity; cached presence is never authority.
+        const { own, senderRow } = await this.withAccount(async (client, user) => {
+          if (user.id !== accountId) throw new HttpError(401, 'The signed-in account changed during mailbox delivery.');
+          const own = this.requireLocalDevice(user.id, row.team_id);
+          if (own.device_id !== row.to_device_id) throw new Error('device-revoked');
+          await this.refreshTeam(client, user.id, row.team_id, own.device_id);
+          const senderRow = this.deviceCacheRow(user.id, row.team_id, row.from_device_id);
+          return { own, senderRow };
+        });
+        if (own.device_id !== row.to_device_id || !senderRow || senderRow.revoked_at ||
+          fingerprintForPublicKeys(senderRow.signing_public_key, senderRow.encryption_public_key) !== senderRow.fingerprint) {
+          throw new Error('device-revoked');
+        }
+        const ownFingerprint = this.ownFingerprint(accountId, row.team_id);
+        const ownPin = this.linkCacheRow(accountId, row.team_id, own.device_id, row.from_device_id);
+        const peerPin = this.linkCacheRow(accountId, row.team_id, row.from_device_id, own.device_id);
+        if (!ownPin || ownPin.peer_fingerprint !== senderRow.fingerprint || !peerPin || peerPin.peer_fingerprint !== ownFingerprint) throw new Error('link-revoked');
+        this.validateEnvelope(envelope, row.team_id, row.from_device_id, row.to_device_id);
+        const keys = this.loadKeys(accountId);
+        const payload = openEnvelope({ envelope, recipient: keys, senderSigningPublicKey: senderRow.signing_public_key, senderEncryptionPublicKey: senderRow.encryption_public_key });
+        const message: AuthenticatedTransportMessage = {
+          id: envelope.id, teamId: envelope.teamId, fromDeviceId: envelope.fromDeviceId,
+          toDeviceId: envelope.toDeviceId, kind: DistributedMessageKindSchema.parse(envelope.kind) as DistributedMessageKind,
+          payload,
+        };
+        const claim = this.db.prepare(`UPDATE mingle_transport_inbox SET status = 'dispatching' WHERE account_id = ? AND team_id = ? AND id = ? AND status = 'pending'`)
+          .run(accountId, row.team_id, row.id);
+        if (claim.changes !== 1) continue;
+        for (const handler of this.handlers) await handler(message);
+        this.db.prepare(`UPDATE mingle_transport_inbox SET status = 'handled', attempts = attempts + 1, next_attempt_at = 0, error = NULL WHERE account_id = ? AND team_id = ? AND id = ? AND status = 'dispatching'`)
+          .run(accountId, row.team_id, row.id);
+      } catch (error) {
+        const rejected = (error instanceof Error && ['device-revoked', 'link-revoked'].includes(error.message)) ||
+          (error instanceof HttpError && [401, 403, 404, 409].includes(error.status));
+        const attempts = row.attempts + 1;
+        const retry = Math.min(MAX_RETRY_MS, this.retryBaseMs * (2 ** Math.min(20, attempts - 1)));
+        const reason = rejected ? 'Current account membership, sender device, or mutual trust is no longer active.' : 'Message authentication or handler delivery failed.';
+        this.db.prepare(`UPDATE mingle_transport_inbox SET status = ?, attempts = ?, next_attempt_at = ?, error = ? WHERE account_id = ? AND team_id = ? AND id = ? AND status IN ('pending','dispatching')`)
+          .run(rejected ? 'rejected' : 'pending', attempts, rejected ? 0 : this.now() + retry, reason, accountId, row.team_id, row.id);
+        if (!rejected) this.lastError = reason;
+      }
+    }
+    this.options.changed?.();
+  }
+
+  private persistIncoming(accountId: string, teamId: string, deviceId: string, row: CloudEnvelopeRow): boolean {
+    let envelope: SignedEnvelope;
+    let receivedAt: string;
+    try {
+      if (typeof row.received_at !== 'string') return false;
+      envelope = this.fromCloudEnvelope(row);
+      receivedAt = normalizePostgresInstantForOrder(row.received_at);
+      if (envelope.teamId !== teamId || envelope.toDeviceId !== deviceId) return true;
+      this.validateEnvelope(envelope, teamId, envelope.fromDeviceId, deviceId);
+    } catch {
+      // Invalid routes, timestamps and expired rows are acknowledged rather than blocking later mail.
+      return true;
+    }
+    let sender: Record<string, any> | undefined;
+    let keys: DeviceKeyMaterial;
+    try {
+      sender = this.deviceCacheRow(accountId, teamId, envelope.fromDeviceId);
+      const own = this.deviceCacheRow(accountId, teamId, deviceId);
+      if (!sender || !own || sender.revoked_at || own.revoked_at) return true;
+      // Local database/key-store errors must leave the relay item available for a later retry.
+      keys = this.loadKeys(accountId);
+    } catch { return false; }
+    try {
+      // Reject cryptographic tampering before retaining even an inbox record.
+      openEnvelope({ envelope, recipient: keys, senderSigningPublicKey: sender.signing_public_key, senderEncryptionPublicKey: sender.encryption_public_key });
+    } catch { return true; }
+    try {
+      this.db.prepare(`INSERT OR IGNORE INTO mingle_transport_inbox
+        (id,account_id,team_id,from_device_id,to_device_id,idempotency_key,kind,envelope_json,status,attempts,next_attempt_at,error,created_at,expires_at,received_at)
+        VALUES (?,?,?,?,?,?,?,?, 'pending',0,0,NULL,?,?,?)`)
+        .run(envelope.id, accountId, teamId, envelope.fromDeviceId, envelope.toDeviceId, envelope.idempotencyKey,
+          envelope.kind, JSON.stringify(envelope), envelope.createdAt, envelope.expiresAt, receivedAt);
+      return true;
+    } catch { return false; }
+  }
+
+  private validateEnvelope(envelope: SignedEnvelope, teamId: string, fromDeviceId: string, toDeviceId: string): void {
+    if (!isUuid(envelope.id) || !isUuid(envelope.teamId) || !isUuid(envelope.fromDeviceId) || !isUuid(envelope.toDeviceId) ||
+      envelope.teamId !== teamId || envelope.fromDeviceId !== fromDeviceId || envelope.toDeviceId !== toDeviceId ||
+      typeof envelope.idempotencyKey !== 'string' || !/^[A-Za-z0-9._:-]{1,200}$/.test(envelope.idempotencyKey) ||
+      !DistributedMessageKindSchema.safeParse(envelope.kind).success || typeof envelope.createdAt !== 'string' || typeof envelope.expiresAt !== 'string') {
+      throw new Error('invalid-route');
+    }
+    const created = Date.parse(envelope.createdAt);
+    const expires = Date.parse(envelope.expiresAt);
+    if (!Number.isFinite(created) || !Number.isFinite(expires) || created > this.now() + ALLOWED_CLOCK_SKEW_MS ||
+      expires <= this.now() || expires <= created || expires - created > this.messageTtlMs + ALLOWED_CLOCK_SKEW_MS) throw new Error('invalid-expiry');
+  }
+
+  private ensureLocalIdentity(accountId: string, input: RegisterDeviceInput): LocalDeviceRow {
+    let row = this.db.prepare('SELECT * FROM mingle_transport_local_devices WHERE account_id = ? AND team_id = ?')
+      .get(accountId, input.teamId) as unknown as LocalDeviceRow | undefined;
+    if (!row) {
+      const deviceId = randomUUID();
+      this.db.prepare(`INSERT INTO mingle_transport_local_devices(account_id,team_id,device_id,name,registered) VALUES(?,?,?,?,0)`)
+        .run(accountId, input.teamId, deviceId, input.name);
+      row = this.db.prepare('SELECT * FROM mingle_transport_local_devices WHERE account_id = ? AND team_id = ?')
+        .get(accountId, input.teamId) as unknown as LocalDeviceRow;
+    }
+    return row;
+  }
+
+  private localDevices(accountId: string): LocalDeviceRow[] {
+    return this.db.prepare('SELECT * FROM mingle_transport_local_devices WHERE account_id = ? ORDER BY team_id')
+      .all(accountId) as unknown as LocalDeviceRow[];
+  }
+
+  private rotateLocalIdentity(accountId: string, input: RegisterDeviceInput): LocalDeviceRow {
+    const deviceId = randomUUID();
+    this.db.prepare('UPDATE mingle_transport_local_devices SET device_id = ?, name = ?, registered = 0 WHERE account_id = ? AND team_id = ?')
+      .run(deviceId, input.name, accountId, input.teamId);
+    return this.db.prepare('SELECT * FROM mingle_transport_local_devices WHERE account_id = ? AND team_id = ?')
+      .get(accountId, input.teamId) as unknown as LocalDeviceRow;
+  }
+
+  private requireLocalDevice(accountId: string, teamId: string): LocalDeviceRow {
+    const row = this.db.prepare('SELECT * FROM mingle_transport_local_devices WHERE account_id = ? AND team_id = ?')
+      .get(accountId, teamId) as LocalDeviceRow | undefined;
+    if (!row || row.registered !== 1) throw new HttpError(409, 'Register this device in the team before using its mailbox.');
+    return row;
+  }
+
+  private withAccount<T>(work: (client: SupabaseClient, user: User, keys: DeviceKeyMaterial) => Promise<T>): Promise<T> {
+    return this.options.account.withAuthenticatedClient(async (client, user) => {
+      if (!user?.id || user.is_anonymous) throw new HttpError(401, 'A verified Mingle account is required for distributed devices.');
+      if (this.activeAccountId && this.activeAccountId !== user.id) this.keyCache.delete(this.activeAccountId);
+      this.activeAccountId = user.id;
+      const keys = this.loadKeys(user.id);
+      try {
+        const result = await work(client, user, keys);
+        if (!this.lastError) this.status = this.localDevices(user.id).some((row) => row.registered === 1) ? 'ready' : 'unregistered';
+        return result;
+      } catch (error) {
+        if (error instanceof HttpError) throw error;
+        this.recordFailure('The authenticated cloud operation could not be completed.');
+        throw new HttpError(502, 'The authenticated cloud operation could not be completed.');
+      } finally { this.options.changed?.(); }
+    });
+  }
+
+  private loadKeys(accountId: string): DeviceKeyMaterial {
+    const cached = this.keyCache.get(accountId);
+    if (cached) return cached;
+    const directory = path.join(this.options.dataDir, 'distributed', 'keys');
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    try { chmodSync(directory, 0o700); } catch { /* Windows does not expose POSIX directory modes. */ }
+    const file = path.join(directory, `${createHash('sha256').update(accountId).digest('hex')}.json`);
+    let keys: DeviceKeyMaterial;
+    if (existsSync(file)) {
+      const info = lstatSync(file);
+      if (!info.isFile() || info.isSymbolicLink()) throw new Error('Device key file must be a regular file.');
+      try { chmodSync(file, 0o600); } catch { /* Windows does not expose POSIX file modes. */ }
+      const saved = JSON.parse(readFileSync(file, 'utf8')) as StoredKeyFile;
+      if (saved.version !== 1 || saved.accountId !== accountId) throw new Error('Device key file belongs to another account or version.');
+      keys = restoreDeviceKeyMaterial(saved);
+    } else {
+      keys = generateDeviceKeyMaterial();
+      const saved: StoredKeyFile = {
+        version: 1, accountId, signingPrivateKeyDer: keys.signingPrivateKeyDer,
+        signingPublicKeyDer: keys.signingPublicKeyDer, encryptionPrivateKeyDer: keys.encryptionPrivateKeyDer,
+        encryptionPublicKeyDer: keys.encryptionPublicKeyDer,
+      };
+      const temporary = `${file}.${randomUUID()}.tmp`;
+      writeFileSync(temporary, JSON.stringify(saved), { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+      try { renameSync(temporary, file); } catch (error) { throw error; }
+      try { chmodSync(file, 0o600); } catch { /* Windows does not expose POSIX file modes. */ }
+    }
+    this.keyCache.set(accountId, keys);
+    return keys;
+  }
+
+  private cacheDevice(accountId: string, row: CloudDeviceRow): void {
+    this.insertCachedDevice(accountId, row);
+  }
+
+  private insertCachedDevice(accountId: string, row: CloudDeviceRow): void {
+    this.db.prepare(`INSERT INTO mingle_transport_devices_cache
+      (account_id,team_id,id,owner_id,name,signing_public_key,encryption_public_key,fingerprint,last_seen_at,revoked_at,created_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(account_id,team_id,id) DO UPDATE SET
+      owner_id=excluded.owner_id,name=excluded.name,signing_public_key=excluded.signing_public_key,encryption_public_key=excluded.encryption_public_key,
+      fingerprint=excluded.fingerprint,last_seen_at=excluded.last_seen_at,revoked_at=excluded.revoked_at,created_at=excluded.created_at`)
+      .run(accountId, row.team_id, row.id, row.owner_id, row.name, row.signing_public_key, row.encryption_public_key,
+        row.fingerprint, row.last_seen_at, row.revoked_at, row.created_at);
+  }
+
+  private insertCachedLink(accountId: string, row: CloudLinkRow, mutual: boolean): void {
+    this.db.prepare(`INSERT INTO mingle_transport_links_cache
+      (account_id,team_id,device_id,peer_device_id,peer_fingerprint,created_at,mutual)
+      VALUES(?,?,?,?,?,?,?) ON CONFLICT(account_id,team_id,device_id,peer_device_id) DO UPDATE SET
+      peer_fingerprint=excluded.peer_fingerprint,created_at=excluded.created_at,mutual=excluded.mutual`)
+      .run(accountId, row.team_id, row.device_id, row.peer_device_id, row.peer_fingerprint, row.created_at, mutual ? 1 : 0);
+  }
+
+  private recomputeMutualLinks(accountId: string, teamId: string): void {
+    const links = this.db.prepare('SELECT * FROM mingle_transport_links_cache WHERE account_id = ? AND team_id = ?')
+      .all(accountId, teamId) as Record<string, unknown>[];
+    const devices = new Map((this.db.prepare('SELECT * FROM mingle_transport_devices_cache WHERE account_id = ? AND team_id = ?')
+      .all(accountId, teamId) as Record<string, unknown>[]).map((row) => [String(row.id), row]));
+    for (const link of links) {
+      const peer = devices.get(String(link.peer_device_id));
+      const reverse = links.find((candidate) => candidate.device_id === link.peer_device_id && candidate.peer_device_id === link.device_id);
+      const own = devices.get(String(link.device_id));
+      const mutual = Boolean(peer && own && !peer.revoked_at && !own.revoked_at &&
+        link.peer_fingerprint === peer.fingerprint && reverse && reverse.peer_fingerprint === own.fingerprint);
+      this.db.prepare('UPDATE mingle_transport_links_cache SET mutual = ? WHERE account_id = ? AND team_id = ? AND device_id = ? AND peer_device_id = ?')
+        .run(mutual ? 1 : 0, accountId, teamId, String(link.device_id), String(link.peer_device_id));
+    }
+  }
+
+  private deviceCacheRow(accountId: string, teamId: string, deviceId: string): Record<string, any> | undefined {
+    return this.db.prepare('SELECT * FROM mingle_transport_devices_cache WHERE account_id = ? AND team_id = ? AND id = ?')
+      .get(accountId, teamId, deviceId) as Record<string, any> | undefined;
+  }
+
+  private linkCacheRow(accountId: string, teamId: string, deviceId: string, peerDeviceId: string): Record<string, any> | undefined {
+    return this.db.prepare('SELECT * FROM mingle_transport_links_cache WHERE account_id = ? AND team_id = ? AND device_id = ? AND peer_device_id = ?')
+      .get(accountId, teamId, deviceId, peerDeviceId) as Record<string, any> | undefined;
+  }
+
+  private ownFingerprint(accountId: string, teamId: string): string | null {
+    const own = this.requireLocalDevice(accountId, teamId);
+    return (this.deviceCacheRow(accountId, teamId, own.device_id)?.fingerprint as string | undefined) ?? null;
+  }
+
+  private publicDevice(row: Record<string, unknown>): DistributedDevice {
+    const lastSeenAt = typeof row.last_seen_at === 'string' ? row.last_seen_at : null;
+    const revokedAt = typeof row.revoked_at === 'string' ? row.revoked_at : null;
+    const age = lastSeenAt ? this.now() - Date.parse(lastSeenAt) : Number.POSITIVE_INFINITY;
+    const status = revokedAt ? 'revoked' : age >= 0 && age <= this.onlineWindowMs ? 'online' : 'offline';
+    return {
+      id: String(row.id), teamId: String(row.team_id), ownerId: String(row.owner_id), name: String(row.name),
+      signingPublicKey: String(row.signing_public_key), encryptionPublicKey: String(row.encryption_public_key),
+      fingerprint: String(row.fingerprint), lastSeenAt, revokedAt,
+      createdAt: String(row.created_at), status,
+    };
+  }
+
+  private publicLink(row: Record<string, unknown>): DistributedDeviceLink {
+    return {
+      teamId: String(row.team_id), deviceId: String(row.device_id), peerDeviceId: String(row.peer_device_id),
+      peerFingerprint: String(row.peer_fingerprint), createdAt: String(row.created_at), mutual: row.mutual === 1 || row.mutual === true,
+    };
+  }
+
+  private publicOutbox(row: Record<string, unknown>): DistributedOutboxItem {
+    return {
+      id: String(row.id), teamId: String(row.team_id), toDeviceId: String(row.to_device_id),
+      kind: String(row.kind) as DistributedMessageKind, createdAt: String(row.created_at), expiresAt: String(row.expires_at),
+      status: String(row.status) as DistributedOutboxItem['status'], attempts: Number(row.attempts),
+      error: typeof row.error === 'string' ? row.error : null,
+    };
+  }
+
+  private async query<T>(request: PromiseLike<CloudResult<T>>, failureMessage: string): Promise<T | null> {
+    const result = await request;
+    if (result.error) {
+      const error = new Error(failureMessage) as Error & { code?: string };
+      error.code = result.error.code;
+      throw error;
+    }
+    return result.data;
+  }
+
+  private toCloudEnvelope(envelope: SignedEnvelope): Omit<CloudEnvelopeRow, 'received_at'> {
+    return {
+      id: envelope.id, team_id: envelope.teamId, from_device_id: envelope.fromDeviceId, to_device_id: envelope.toDeviceId,
+      idempotency_key: envelope.idempotencyKey, kind: envelope.kind, ciphertext: envelope.ciphertext,
+      nonce: envelope.nonce, signature: envelope.signature, created_at: envelope.createdAt, expires_at: envelope.expiresAt,
+    };
+  }
+
+  private fromCloudEnvelope(row: CloudEnvelopeRow): SignedEnvelope {
+    return {
+      id: row.id, teamId: row.team_id, fromDeviceId: row.from_device_id, toDeviceId: row.to_device_id,
+      idempotencyKey: row.idempotency_key, kind: row.kind, ciphertext: row.ciphertext, nonce: row.nonce,
+      signature: row.signature, createdAt: normalizePostgresInstant(row.created_at), expiresAt: normalizePostgresInstant(row.expires_at),
+    };
+  }
+
+  private currentAccountId(): string | null {
+    const current = this.options.account.snapshot?.();
+    if (current) {
+      if (current.status !== 'signed-in' || !current.user?.id) return null;
+      return current.user.id;
+    }
+    return this.activeAccountId;
+  }
+
+  private isSignedIn(): boolean { return this.currentAccountId() !== null; }
+  private isoNow(): string { return new Date(this.now()).toISOString(); }
+  private markHealthy(): void { this.status = 'ready'; this.lastError = null; this.lastSyncAt = this.now(); }
+  private recordFailure(message: string): void { this.status = 'error'; this.lastError = message; }
+
+  private ensureTables(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS mingle_transport_local_devices (
+        account_id TEXT NOT NULL, team_id TEXT NOT NULL, device_id TEXT NOT NULL, name TEXT NOT NULL,
+        registered INTEGER NOT NULL DEFAULT 0 CHECK(registered IN (0,1)), PRIMARY KEY(account_id,team_id), UNIQUE(account_id,team_id,device_id)
+      );
+      CREATE TABLE IF NOT EXISTS mingle_transport_devices_cache (
+        account_id TEXT NOT NULL, team_id TEXT NOT NULL, id TEXT NOT NULL, owner_id TEXT NOT NULL, name TEXT NOT NULL,
+        signing_public_key TEXT NOT NULL, encryption_public_key TEXT NOT NULL, fingerprint TEXT NOT NULL,
+        last_seen_at TEXT, revoked_at TEXT, created_at TEXT NOT NULL, PRIMARY KEY(account_id,team_id,id)
+      );
+      CREATE TABLE IF NOT EXISTS mingle_transport_links_cache (
+        account_id TEXT NOT NULL, team_id TEXT NOT NULL, device_id TEXT NOT NULL, peer_device_id TEXT NOT NULL,
+        peer_fingerprint TEXT NOT NULL, created_at TEXT NOT NULL, mutual INTEGER NOT NULL DEFAULT 0 CHECK(mutual IN (0,1)),
+        PRIMARY KEY(account_id,team_id,device_id,peer_device_id)
+      );
+      CREATE TABLE IF NOT EXISTS mingle_transport_outbox (
+        id TEXT PRIMARY KEY, account_id TEXT NOT NULL, team_id TEXT NOT NULL, from_device_id TEXT NOT NULL, to_device_id TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL, kind TEXT NOT NULL, envelope_json TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('queued','delivered','expired')), attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at INTEGER NOT NULL DEFAULT 0, error TEXT, created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+        UNIQUE(account_id,team_id,from_device_id,to_device_id,idempotency_key)
+      );
+      CREATE INDEX IF NOT EXISTS mingle_transport_outbox_due ON mingle_transport_outbox(account_id,status,next_attempt_at,created_at);
+      CREATE TABLE IF NOT EXISTS mingle_transport_inbox (
+        id TEXT NOT NULL, account_id TEXT NOT NULL, team_id TEXT NOT NULL, from_device_id TEXT NOT NULL, to_device_id TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL, kind TEXT NOT NULL, envelope_json TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('pending','dispatching','handled','rejected','uncertain')), attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at INTEGER NOT NULL DEFAULT 0, error TEXT, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, received_at TEXT NOT NULL,
+        PRIMARY KEY(account_id,team_id,id), UNIQUE(account_id,team_id,from_device_id,to_device_id,idempotency_key)
+      );
+      CREATE INDEX IF NOT EXISTS mingle_transport_inbox_due ON mingle_transport_inbox(account_id,status,next_attempt_at,created_at);
+    `);
+    // A crash while a handler was executing leaves an unknown outcome. Never replay that item;
+    // the durable uncertain row is safer than running a potentially dispatched operation twice.
+    this.db.prepare(`UPDATE mingle_transport_inbox SET status = 'uncertain', error = 'Handler outcome is unknown after an interrupted dispatch.' WHERE status = 'dispatching'`).run();
+  }
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+/** PostgREST returns timestamptz with offsets and variable precision; signatures use canonical JS UTC milliseconds. */
+function normalizePostgresInstant(value: string): string {
+  return parsePostgresInstant(value).milliseconds;
+}
+
+function normalizePostgresInstantForOrder(value: string): string {
+  return parsePostgresInstant(value).microseconds;
+}
+
+function parsePostgresInstant(value: string): { milliseconds: string; microseconds: string } {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value)) {
+    throw new Error('Mailbox timestamp is malformed.');
+  }
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) throw new Error('Mailbox timestamp is invalid.');
+  const fractional = /\.(\d+)(?:Z|[+-]\d{2}:\d{2})$/.exec(value)?.[1] ?? '';
+  const subMillisecondMicros = Number(fractional.slice(3, 6).padEnd(3, '0'));
+  const milliseconds = new Date(timestamp).toISOString();
+  const microseconds = milliseconds.replace(/Z$/, `${subMillisecondMicros.toString().padStart(3, '0')}Z`);
+  return { milliseconds, microseconds };
+}
