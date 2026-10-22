@@ -1,0 +1,84 @@
+name: Publish temporary desktop downloads
+
+on:
+  workflow_dispatch:
+    inputs:
+      linux_run_id:
+        description: Successful Debian packaging run ID
+        required: true
+        type: string
+      windows_run_id:
+        description: Successful Windows packaging run ID
+        required: true
+        type: string
+      release_tag:
+        description: Temporary release tag
+        default: temporary-downloads-20261022
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      LINUX_RUN: ${{ inputs.linux_run_id }}
+      WINDOWS_RUN: ${{ inputs.windows_run_id }}
+      DOWNLOAD_TAG: ${{ inputs.release_tag }}
+    steps:
+      - name: Validate source runs
+        shell: bash
+        run: |
+          [[ "$DOWNLOAD_TAG" =~ ^temporary-downloads-[0-9]{8}(-[a-zA-Z0-9.-]+)?$ ]]
+          for run_id in "$LINUX_RUN" "$WINDOWS_RUN"; do
+            [[ "$run_id" =~ ^[0-9]+$ ]]
+            test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" --jq .conclusion)" = success
+            test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" --jq .head_repository.full_name)" = "$GITHUB_REPOSITORY"
+          done
+      - uses: actions/download-artifact@v4
+        with:
+          name: mingle-linux-x64
+          run-id: ${{ inputs.linux_run_id }}
+          github-token: ${{ github.token }}
+          path: linux
+      - uses: actions/download-artifact@v4
+        with:
+          name: mingle-windows-x64
+          run-id: ${{ inputs.windows_run_id }}
+          github-token: ${{ github.token }}
+          path: windows
+      - name: Check packages and publish a temporary prerelease
+        shell: bash
+        run: |
+          debs=(linux/*.deb)
+          exes=(windows/*-setup.exe)
+          test "${#debs[@]}" = 1
+          test "${#exes[@]}" = 1
+          test -s "${debs[0]}"
+          test -s "${exes[0]}"
+          (cd linux && sha256sum -c ./*.deb.sha256)
+          (cd windows && sha256sum -c ./*-setup.exe.sha256)
+          dpkg-deb --info "${debs[0]}"
+          file "${exes[0]}"
+          linux_sha=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$LINUX_RUN" --jq .head_sha)
+          windows_sha=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$WINDOWS_RUN" --jq .head_sha)
+          cat > release-notes.md <<EOF
+          Temporary Mingle 0.1.0 downloads for Linux amd64 and Windows x64.
+
+          - Debian/Ubuntu: install the downloaded .deb using apt.
+          - Windows: run the per-user setup .exe. It is unsigned; an unknown-publisher prompt may appear.
+          - Both include Electron, Node, the built UI and the local server. Provider tools and accounts are installed separately.
+          - This temporary prerelease is intended for downloading and may be removed after the requested downloads. GitHub releases do not expire automatically.
+
+          Native validation covers SQLite/API/static UI, a real pseudo-terminal, installation/uninstallation, and launching the installed desktop to confirm that it renders. No paid inference ran.
+
+          Debian source: $linux_sha. [Build and checks](https://github.com/$GITHUB_REPOSITORY/actions/runs/$LINUX_RUN).
+          Windows source: $windows_sha. [Build and checks](https://github.com/$GITHUB_REPOSITORY/actions/runs/$WINDOWS_RUN).
+          EOF
+          gh release create "$DOWNLOAD_TAG" "${debs[0]}" "${debs[0]}.sha256" "${exes[0]}" "${exes[0]}.sha256" --repo "$GITHUB_REPOSITORY" --target "$windows_sha" --title 'Mingle — temporary downloads' --notes-file release-notes.md --prerelease --latest=false --draft
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$DOWNLOAD_TAG" --jq '.assets[] | {name,size,state,digest}'
+          gh release edit "$DOWNLOAD_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease --latest=false
