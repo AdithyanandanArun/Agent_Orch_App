@@ -26,6 +26,13 @@ export interface TeamGroupService {
   status(ctx: GroupRunContext, input: Input<typeof TeamStatusSchema>): unknown;
 }
 
+/** Optional distributed recovery tools retain the existing run-scoped group authority. */
+export interface DistributedTeamTools {
+  recoveryShape: z.ZodRawShape;
+  members(context: GroupRunContext, sessionId: string): Promise<unknown>;
+  recover(context: GroupRunContext, sessionId: string, input: Record<string, unknown>): Promise<unknown>;
+}
+
 interface Binding {
   runId: string; sessionId: string; signal: AbortSignal; context: Readonly<GroupRunContext>;
   revoked: boolean; inFlight: number;
@@ -51,7 +58,10 @@ const INSTRUCTIONS = [
 /** Authenticated, run-scoped MCP access to the group coordination layer. */
 export class TeamMcpBridge {
   private bindings = new Map<string, Binding>();
+  private distributed: DistributedTeamTools | null = null;
   constructor(private groups: TeamGroupService, private store: Store, private getPort: () => number, private getHost: () => string = () => '127.0.0.1') {}
+
+  setDistributedTools(tools: DistributedTeamTools): void { this.distributed = tools; }
 
   create(runId: string, session: Session, signal: AbortSignal, context: GroupRunContext): TeamMcpConnection {
     if (this.bindings.size >= MAX_BINDINGS) throw new Error('Too many active team tool connections');
@@ -115,6 +125,13 @@ export class TeamMcpBridge {
       TeamArtifactSchema.shape, { readOnly: false, idempotent: false }, (args) => this.groups.artifact(ctx, TeamArtifactSchema.parse(args)));
     register('team_status', 'Report running, blocked or review status for a task you own. Use review once when your work is ready for human review; it is not Done. This records an event and does not itself start a model run.',
       TeamStatusSchema.shape, { readOnly: false, idempotent: true }, (args) => this.groups.status(ctx, TeamStatusSchema.parse(args)));
+    const distributed = this.distributed;
+    if (distributed) {
+      register('team_remote_agents', 'List explicitly shared agents on linked team devices, with reported availability and quota. Local agents remain the default. Listing a remote agent grants no permission to execute on its device.',
+        {}, { readOnly: true, idempotent: true }, () => distributed.members(ctx, binding.sessionId));
+      register('team_remote_recover', 'Propose exceptional recovery of a stopped task on a linked device after verified local provider exhaustion. The host checks the current group planning authority and source failure. Acceptance only queues a request for the destination device owner; it never grants execution, quota, Git push or command permissions.',
+        distributed.recoveryShape, { readOnly: false, idempotent: true }, (args) => distributed.recover(ctx, binding.sessionId, args));
+    }
     return server;
   }
 
