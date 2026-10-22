@@ -74,11 +74,11 @@ export type DistributedRequestDecision = z.infer<typeof DistributedRequestDecisi
 
 export const GitTransferOfferSchema = z.object({
   requestId: id, sharedProjectId: id, sourceHead: gitObjectId, baseHead: gitObjectId.nullable(), branch: z.string().max(120).nullable(),
-  bundleSha256: sha256, bundleSizeBytes: z.number().int().positive().max(16 * 1024 * 1024), chunkCount: z.number().int().positive().max(64),
+  bundleSha256: sha256, bundleSizeBytes: z.number().int().positive().max(16 * 1024 * 1024), chunkCount: z.number().int().positive().max(128),
 }).strict();
 export type GitTransferOffer = z.infer<typeof GitTransferOfferSchema>;
 export const GitBundleChunkSchema = z.object({
-  requestId: id, index: z.number().int().min(0).max(63), chunkCount: z.number().int().positive().max(64), data: z.string().min(1).max(350_000),
+  requestId: id, index: z.number().int().min(0).max(127), chunkCount: z.number().int().positive().max(128), data: z.string().min(1).max(350_000),
 }).strict();
 export const GitTransferResultSchema = z.object({
   requestId: id, status: z.enum(['imported', 'conflict', 'stale', 'failed']), conflictPaths: z.array(z.string().max(4096)).max(500).default([]),
