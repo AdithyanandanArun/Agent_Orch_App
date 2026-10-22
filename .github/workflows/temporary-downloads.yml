@@ -34,10 +34,32 @@ jobs:
         shell: bash
         run: |
           [[ "$DOWNLOAD_TAG" =~ ^temporary-downloads-[0-9]{8}(-[a-zA-Z0-9.-]+)?$ ]]
-          for run_id in "$LINUX_RUN" "$WINDOWS_RUN"; do
+          for platform in linux windows; do
+            if test "$platform" = linux; then
+              run_id="$LINUX_RUN"
+              native_job=linux
+              build_step='Run pnpm package:deb'
+            else
+              run_id="$WINDOWS_RUN"
+              native_job=windows-x64
+              build_step='Run pnpm package:windows'
+            fi
             [[ "$run_id" =~ ^[0-9]+$ ]]
-            test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" --jq .conclusion)" = success
+            conclusion=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" --jq '.conclusion // "pending"')
+            test "$conclusion" = success || test "$conclusion" = pending
             test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" --jq .head_repository.full_name)" = "$GITHUB_REPOSITORY"
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs" > native-jobs.json
+            EXPECTED_JOB="$native_job" BUILD_STEP="$build_step" python3 - <<'PY'
+          import json, os
+          jobs = [job for job in json.load(open('native-jobs.json'))['jobs'] if job['name'] == os.environ['EXPECTED_JOB']]
+          assert len(jobs) == 1, 'Expected exactly one native build job'
+          steps = jobs[0].get('steps', [])
+          assert steps and all(step['status'] == 'completed' and step['conclusion'] in ('success', 'skipped') for step in steps), 'Native checks are incomplete or failed'
+          by_name = {step['name']: step for step in steps}
+          for required in (os.environ['BUILD_STEP'], 'Run actions/upload-artifact@v4', 'Complete job'):
+              assert by_name.get(required, {}).get('conclusion') == 'success', f'Required native check did not pass: {required}'
+          print('Native build, installer checks, artifact upload and job cleanup passed.')
+          PY
           done
       - uses: actions/download-artifact@v4
         with:
