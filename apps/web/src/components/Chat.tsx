@@ -141,6 +141,7 @@ function SingleSessionPane() {
 
   return (
     <div className="chat">
+      <div className="chat__history">
       <div
         className="chat__scroll" ref={scroller} role="log" aria-live="polite" aria-label={`Conversation with ${session.name}`}
         onScroll={(e) => {
@@ -188,6 +189,7 @@ function SingleSessionPane() {
           <ArrowDown size={13} /> Latest
         </button>
       ) : null}
+      </div>
       <Composer key={session.id} session={session} />
     </div>
   );

@@ -212,8 +212,6 @@
 .cfg legend { margin-bottom: 5px; color: var(--fg-1); font-size: var(--text-xs); }
 
 .group-dialog :focus-visible, .members :focus-visible, .team-control :focus-visible, .composer--group :focus-visible { outline-color: var(--blue-strong); }
-.jump { position: absolute; right: 22px; bottom: 98px; z-index: 4; display: inline-flex; align-items: center; gap: 5px; padding: 7px 10px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--bg-raised); color: var(--fg-0); box-shadow: var(--shadow-pop); font-size: var(--text-xs); cursor: pointer; transition: background var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard); }
-.jump:hover { background: var(--bg-surface); border-color: var(--line-strong); }
 
 @media (max-width: 900px) {
   .gm-grid { grid-template-columns: 1fr; }
