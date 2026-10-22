@@ -18,7 +18,7 @@ export function SharedAgentMap({ members, devices, agents, tasks }: {
     members: members.map((row) => [readText(row, ['userId'])]),
     devices: devices.map((row) => [idOf(row), readText(row, ['ownerId']), nameOf(row, 'Device'), readText(row, ['status'], 'unknown')]),
     agents: agents.map((row) => [idOf(row), readText(row, ['deviceId']), nameOf(row, 'Agent'), readText(row, ['provider']), readText(row, ['presence'], 'unknown'), readText(row, ['quotaState'], 'unknown')]),
-    tasks: tasks.map((row) => [idOf(row), readText(row, ['deviceId']), readText(row, ['sharedProjectId']), nameOf(row, 'Task'), readText(row, ['status'], 'unknown'), readText(row, ['agentId']), Array.isArray(row.dependsOn) ? row.dependsOn : []]),
+    tasks: tasks.map((row) => [readText(row, ['teamId']), idOf(row), readText(row, ['deviceId']), readText(row, ['sharedProjectId']), nameOf(row, 'Task'), readText(row, ['status'], 'unknown'), readText(row, ['agentId']), Array.isArray(row.dependsOn) ? row.dependsOn : []]),
   });
   const graph = useMemo(() => {
     const nodes: Node[] = [];
@@ -42,7 +42,17 @@ export function SharedAgentMap({ members, devices, agents, tasks }: {
     agents.slice(0, 80).forEach((row) => link(`device:${readText(row, ['deviceId'])}`, `agent:${idOf(row)}`, 'hosts'));
     tasks.slice(0, 80).forEach((row) => {
       link(`agent:${readText(row, ['agentId'])}`, taskKey(row), 'assigned');
-      if (Array.isArray(row.dependsOn)) row.dependsOn.forEach((id) => { if (typeof id === 'string') link(taskKey(row, id), taskKey(row), 'required by'); });
+      if (Array.isArray(row.dependsOn)) row.dependsOn.forEach((id) => {
+        if (typeof id !== 'string') return;
+        const matches = tasks.filter((candidate) => idOf(candidate) === id
+          && readText(candidate, ['teamId']) === readText(row, ['teamId'])
+          && readText(candidate, ['sharedProjectId']) === readText(row, ['sharedProjectId']));
+        const local = matches.filter((candidate) => readText(candidate, ['deviceId']) === readText(row, ['deviceId']));
+        // Native IDs belong to their originating device. A cross-device reference is usable
+        // only when exactly one task in this shared project has the explicitly referenced ID.
+        const dependency = local.length === 1 ? local[0] : matches.length === 1 ? matches[0] : null;
+        if (dependency) link(taskKey(dependency), taskKey(row), 'required by');
+      });
     });
     return { nodes, edges, truncated: ownerIds.length > 40 || devices.length > 60 || agents.length > 80 || tasks.length > 80 };
   }, [graphSignature]);

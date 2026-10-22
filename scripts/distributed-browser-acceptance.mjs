@@ -272,6 +272,7 @@ async function main() {
   let writesMode = 'ok';
   let exampleCreatedTeam = false;
   let timestampOnlySnapshot = false;
+  let ambiguousDependency = false;
   await page.route('**/api/distributed/**', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -326,6 +327,11 @@ async function main() {
       await new Promise((resolve) => { betaDelayedResolve = resolve; });
     }
     const body = createExampleSnapshot(localProjectId, teamId);
+    if (ambiguousDependency) {
+      const prerequisite = body.execution.tasks.find((row) => row.teamId === teamId && row.id === `${teamId}-prerequisite`);
+      assert.ok(prerequisite, 'example dependency fixture exists');
+      body.execution.tasks.push({ ...prerequisite, deviceId: `${EXAMPLE.localDevice}-spare`, agentId: '', title: 'Example ambiguous prerequisite' });
+    }
     body.teams.exampleData = true;
     if (exampleCreatedTeam && !body.teams.teams.some((team) => team.id === 'example-created-team')) {
       body.teams.teams.push({ id: 'example-created-team', name: 'Example form-created team', ownerId: '10000000-0000-4000-8000-000000000001', role: 'owner', createdAt: '2026-10-22T12:02:00.000Z' });
@@ -484,7 +490,8 @@ async function main() {
     const edgeCount = await map.locator('.react-flow__edge').count();
     assert.ok(nodeCount >= 7, `expected example relationship nodes, got ${nodeCount}`);
     assert.equal(flowLayout.visibleNodes, nodeCount, 'all graph nodes have measured visible DOM bounds inside the map');
-    assert.ok(edgeCount >= 5, `expected ownership/hosting/assignment/dependency edges, got ${edgeCount}`);
+    assert.equal(edgeCount, 8, 'ownership, hosting, assignment and explicit cross-device dependency edges are rendered');
+    assert.equal(await map.locator('.react-flow__edge').filter({ hasText: 'required by' }).count(), 1, 'unique cross-device task dependency is linked');
     await page.getByRole('heading', { name: 'Shared task relationships', exact: true }).scrollIntoViewIfNeeded();
     assert.match(await page.locator('.dw-list--compact').innerText(), /Example Alpha shared task/);
     await page.evaluate(() => { window.__mingleMapNode = document.querySelector('.dw-shared-map .react-flow__node'); });
@@ -495,6 +502,19 @@ async function main() {
     await waitFor(async () => !/Checking team workspace/.test(await page.locator('.distributed__foot').innerText()), 'timestamp-only map refresh render');
     const preservedNode = await page.evaluate(() => window.__mingleMapNode === document.querySelector('.dw-shared-map .react-flow__node'));
     assert.equal(preservedNode, true, 'a timestamp-only poll preserves the rendered node instance and map viewport');
+    ambiguousDependency = true;
+    await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+    await waitFor(async () => await map.locator('.react-flow__node').count() === nodeCount + 1, 'duplicate native task ID on a third device');
+    await waitFor(async () => await map.locator('.react-flow__edge').count() === 7, 'ambiguous dependency omitted');
+    assert.equal(await map.locator('.react-flow__edge').filter({ hasText: 'required by' }).count(), 0, 'ambiguous cross-device dependency is not guessed');
+    await section('Conversation').click();
+    const sharedTasks = page.locator('.dw-card').filter({ has: page.getByRole('heading', { name: 'Shared tasks', exact: true }) });
+    assert.equal(await sharedTasks.getByText('Example Alpha prerequisite', { exact: true }).count(), 1);
+    assert.equal(await sharedTasks.getByText('Example ambiguous prerequisite', { exact: true }).count(), 1, 'both device-scoped native IDs remain separate task rows');
+    await section('Agents').click();
+    ambiguousDependency = false;
+    await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+    await waitFor(async () => await map.locator('.react-flow__node').count() === nodeCount && await map.locator('.react-flow__edge').count() === 8, 'unique dependency restored');
   });
 
   await test('shared task publication and conversation sends actual idempotent request bodies', async () => {
