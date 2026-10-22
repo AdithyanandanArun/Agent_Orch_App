@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { access, lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
-import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -123,22 +122,30 @@ async function smokeRuntime(smokeRoot) {
     const bootstrap = await bootstrapResponse.json();
     if (!Array.isArray(bootstrap.projects) || !Array.isArray(bootstrap.sessions)) throw new Error('Staged bootstrap omitted the project/session collections.');
 
-    // node-pty must load from the deployed production tree and launch a real Windows pseudo-terminal.
-    const requireFromServer = createRequire(join(serverRoot, 'dist/index.mjs'));
-    const pty = requireFromServer('node-pty');
-    const shell = process.env.COMSPEC || 'cmd.exe';
-    const terminal = pty.spawn(shell, ['/d', '/c', 'echo', 'MINGLE_PTY_SMOKE'], { cwd: dataDir, cols: 80, rows: 24, env: environment });
-    let terminalOutput = '';
-    const terminalExited = new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => { terminal.kill(); reject(new Error('Staged node-pty smoke timed out.')); }, 15_000);
-      terminal.onData((data) => { terminalOutput += data; });
-      terminal.onExit((event) => {
-        clearTimeout(timeout);
-        if (event.exitCode !== 0 || !terminalOutput.includes('MINGLE_PTY_SMOKE')) reject(new Error(`Staged node-pty smoke failed (exit ${event.exitCode}): ${terminalOutput}`));
-        else resolve();
-      });
-    });
-    await terminalExited;
+    // Keep native ConPTY cleanup handles out of the packaging process. The probe
+    // exits only after its real command has exited and its output is verified.
+    const ptyProbe = join(smokeRoot, 'pty-check.cjs');
+    await writeFile(ptyProbe, `
+const { createRequire } = require('node:module');
+const requireFromServer = createRequire(${JSON.stringify(join(serverRoot, 'package.json'))});
+const pty = requireFromServer('node-pty');
+const terminal = pty.spawn(process.env.COMSPEC || 'cmd.exe', ['/d', '/c', 'echo', 'MINGLE_PTY_SMOKE'], {
+  cwd: ${JSON.stringify(dataDir)}, cols: 80, rows: 24, env: process.env,
+});
+let output = '';
+const timer = setTimeout(() => { terminal.kill(); console.error('ConPTY probe timed out'); process.exit(1); }, 15000);
+terminal.onData(data => output += data);
+terminal.onExit(({ exitCode }) => {
+  clearTimeout(timer);
+  if (exitCode !== 0 || !output.includes('MINGLE_PTY_SMOKE')) {
+    console.error('ConPTY command failed:', exitCode, output); process.exit(1);
+  }
+  // node-pty can retain native Windows handles after this event. This process
+  // owns only the completed probe, so close it explicitly after verification.
+  process.exit(0);
+});
+`);
+    await run(runtimeNode, [ptyProbe], { env: environment, cwd: dataDir, windowsHide: true, timeout: 20_000 });
     console.log('Windows runtime smoke passed: Node, SQLite health, bootstrap, static UI, and node-pty.');
   } finally {
     if (child.exitCode === null) {
