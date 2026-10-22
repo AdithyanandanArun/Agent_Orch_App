@@ -61,13 +61,16 @@ try {
   assert.equal(await evaluate('typeof window.require'), 'undefined', 'Renderer Node integration stays disabled');
   console.log('Installed Electron opened Mingle and rendered the built application with the sandbox enabled.');
 } finally {
-  socket?.close();
   if (child.exitCode === null) {
     const exited = once(child, 'exit');
-    child.kill('SIGTERM');
+    // Closing the actual window runs Electron's before-quit backend cleanup.
+    // On Windows SIGTERM would terminate Electron immediately and orphan Node.
+    if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ id: 99999, method: 'Runtime.evaluate', params: { expression: 'window.close()' } }));
+    else child.kill('SIGTERM');
     const timer = setTimeout(() => child.kill('SIGKILL'), 40000);
     await exited;
     clearTimeout(timer);
   }
+  socket?.close();
   await rm(scratch, { recursive: true, force: true });
 }
