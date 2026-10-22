@@ -16,7 +16,7 @@ CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$ SELECT nullif(
 CREATE FUNCTION auth.jwt() RETURNS jsonb LANGUAGE sql STABLE AS $$ SELECT coalesce(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb $$;
 GRANT USAGE ON SCHEMA auth TO anon, authenticated;
 `);
-await pg.exec(readFileSync(process.env.MINGLE_TEST_TEAM_MIGRATION ?? new URL('../../../../supabase/migrations/20261022153000_mingle_teams.sql', import.meta.url), 'utf8'));
+await pg.exec(readFileSync(process.env.MINGLE_TEST_TEAM_MIGRATION ?? new URL('../../../../supabase/migrations/20261022100932_mingle_teams.sql', import.meta.url), 'utf8'));
 check(true, 'migration applies to PostgreSQL');
 const ids = [
   '10000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000002',

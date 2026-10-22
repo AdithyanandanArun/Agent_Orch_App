@@ -21,7 +21,7 @@ Shared public camelCase contracts live in `packages/contracts/src/teams.ts`. The
 
 `AccountService.withAuthenticatedClient<T>(fn)` waits for account initialization, serializes with account sign-in/sign-out, calls Supabase `auth.getUser()` for each operation, rejects missing/anonymous/non-Google users, and invokes `fn(client, user)` only after verification. The client/session/token must not be returned to HTTP or renderer code.
 
-## Supabase schema (migration `20261022153000_mingle_teams.sql`)
+## Supabase schema (migration `20261022100932_mingle_teams.sql`)
 
 Every table is in `public`, has RLS enabled, and revokes all `anon`/`authenticated` table grants before granting only its needed operations. Authorization checks use signed-in `auth.uid()` and active `mingle_members` rows. Membership lookup functions are owned security-definer helpers in the non-exposed `mingle_private` schema, with an empty pinned search path, public/anon/authenticated execution revoked by default, and only the helpers used by RLS granted to `authenticated`; these break membership-policy recursion without trusting client metadata. The one public RPC is `accept_mingle_invitation(text)`: execution is revoked from `PUBLIC`/`anon`, granted to `authenticated`, and it verifies `auth.uid()`, confirmed Auth email, a valid unexpired hash and one-time consumption.
 

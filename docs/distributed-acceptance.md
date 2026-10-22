@@ -54,8 +54,19 @@ The same test then publishes an explicit Supervised receiving session and reques
 
 ## Cloud boundary
 
-A read-only inspection of the connected **Mingle** Supabase project on 2026-10-22 found only `public.account_preferences` in the public schema. The team/device/mailbox migration is absent there. No cloud schema or account settings were modified during this verification.
+The initial read-only inspection of the connected **Mingle** Supabase project on 2026-10-22 found only `public.account_preferences`. The automated acceptance above did not modify cloud schema or account settings. That missing deployment caused real team creation to fail; the corrective live verification below addresses this gap.
 
 PGlite checks execute the actual migration and PostgreSQL-compatible RLS locally. The local relay fixture deliberately models authenticated accounts, membership, ownership and reciprocal device pins; it is not a deployed Supabase or PostgREST server. The browser's positive cloud fixtures do not establish live team collaboration.
 
-Live acceptance still requires the reviewed migration in the chosen environment, two independently signed-in accounts, two physical computers on different networks, actual OAuth/session storage, real offline/reconnect behavior, and an explicitly approved provider recovery. Follow [the deployment runbook](distributed-workspaces.md) for those procedures.
+Complete live collaboration acceptance still requires two independently signed-in accounts, two physical computers on different networks, actual OAuth/session storage, real offline/reconnect behavior, and an explicitly approved provider recovery. Follow [the deployment runbook](distributed-workspaces.md) for those procedures.
+
+
+## Corrective live team verification (2026-10-22)
+
+The installed, signed-in application reproduced HTTP 502 with `The team could not be created.` when creating the requested team. Its account connection pointed to the dedicated Mingle project, whose migration history contained only the account migration. An independent OpenCode GPT-6 Luna high review found no deployment blockers; the actual migration also passed all 30 local policy assertions.
+
+Applied the reviewed team migration to project `xpirzwppqyvbubqwsqzi`. Supabase recorded version `20261022100932` (`mingle_teams`); the existing local migration was renamed to match that assigned version so later CLI pushes do not attempt a duplicate deployment. Its SQL content is unchanged. All seven distributed tables have RLS enabled. Anonymous team access, anonymous invitation RPC execution, direct authenticated membership insertion, and direct execution of the internal membership helper remain denied. The intentional authenticated invitation RPC derives identity from `auth.uid()`, verifies confirmed email, and atomically consumes the invitation hash; the security advisor's callable-definer warning for this narrow RPC is an explicitly reviewed exception.
+
+Using the real running app through the collaborative browser, created **The Tachyons**, confirmed the returned team and active owner membership via the local snapshot API backed by real Supabase/PostgREST, then reloaded the browser and confirmed the team and member roster still loaded without an error. Positive cloud responses were not intercepted for this live check. No provider run, Git operation, invitation message, extra authentication account, or device enrollment was started. This establishes one-account team creation and loading, not two-account invitation acceptance or cross-device collaboration.
+
+Missing-table (`42P01`, `PGRST205`) and missing-invitation-RPC (`42883`, `PGRST202`) failures now report incomplete cloud setup instead of a generic creation/loading error. The focused backend/policy regression passes 14 tests across two files, including four new missing-setup cases and the existing 30 policy assertions.
