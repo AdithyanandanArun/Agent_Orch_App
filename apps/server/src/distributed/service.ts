@@ -172,6 +172,10 @@ export class DistributedWorkspaceService {
   }
 
   private subscribeProgress(sessionId: string, listener: (event: RemoteExecutionProgress) => void): () => void {
+    // Execution subscribes immediately before synchronously starting its one approved run.
+    // Follow that next durable run even if another local run starts before our coalesced read.
+    const baseline = this.options.store.db.prepare('SELECT COALESCE(MAX(rowid), 0) AS sequence FROM session_runs WHERE session_id = ?')
+      .get(sessionId) as { sequence: number };
     let lastSignature = '';
     let lastMessage = '';
     let timer: NodeJS.Timeout | null = null;
@@ -179,7 +183,8 @@ export class DistributedWorkspaceService {
     const emit = () => {
       timer = null;
       if (stopped || this.closed) return;
-      const row = this.options.store.db.prepare('SELECT id,status FROM session_runs WHERE session_id = ? ORDER BY started_at DESC LIMIT 1').get(sessionId) as { id: string; status: string } | undefined;
+      const row = this.options.store.db.prepare('SELECT id,status FROM session_runs WHERE session_id = ? AND rowid > ? ORDER BY rowid ASC LIMIT 1')
+        .get(sessionId, baseline.sequence) as { id: string; status: string } | undefined;
       if (!row) return;
       const message = this.options.store.db.prepare("SELECT content FROM messages WHERE session_id = ? AND run_id = ? AND role = 'assistant' ORDER BY created_at DESC LIMIT 1").get(sessionId, row.id) as { content: string } | undefined;
       const signature = `${row.id}:${row.status}`;

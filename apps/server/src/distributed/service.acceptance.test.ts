@@ -1,0 +1,103 @@
+import { afterEach, expect, it, vi } from 'vitest';
+import WebSocket from 'ws';
+import { EXAMPLE_CLIENT_SESSION_ID } from '../example.ts';
+import { startTestApp, waitFor, type TestApp } from '../test-utils.ts';
+import type { RemoteExecutionProgress } from './execution.ts';
+
+const apps: TestApp[] = [];
+afterEach(async () => {
+  vi.restoreAllMocks();
+  while (apps.length) await apps.pop()!.cleanup();
+});
+
+it('preserves a completed recovery run when a later local run starts before the progress flush', async () => {
+  const t = await startTestApp({ env: {} });
+  apps.push(t);
+  await t.app.providers.refresh();
+  const events: RemoteExecutionProgress[] = [];
+  const callbacks: Array<() => void> = [];
+  const heldTimers: NodeJS.Timeout[] = [];
+  const originalTimeout = globalThis.setTimeout;
+  // Hold only the production progress coalescer; real HTTP, runtime and SQLite remain active.
+  vi.spyOn(globalThis, 'setTimeout').mockImplementation(((callback: () => void, delay?: number, ...args: unknown[]) => {
+    if (delay !== 500) return Reflect.apply(originalTimeout, globalThis, [callback, delay, ...args]);
+    callbacks.push(callback);
+    const timer = originalTimeout(() => {}, 60_000);
+    timer.unref();
+    heldTimers.push(timer);
+    return timer;
+  }) as typeof setTimeout);
+  const adapter = t.app.distributed as unknown as {
+    subscribeProgress(id: string, listener: (event: RemoteExecutionProgress) => void): () => void;
+  };
+  const unsubscribe = adapter.subscribeProgress(EXAMPLE_CLIENT_SESSION_ID, (event) => events.push(event));
+  try {
+    t.fake.script = async (_options, emit) => { emit({ type: 'text', text: 'Approved recovery result' }); };
+    const first = t.app.runtime.start(EXAMPLE_CLIENT_SESSION_ID, 'approved recovery');
+    await waitFor(() => !t.app.runtime.isActive(EXAMPLE_CLIENT_SESSION_ID));
+    t.fake.script = async (_options, emit) => { emit({ type: 'text', text: 'Later local result' }); };
+    const second = t.app.runtime.start(EXAMPLE_CLIENT_SESSION_ID, 'later local work');
+    await waitFor(() => !t.app.runtime.isActive(EXAMPLE_CLIENT_SESSION_ID));
+    expect(first).not.toBe(second);
+    expect(callbacks).toHaveLength(1);
+    callbacks.shift()!();
+    expect(events).toContainEqual(expect.objectContaining({ runId: first, kind: 'result', status: 'completed', summary: 'Approved recovery result' }));
+    expect(events.filter((event) => event.runId === first)).toHaveLength(1);
+    // A repeated change notification cannot duplicate a terminal result.
+    t.app.store.touch();
+    callbacks.shift()?.();
+    expect(events.filter((event) => event.runId === first)).toHaveLength(1);
+  } finally {
+    unsubscribe();
+    for (const timer of heldTimers) clearTimeout(timer);
+  }
+});
+
+it('delivers invalidation to connected browsers without exposing distributed payloads', async () => {
+  const t = await startTestApp({ exampleWorkspace: false, env: {} });
+  apps.push(t);
+  const ws = new WebSocket(`ws://127.0.0.1:${t.port}/ws`, { origin: t.url });
+  const received: unknown[] = [];
+  ws.on('message', (message) => received.push(JSON.parse(message.toString())));
+  await new Promise<void>((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+  try {
+    t.app.store.touch();
+    await waitFor(() => received.length > 0);
+    expect(received).toEqual([{ type: 'state.changed' }]);
+    expect(t.fake.runs).toEqual([]);
+    const snapshot = await t.api('GET', '/api/distributed/snapshot');
+    expect(snapshot.status).toBe(200);
+    expect(snapshot.json.execution.requests).toEqual([]);
+  } finally { ws.close(); }
+});
+
+it('cannot bypass remote owner authorization through the ordinary native approval HTTP route', async () => {
+  const t = await startTestApp({ env: {} });
+  apps.push(t);
+  await t.app.providers.refresh();
+  const decisions: boolean[] = [];
+  t.fake.script = async (options) => {
+    decisions.push(await options.requestApproval({ tool: 'Bash', description: 'Inspect disposable repository', input: { command: 'git status' } }));
+  };
+  const runId = t.app.runtime.start(EXAMPLE_CLIENT_SESSION_ID, 'test owner approval');
+  const approval = await waitFor(() => t.app.store.pendingApprovals(EXAMPLE_CLIENT_SESSION_ID)[0]);
+  // Seed a dispatched request at the durable integration boundary; no remote provider or cloud is used.
+  const row = {
+    id: 'remote-test', team_id: 'team-test', shared_project_id: 'shared-test', source_device_id: 'source-test',
+    source_owner_id: 'source-owner', target_device_id: 'target-test', target_owner_id: 'target-owner', source_session_id: 'source-session',
+    agent_id: 'agent-test', target_session_id: EXAMPLE_CLIENT_SESSION_ID, content: 'test', mode: 'provider-failure',
+    evidence_json: '{}', target_config_digest: 'a'.repeat(64), request_digest: 'b'.repeat(64), state: 'dispatched', run_id: runId,
+    idempotency_key: 'test-owner-approval', created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+  };
+  t.app.store.db.prepare(`INSERT INTO mingle_remote_requests (${Object.keys(row).join(',')}) VALUES (${Object.keys(row).map(() => '?').join(',')})`)
+    .run(...Object.values(row));
+  const response = await t.api('POST', `/api/approvals/${approval.id}`, { decision: 'approved' });
+  expect(response.status).toBeGreaterThanOrEqual(400);
+  expect(response.status).toBeLessThan(500);
+  expect(t.app.store.getApproval(approval.id)?.status).toBe('pending');
+  expect(decisions).toEqual([]);
+  expect(t.app.runtime.isActive(EXAMPLE_CLIENT_SESSION_ID)).toBe(true);
+  await t.app.runtime.interrupt(EXAMPLE_CLIENT_SESSION_ID);
+  await waitFor(() => !t.app.runtime.isActive(EXAMPLE_CLIENT_SESSION_ID));
+  expect(decisions).toEqual([false]);
+});
