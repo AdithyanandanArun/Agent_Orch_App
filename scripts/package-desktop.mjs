@@ -1,10 +1,10 @@
 import { build } from 'esbuild';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { access, chmod, copyFile, cp, mkdir, readdir, readFile, readlink, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, chmod, copyFile, cp, mkdir, readdir, readFile, readlink, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
-import { dirname, join, relative, resolve, delimiter } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -14,13 +14,14 @@ const serverPackage = JSON.parse(await readFile(join(root, 'apps/server/package.
 if (pkg.version !== serverPackage.version) throw new Error('Desktop and server versions must match before packaging.');
 const runtime = JSON.parse(await readFile(join(root, 'packaging/node-runtime.json'), 'utf8'));
 const target = `${process.platform}-${process.arch}`;
-if (target !== 'linux-x64') throw new Error('Desktop release packaging currently supports Linux x86-64 only. Build on a Linux x86-64 machine.');
+if (!['linux-x64', 'win32-x64'].includes(target)) throw new Error(`Desktop release packaging does not support ${target}.`);
 if (!/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/.test(pkg.version)) throw new Error('Desktop version must be a semantic version.');
+if (!runtime[target]?.url || !runtime[target]?.sha256) throw new Error(`Pinned Node runtime metadata is missing for ${target}.`);
 const name = `mingle-${pkg.version}-${target}`;
 const release = join(root, 'release');
 const stage = join(release, name);
 const cache = join(release, '.cache/node');
-const nodeArchive = join(cache, `node-v${runtime.version}-${target}.tar.xz`);
+const nodeArchive = join(cache, `node-v${runtime.version}-${target}.${target === 'win32-x64' ? 'zip' : 'tar.xz'}`);
 const nodeDir = join(cache, `node-v${runtime.version}-${target}`);
 const artifact = join(release, `${name}.tar.gz`);
 
@@ -38,6 +39,13 @@ async function hash(file) {
 }
 async function present(path) { try { await access(path); return true; } catch { return false; } }
 
+async function runPnpm(args, options = {}) {
+  const cli = process.env.npm_execpath;
+  if (cli && /\.(?:c?js|mjs)$/i.test(cli) && await present(cli)) return run(process.execPath, [cli, ...args], options);
+  if (process.platform === 'win32') throw new Error('Run Windows packaging through pnpm so npm_execpath can invoke pnpm without a shell.');
+  return run('pnpm', args, options);
+}
+
 await access(join(root, 'apps/web/dist/index.html'));
 await mkdir(cache, { recursive: true });
 if (!(await present(nodeArchive))) {
@@ -51,8 +59,8 @@ if (!(await present(nodeArchive))) {
 }
 if (await hash(nodeArchive) !== runtime[target].sha256) throw new Error('Cached Node archive checksum mismatch. Remove release/.cache/node and retry.');
 await rm(nodeDir, { recursive: true, force: true });
-await run('tar', ['-xJf', nodeArchive, '-C', cache]);
-const node = join(nodeDir, 'bin/node');
+await run('tar', [target === 'win32-x64' ? '-xf' : '-xJf', nodeArchive, '-C', cache]);
+const node = target === 'win32-x64' ? join(nodeDir, 'node.exe') : join(nodeDir, 'bin/node');
 const environment = { ...process.env, PATH: `${dirname(node)}${delimiter}${process.env.PATH ?? ''}`, NODE_ENV: 'production' };
 delete environment.NODE_OPTIONS;
 delete environment.NODE_PATH;
@@ -62,7 +70,7 @@ console.log(`Staging Mingle ${pkg.version} for ${target}…`);
 await rm(stage, { recursive: true, force: true });
 const electron = require('electron');
 await cp(dirname(electron), stage, { recursive: true, dereference: true });
-await rename(join(stage, 'electron'), join(stage, 'mingle'));
+await rename(join(stage, target === 'win32-x64' ? 'electron.exe' : 'electron'), join(stage, target === 'win32-x64' ? 'mingle.exe' : 'mingle'));
 await rm(join(stage, 'resources/default_app.asar'), { force: true });
 const appDir = join(stage, 'resources/app');
 await mkdir(appDir, { recursive: true });
@@ -86,29 +94,34 @@ for (const project of ['apps/server', 'apps/web', 'apps/desktop', 'packages/cont
 for (const project of ['apps/server', 'packages/contracts']) await cp(join(root, project, 'src'), join(deployWorkspace, project, 'src'), { recursive: true });
 try {
   // No source-workspace install is needed: deploy installs the selected production graph directly.
-  await run('pnpm', ['--config.verify-deps-before-run=false', '--dir', deployWorkspace, '--filter', '@mingle/server', 'deploy', '--legacy', '--prod', server], { env: environment });
+  await runPnpm(['--config.verify-deps-before-run=false', '--dir', deployWorkspace, '--filter', '@mingle/server', 'deploy', '--legacy', '--prod', server], { env: environment });
 } finally { await rm(deployWorkspace, { recursive: true, force: true }); }
 // Mingle uses separately installed provider CLIs. Do not redistribute the optional native Claude CLI.
 const virtualStore = join(server, 'node_modules/.pnpm');
-// Legacy deploy hoists a self-reference to its source workspace. Keep that link inside the release.
-const selfLink = join(virtualStore, 'node_modules/@mingle/server');
-await rm(selfLink, { force: true });
-await symlink(relative(dirname(selfLink), server), selfLink);
+const cliPlatform = target === 'win32-x64' ? 'win32-x64' : 'linux-';
 for (const entry of await readdir(virtualStore)) {
-  if (entry.startsWith('@anthropic-ai+claude-agent-sdk-linux-')) await rm(join(virtualStore, entry), { recursive: true, force: true });
+  if (entry.startsWith(`@anthropic-ai+claude-agent-sdk-${cliPlatform}`)) await rm(join(virtualStore, entry), { recursive: true, force: true });
 }
+// Legacy deploy hoists a package self-reference. It is unnecessary at runtime and can make
+// recursive installers follow a directory link back to the server root.
+await rm(join(virtualStore, 'node_modules/@mingle/server'), { recursive: true, force: true });
 // Remove dependency symlinks to the excluded optional CLI, retaining all JS SDK dependencies.
+const serverRoot = resolve(server);
+const pathIsWithin = (parent, candidate) => {
+  const fromParent = relative(parent, candidate);
+  return fromParent === '' || (fromParent !== '..' && !fromParent.startsWith(`..${sep}`) && !isAbsolute(fromParent));
+};
 async function removeBrokenLinks(directory) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name);
     if (entry.isSymbolicLink()) {
       if (!(await present(path))) {
-        if (!(await readlink(path)).includes('claude-agent-sdk-linux-')) throw new Error(`Broken runtime dependency link: ${path}`);
-        await rm(path);
+        if (!(await readlink(path)).includes(`claude-agent-sdk-${cliPlatform}`)) throw new Error(`Broken runtime dependency link: ${path}`);
+        await rm(path, { recursive: true, force: true });
       } else {
         const resolved = await realpath(path);
-        const boundary = resolve(server) + '/';
-        if (resolved !== resolve(server) && !resolved.startsWith(boundary)) throw new Error(`Runtime dependency escapes the release directory: ${path}`);
+        if (!pathIsWithin(serverRoot, resolved)) throw new Error(`Runtime dependency escapes the release directory: ${path}`);
+        if (pathIsWithin(resolved, path)) throw new Error(`Recursive runtime dependency link is not safe to package: ${path}`);
       }
     } else if (entry.isDirectory()) await removeBrokenLinks(path);
   }
@@ -128,11 +141,14 @@ await build({
 await rm(join(server, 'src'), { recursive: true, force: true });
 await rm(join(server, 'tsconfig.json'), { force: true });
 await cp(join(root, 'apps/web/dist'), join(workspace, 'apps/web/dist'), { recursive: true });
-await mkdir(join(stage, 'resources/runtime/bin'), { recursive: true });
-await copyFile(node, join(stage, 'resources/runtime/bin/node'));
-await chmod(join(stage, 'resources/runtime/bin/node'), 0o755);
+const stagedNode = join(stage, 'resources/runtime/bin', target === 'win32-x64' ? 'node.exe' : 'node');
+await mkdir(dirname(stagedNode), { recursive: true });
+await copyFile(node, stagedNode);
+if (target !== 'win32-x64') await chmod(stagedNode, 0o755);
 await copyFile(join(root, 'apps/web/public/mingle.svg'), join(stage, 'mingle.svg'));
-await writeFile(join(stage, 'mingle.desktop'), `[Desktop Entry]\nType=Application\nName=Mingle\nComment=Local workspace for independent coding-agent sessions\nExec=mingle %U\nIcon=mingle\nTerminal=false\nCategories=Development;IDE;\nStartupWMClass=mingle\n`);
+if (target === 'linux-x64') {
+  await writeFile(join(stage, 'mingle.desktop'), `[Desktop Entry]\nType=Application\nName=Mingle\nComment=Local workspace for independent coding-agent sessions\nExec=mingle %U\nIcon=mingle\nTerminal=false\nCategories=Development;IDE;\nStartupWMClass=mingle\n`);
+}
 
 const licenses = join(stage, 'resources/licenses');
 await mkdir(licenses, { recursive: true });
@@ -164,7 +180,7 @@ for (const versioned of await readdir(virtualStore)) {
   for (const entry of names) {
     const packageDir = join(modules, entry);
     try {
-      if (await realpath(packageDir) !== resolve(packageDir)) continue;
+      if (!pathIsWithin(resolve(packageDir), await realpath(packageDir))) continue;
       await inventoryPackage(packageDir);
     } catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
@@ -196,10 +212,14 @@ async function frontendLicenses(packageDir, includePackage = true) {
 await frontendLicenses(join(root, 'apps/web'), false);
 await writeFile(join(licenses, 'dependencies.json'), JSON.stringify(inventory.sort((a, b) => a.name.localeCompare(b.name)), null, 2) + '\n');
 await writeFile(join(stage, 'resources/build-info.json'), JSON.stringify({ version: pkg.version, target, node: runtime.version, nodeArchiveSha256: runtime[target].sha256, electron: JSON.parse(await readFile(require.resolve('electron/package.json'), 'utf8')).version }, null, 2) + '\n');
-// Stable metadata keeps archive ordering, owners and timestamps independent of the build machine.
-const epoch = process.env.SOURCE_DATE_EPOCH ?? '0';
-if (!/^\d+$/.test(epoch)) throw new Error('SOURCE_DATE_EPOCH must be a nonnegative integer.');
-await run('tar', ['--sort=name', `--mtime=@${epoch}`, '--owner=0', '--group=0', '--numeric-owner', '-czf', artifact, '-C', release, name]);
-const checksum = await hash(artifact);
-await writeFile(`${artifact}.sha256`, `${checksum}  ${name}.tar.gz\n`);
-console.log(`Desktop archive: ${artifact}\nSHA256: ${checksum}`);
+if (target === 'linux-x64') {
+  // Stable metadata keeps archive ordering, owners and timestamps independent of the build machine.
+  const epoch = process.env.SOURCE_DATE_EPOCH ?? '0';
+  if (!/^\d+$/.test(epoch)) throw new Error('SOURCE_DATE_EPOCH must be a nonnegative integer.');
+  await run('tar', ['--sort=name', `--mtime=@${epoch}`, '--owner=0', '--group=0', '--numeric-owner', '-czf', artifact, '-C', release, name]);
+  const checksum = await hash(artifact);
+  await writeFile(`${artifact}.sha256`, `${checksum}  ${name}.tar.gz\n`);
+  console.log(`Desktop archive: ${artifact}\nSHA256: ${checksum}`);
+} else {
+  console.log(`Windows app payload staged at ${stage}`);
+}

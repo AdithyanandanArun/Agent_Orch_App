@@ -3,5 +3,9 @@
   "linux-x64": {
     "url": "https://nodejs.org/dist/v26.8.2/node-v26.8.2-linux-x64.tar.xz",
     "sha256": "40e1d3225c1c9ae9a2671c98ecb9857e4d5555026394f348645676798840d5c5"
+  },
+  "win32-x64": {
+    "url": "https://nodejs.org/dist/v26.8.2/node-v26.8.2-win-x64.zip",
+    "sha256": "cf02f5d0c06c794b84f277177d5cf3743d0924ca49f6641cd435dd7cb6ee9085"
   }
 }

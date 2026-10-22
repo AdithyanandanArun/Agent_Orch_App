@@ -1,0 +1,33 @@
+name: Build Windows desktop installer
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-x64:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26.8.2
+          cache: pnpm
+      - name: Install NSIS in the disposable runner
+        run: choco install nsis --version=3.11 --yes --no-progress
+      - name: Add NSIS to PATH
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_PATH -Value (Join-Path ${env:ProgramFiles(x86)} 'NSIS')
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm package:windows
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mingle-windows-x64
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            release/*-win32-x64-setup.exe
+            release/*-win32-x64-setup.exe.sha256

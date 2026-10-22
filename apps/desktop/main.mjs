@@ -24,7 +24,7 @@ mkdirSync(userData, { recursive: true, mode: 0o700 });
 app.setPath('userData', userData);
 app.setPath('sessionData', userData);
 const runtimeNodeOverride = process.env.MINGLE_NODE_EXECUTABLE !== undefined ? process.env.MINGLE_NODE_EXECUTABLE : process.env.RELAY_NODE_EXECUTABLE;
-const runtimeNode = app.isPackaged ? join(process.resourcesPath, 'runtime/bin/node') : runtimeNodeOverride?.trim() || 'node';
+const runtimeNode = app.isPackaged ? join(process.resourcesPath, 'runtime/bin', process.platform === 'win32' ? 'node.exe' : 'node') : runtimeNodeOverride?.trim() || 'node';
 if (process.platform === 'linux') {
   app.setDesktopName('mingle.desktop');
   app.commandLine.appendSwitch('class', 'mingle');
@@ -206,7 +206,7 @@ async function openWorkspace() {
   delete environment.ELECTRON_RUN_AS_NODE;
   delete environment.NODE_OPTIONS;
   delete environment.NODE_PATH;
-  if (app.isPackaged) environment.PATH = [dirname(runtimeNode), process.env.PATH || '/usr/local/bin:/usr/bin:/bin'].join(delimiter);
+  if (app.isPackaged) environment.PATH = [dirname(runtimeNode), process.env.PATH || (process.platform === 'win32' ? '' : '/usr/local/bin:/usr/bin:/bin')].join(delimiter);
   const serverArgs = app.isPackaged ? [join(serverRoot, 'dist/index.mjs')] : ['--import', join(serverRoot, 'node_modules/tsx/dist/loader.mjs'), join(serverRoot, 'src/index.ts')];
   backend = spawn(runtimeNode, serverArgs, {
     cwd: app.isPackaged ? userData : root,
