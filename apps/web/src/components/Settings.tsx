@@ -14,9 +14,10 @@ import { defaultProviderModel, usesNativeModelDefault, providerModelChoices, pro
 import { AntigravityRuntimeSetup } from './AntigravityRuntimeSetup';
 import { ProviderExecutableSetting, executableSetting } from './ProviderExecutableSetting';
 import { RemoveProjectButton } from './RemoveProjectDialog';
+import { TeamWorkspace } from './distributed/TeamWorkspace';
 
 const CATEGORIES: { id: SettingsSection; name: string }[] = [
-  { id: 'general', name: 'General' }, { id: 'account', name: 'Account' }, { id: 'project', name: 'Project' }, { id: 'agents', name: 'Agents' }, { id: 'providers', name: 'Providers' }, { id: 'browser', name: 'Browser' }, { id: 'appearance', name: 'Appearance' },
+  { id: 'general', name: 'General' }, { id: 'account', name: 'Account' }, { id: 'team', name: 'Team workspace' }, { id: 'project', name: 'Project' }, { id: 'agents', name: 'Agents' }, { id: 'providers', name: 'Providers' }, { id: 'browser', name: 'Browser' }, { id: 'appearance', name: 'Appearance' },
 ];
 const effortName = (id: string, label: string) => ({ low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra High', 'extra-high': 'Extra High', max: 'Max', ultra: 'Ultra' } as Record<string, string>)[id.toLowerCase()] ?? label;
 const serviceTiersFor = (model: ProviderModel | undefined) => [
@@ -120,6 +121,7 @@ export function SettingsPage() {
       </nav>
       {error ? <InlineError>{error}</InlineError> : null}
       {category === 'account' ? <AccountSettings settings={settings} /> : null}
+      {category === 'team' ? <TeamWorkspace /> : null}
       {category === 'general' ? <div className="settings-page__section">
         <div className="settings-page__section-head"><h2>New sessions</h2><p>Defaults for your next session. Existing conversations keep their own settings.</p></div>
         <SettingRow title="Provider" description="The agent used when you start a session." htmlFor="st-provider">

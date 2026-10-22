@@ -7,7 +7,7 @@ import { resolveTab, useBrowserStore } from './browser';
 import { activeMembers, findGroupForSession, groupChildSessionIds } from '../lib/groups';
 
 export type View = 'workspace' | 'tasks' | 'activity' | 'map' | 'settings';
-export type SettingsSection = 'account' | 'general' | 'project' | 'agents' | 'providers' | 'browser' | 'appearance';
+export type SettingsSection = 'account' | 'general' | 'project' | 'agents' | 'team' | 'providers' | 'browser' | 'appearance';
 export type ContextTab = 'overview' | 'files' | 'changes' | 'browser';
 export type Scope = 'session' | 'project';
 export type Connection = 'connecting' | 'online' | 'offline';
