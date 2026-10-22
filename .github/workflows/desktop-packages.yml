@@ -3,13 +3,18 @@ name: Build desktop packages
 # Builds downloadable workflow artifacts. Creating a public release or AUR entry remains manual.
 on:
   workflow_dispatch:
+    inputs:
+      include_arch:
+        description: Also build the Arch package
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   linux:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -18,16 +23,39 @@ jobs:
           node-version: 26.8.2
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm package:linux
+      - run: pnpm package:deb
+      - name: Validate Debian metadata and extracted runtime
+        run: |
+          dpkg-deb --info release/*.deb
+          dpkg-deb --contents release/*.deb > release/debian-contents.txt
+          grep -E '^-rwsr-xr-x root/root .*opt/mingle/chrome-sandbox$' release/debian-contents.txt
+          dpkg-deb --extract release/*.deb release/debian-extracted
+          node scripts/smoke-packaged-linux.mjs release/debian-extracted/opt/mingle
+      - name: Verify installation, launcher and removal in disposable runner
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ./release/*.deb
+          test "$(readlink /usr/bin/mingle)" = /opt/mingle/mingle
+          test "$(stat -c '%u:%g:%a' /opt/mingle/chrome-sandbox)" = '0:0:4755'
+          node scripts/smoke-packaged-linux.mjs /opt/mingle
+          mkdir -p "$HOME/.config/Mingle"
+          echo keep > "$HOME/.config/Mingle/package-check"
+          sudo apt-get remove -y mingle
+          test -f "$HOME/.config/Mingle/package-check"
+          test ! -e /usr/bin/mingle
       - uses: actions/upload-artifact@v4
         with:
           name: mingle-linux-x64
           compression-level: 0
+          retention-days: 7
           path: |
             release/*.tar.gz
             release/*.tar.gz.sha256
+            release/*.deb
+            release/*.deb.sha256
 
   arch:
+    if: ${{ inputs.include_arch }}
     needs: linux
     runs-on: ubuntu-24.04
     container: archlinux:base-devel

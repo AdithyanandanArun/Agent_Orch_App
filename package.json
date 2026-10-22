@@ -16,7 +16,9 @@
     "start": "pnpm --filter @mingle/server start",
     "desktop": "pnpm --filter @mingle/desktop start",
     "package:linux": "pnpm build && node scripts/package-desktop.mjs",
-    "package:arch": "pnpm package:linux && node scripts/package-arch.mjs"
+    "package:arch": "pnpm package:linux && node scripts/package-arch.mjs",
+    "package:deb": "pnpm package:linux && node scripts/package-deb.mjs",
+    "package:windows": "pnpm build && node scripts/package-desktop.mjs && node scripts/package-windows.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
