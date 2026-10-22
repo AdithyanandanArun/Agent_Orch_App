@@ -9,7 +9,9 @@ import type { DistributedDeviceEnvelope } from '../../../../packages/contracts/s
 import { conflict, notFound, nowIso } from '../util.ts';
 
 export const MAX_BUNDLE_BYTES = 16 * 1024 * 1024;
-export const BUNDLE_CHUNK_BYTES = 256 * 1024;
+// Base64 expands a chunk by 4/3 before JSON and envelope metadata are added.
+// Half of the mailbox's 256 KiB plaintext ceiling leaves safe room for both.
+export const BUNDLE_CHUNK_BYTES = 128 * 1024;
 export const MAX_COMMAND_OUTPUT_BYTES = 64 * 1024;
 export const MAX_GIT_OUTPUT_BYTES = 10 * 1024 * 1024;
 export const OPERATION_TIMEOUT_MS = 20_000;
@@ -165,7 +167,10 @@ export async function canonicalProject(options: DistributedServiceOptions, local
   const root = await realpath(project.path);
   const info = await stat(root);
   if (!info.isDirectory()) throw conflict('The owner-selected project path is not a directory.');
-  const top = (await repositoryGit(options.repository, root, ['rev-parse', '--show-toplevel'], { maxOutputBytes: 4096 })).stdout.toString('utf8').trim();
+  const topOutput = (await repositoryGit(options.repository, root, ['rev-parse', '--show-toplevel'], { maxOutputBytes: 4096 })).stdout.toString('utf8');
+  // Git adds one newline delimiter. Do not trim: valid filesystem roots can end in spaces,
+  // tabs, or newlines, and those characters are part of the canonical path.
+  const top = topOutput.endsWith('\n') ? topOutput.slice(0, -1) : topOutput;
   if (!top || await realpath(top) !== root) throw conflict('The owner-selected project is not the canonical root of a Git repository.');
   return { id: project.id, path: root };
 }

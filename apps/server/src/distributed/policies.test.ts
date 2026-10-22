@@ -18,8 +18,12 @@ GRANT USAGE ON SCHEMA auth TO anon, authenticated;
 `);
 await pg.exec(readFileSync(process.env.MINGLE_TEST_TEAM_MIGRATION ?? new URL('../../../../supabase/migrations/20261022153000_mingle_teams.sql', import.meta.url), 'utf8'));
 check(true, 'migration applies to PostgreSQL');
-const ids = ['10000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000002','10000000-0000-4000-8000-000000000003'];
-const emails = ['owner@example.test','member@example.test','outsider@example.test'];
+const ids = [
+  '10000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000002',
+  '10000000-0000-4000-8000-000000000003', '10000000-0000-4000-8000-000000000004',
+  '10000000-0000-4000-8000-000000000005',
+];
+const emails = ['owner@example.test','member@example.test','admin-one@example.test','admin-two@example.test','outsider@example.test'];
 for (let i=0;i<ids.length;i++) await pg.query('INSERT INTO auth.users VALUES ($1,$2,now())', [ids[i],emails[i]]);
 async function user(i: number, fn: () => Promise<unknown>) {
   await pg.query("SELECT set_config('request.jwt.claim.sub',$1,false),set_config('request.jwt.claims',$2,false)",[ids[i],JSON.stringify({sub:ids[i],email:emails[i]})]);
@@ -33,7 +37,7 @@ await user(0, async () => {
   check(!!team,'owner can create a team and read RETURNING row');
   check((await pg.query('SELECT * FROM mingle_members WHERE team_id=$1',[team])).rows.length===1,'team owner membership created atomically');
 });
-await user(2,async()=>check((await pg.query('SELECT * FROM mingle_teams WHERE id=$1',[team])).rows.length===0,'outsider cannot read team'));
+await user(4,async()=>check((await pg.query('SELECT * FROM mingle_teams WHERE id=$1',[team])).rows.length===0,'outsider cannot read team'));
 await pg.exec('SET ROLE anon');
 try {
   await assert.rejects(pg.query('SELECT * FROM mingle_teams'));
@@ -44,7 +48,7 @@ await user(0,async()=> {
   await pg.query("INSERT INTO mingle_invitations(team_id,email,role,token_hash,expires_at) VALUES ($1,$2,'member',$3,now()+interval '1 day')",[team,emails[1],tokenHash]);
   check(true,'owner can invite verified account email');
 });
-await user(2,async()=> {
+await user(4,async()=> {
   await assert.rejects(pg.query('SELECT accept_mingle_invitation($1)',[tokenHash]));
   check(true,'wrong verified account cannot accept invitation');
 });
@@ -53,6 +57,34 @@ await user(1,async()=> {
   check(r.rows[0]!.team===team,'invited verified account joins team');
   await assert.rejects(pg.query('SELECT accept_mingle_invitation($1)',[tokenHash]));
   check(true,'invitation cannot be replayed');
+});
+const expiredTokenHash='b'.repeat(64);
+await user(0,async()=>await pg.query("INSERT INTO mingle_invitations(team_id,email,role,token_hash,expires_at) VALUES ($1,$2,'member',$3,now()+interval '25 milliseconds')",[team,emails[1],expiredTokenHash]));
+await new Promise((resolve)=>setTimeout(resolve,60));
+await user(1,async()=> {
+  await assert.rejects(pg.query('SELECT accept_mingle_invitation($1)',[expiredTokenHash]));
+  check(true,'expired invitation cannot be accepted');
+});
+const adminOneTokenHash='c'.repeat(64),adminTwoTokenHash='d'.repeat(64);
+await user(0,async()=> {
+  await pg.query("INSERT INTO mingle_invitations(team_id,email,role,token_hash,expires_at) VALUES ($1,$2,'admin',$3,now()+interval '1 day')",[team,emails[2],adminOneTokenHash]);
+  await pg.query("INSERT INTO mingle_invitations(team_id,email,role,token_hash,expires_at) VALUES ($1,$2,'admin',$3,now()+interval '1 day')",[team,emails[3],adminTwoTokenHash]);
+});
+await user(2,async()=> {
+  await pg.query('SELECT accept_mingle_invitation($1)',[adminOneTokenHash]);
+  check((await pg.query<{role:string}>('SELECT role FROM mingle_members WHERE team_id=$1 AND user_id=$2',[team,ids[2]])).rows[0]?.role==='admin','owner-issued admin invitation grants admin role');
+});
+await user(3,async()=> {
+  await pg.query('SELECT accept_mingle_invitation($1)',[adminTwoTokenHash]);
+  check((await pg.query<{role:string}>('SELECT role FROM mingle_members WHERE team_id=$1 AND user_id=$2',[team,ids[3]])).rows[0]?.role==='admin','second verified invitee receives admin role');
+});
+await user(2,async()=> {
+  const changed=await pg.query('UPDATE mingle_members SET revoked_at=now() WHERE team_id=$1 AND user_id=$2 RETURNING user_id',[team,ids[3]]);
+  check(changed.rows.length===0,'admin cannot revoke another admin');
+});
+await user(0,async()=> {
+  const row=await pg.query<{revoked_at:string|null}>('SELECT revoked_at FROM mingle_members WHERE team_id=$1 AND user_id=$2',[team,ids[3]]);
+  check(row.rows[0]?.revoked_at===null,'denied admin revocation leaves membership active');
 });
 await user(1,async()=> {
   await assert.rejects(pg.query('UPDATE mingle_members SET role=$1 WHERE team_id=$2 AND user_id=$3',['owner',team,ids[1]]));
@@ -96,7 +128,7 @@ await user(1,async()=> {
   check(rows.length===1,'only intended peer receives envelope');
   check(new Date(rows[0]!.created_at as string).toISOString()===created,'relay preserves signed creation timestamp');
 });
-await user(2,async()=>check((await pg.query('SELECT * FROM mingle_envelopes')).rows.length===0,'outsider cannot read encrypted mailbox'));
+await user(4,async()=>check((await pg.query('SELECT * FROM mingle_envelopes')).rows.length===0,'outsider cannot read encrypted mailbox'));
 await user(0,async()=> {
   await pg.query('UPDATE mingle_members SET revoked_at=now() WHERE team_id=$1 AND user_id=$2',[team,ids[1]]);
   check(true,'owner can revoke member');
@@ -105,6 +137,6 @@ await user(1,async()=> {
   check((await pg.query('SELECT * FROM mingle_teams')).rows.length===0,'revoked member loses team access');
   check((await pg.query('SELECT * FROM mingle_envelopes')).rows.length===0,'revoked member loses queued envelope access');
 });
-assert.equal(checks, 25);
+assert.equal(checks, 30);
 } finally { await pg.close(); }
 }, 30_000);

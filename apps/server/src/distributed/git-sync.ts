@@ -128,7 +128,14 @@ export class GitSyncService {
     if (request.toDeviceId === deviceId) throw new Error('A Git transfer must target another linked device.');
     await this.options.authorizeTeam({ teamId: request.teamId, peerDeviceId: request.toDeviceId });
     const existing = request.idempotencyKey ? this.findOperation(owner.id, request.teamId, request.sharedProjectId, 'transfer', request.idempotencyKey) : undefined;
-    if (existing) return this.mapRequest(existing);
+    if (existing) {
+      const prior = parseJson<TransferOfferPayload>(existing.payload_json, 'transfer offer');
+      if (existing.peer_device_id !== request.toDeviceId || prior.sourceHead !== request.expectedHead.toLowerCase()
+        || prior.baseHead !== (request.baseHead?.toLowerCase() ?? null) || (request.branch !== undefined && prior.branch !== request.branch)) {
+        throw conflict('This idempotency key was already used for a different Git transfer request.');
+      }
+      return this.mapRequest(existing);
+    }
     const binding = await resolveProjectBinding(this.options, this.db, request, owner.id);
     const state = await fingerprintRepository(binding.canonicalPath, this.options.repository);
     if (state.head.toLowerCase() !== request.expectedHead.toLowerCase()) throw conflict('Repository HEAD changed before the Git bundle was prepared. Refresh and retry.');
@@ -189,6 +196,12 @@ export class GitSyncService {
     const existing = request.idempotencyKey ? this.findOperation(owner.id, request.teamId, request.sharedProjectId, 'integration', request.idempotencyKey) : undefined;
     if (existing) {
       await this.options.authorizeTeam({ teamId: existing.team_id, peerDeviceId: existing.peer_device_id });
+      const prior = parseJson<{ incomingRequestId: string; action: 'merge' | 'push'; expectedHead: string; expectedFingerprint: string; remoteName: string | null }>(existing.payload_json, 'integration approval');
+      if (prior.incomingRequestId !== request.incomingRequestId || prior.action !== request.action
+        || prior.expectedHead !== request.expectedHead.toLowerCase() || prior.expectedFingerprint !== request.expectedFingerprint.toLowerCase()
+        || prior.remoteName !== (request.remoteName ?? null)) {
+        throw conflict('This idempotency key was already used for a different Git integration request.');
+      }
       return this.mapRequest(existing);
     }
     const transfer = this.requireRow(request.incomingRequestId);
@@ -262,6 +275,9 @@ export class GitSyncService {
     const parsed = GitTransferOfferSchema.safeParse(envelope.payload);
     if (!parsed.success) throw new Error('Malformed Git bundle offer.');
     const offer = parsed.data;
+    if (offer.chunkCount !== Math.ceil(offer.bundleSizeBytes / BUNDLE_CHUNK_BYTES)) {
+      throw new Error('Git bundle offer chunk dimensions do not match its bounded size.');
+    }
     if (offer.sharedProjectId.length > 200) throw new Error('Invalid shared project ID.');
     const binding = await resolveProjectBinding(this.options, this.db, { teamId: envelope.teamId, sharedProjectId: offer.sharedProjectId, peerDeviceId: envelope.fromDeviceId }, ownerId);
     const existing = this.db.prepare(`SELECT * FROM ${TABLE} WHERE direction='incoming' AND peer_device_id=? AND external_id=?`).get(envelope.fromDeviceId, offer.requestId) as GitRequestRow | undefined;

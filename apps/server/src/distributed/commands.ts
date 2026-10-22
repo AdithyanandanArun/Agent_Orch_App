@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { DistributedRequestDecisionSchema, RemoteCommandRequestSchema, RemoteCommandResultSchema } from '../../../../packages/contracts/src/remote-git.ts';
 import type { DistributedDeviceEnvelope, RemoteCommandOperation, RemoteCommandRequestInput, RemoteCommandServiceSnapshot as RemoteCommandServiceSnapshotType, RemoteCommandSnapshot } from '../../../../packages/contracts/src/remote-git.ts';
@@ -115,10 +116,17 @@ export class RemoteCommandService {
     const ownDeviceId = this.localDeviceId(request.teamId);
     if (request.toDeviceId === ownDeviceId) throw new Error('A remote command must target another linked device.');
     await this.options.authorizeTeam({ teamId: request.teamId, peerDeviceId: request.toDeviceId });
-    const existing = request.idempotencyKey ? this.findOperation(owner.id, request.teamId, request.sharedProjectId, request.idempotencyKey) : undefined;
-    if (existing) return this.mapRow(existing);
-    const binding = await resolveProjectBinding(this.options, this.db, request, owner.id);
     const targetCwd = normalizeCwd(request.cwd);
+    const existing = request.idempotencyKey ? this.findOperation(owner.id, request.teamId, request.sharedProjectId, request.idempotencyKey) : undefined;
+    if (existing) {
+      const prior = parseJson<CommandWirePayload>(existing.payload_json, 'command payload');
+      if (existing.peer_device_id !== request.toDeviceId || prior.cwd !== targetCwd
+        || JSON.stringify(prior.operation) !== JSON.stringify(request.operation)) {
+        throw conflict('This idempotency key was already used for a different remote command request.');
+      }
+      return this.mapRow(existing);
+    }
+    const binding = await resolveProjectBinding(this.options, this.db, request, owner.id);
     const id = randomUUID().replaceAll('-', '');
     const payload: CommandWirePayload = { requestId: id, sharedProjectId: request.sharedProjectId, operation: request.operation, cwd: targetCwd };
     const digest = digestOf(payload);
@@ -308,7 +316,9 @@ export class RemoteCommandService {
 }
 
 function normalizeCwd(input: string): string {
-  if (input.length > 1024 || input.includes('\0') || input.startsWith('/') || input.includes('\\')) throw new Error('Remote command cwd must be a project-relative POSIX path.');
+  if (input.length > 1024 || input.includes('\0') || input.startsWith('/') || path.win32.isAbsolute(input) || input.includes('\\')) {
+    throw new Error('Remote command cwd must be a project-relative POSIX path.');
+  }
   const components = input.split('/').filter((part) => part && part !== '.');
   if (components.some((part) => part === '..')) throw new Error('Remote command cwd traversal is not allowed.');
   return components.join('/') || '.';
