@@ -249,3 +249,7 @@ export * from './message-context';
 export * from './native-actions';
 export * from './account';
 export * from './planning';
+export * from './teams';
+export * from './remote-execution';
+export * from './remote-git';
+export * from './devices';

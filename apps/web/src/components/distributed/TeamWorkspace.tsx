@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Activity, ArrowDownToLine, ArrowLeftRight, Check, CircleHelp, GitBranch, Laptop, LockKeyhole, MessageSquare, Plus, RefreshCw, Send, Shield, Users, Workflow } from 'lucide-react';
-import type { Project, Session } from '@mingle/contracts';
+import type { Project, Session, Task } from '@mingle/contracts';
 import { useMingle } from '../../store/store';
 import { Button, Badge, EmptyState, InlineError } from '../ui';
 import { createIdempotencyKey, distributedApi, DistributedApiError, type DistributedRecord, type DistributedSnapshot } from './api';
 import { asRecord, idOf, nameOf, readList, readText, readValue, unwrap } from './viewModels';
 import '../../styles/distributed.css';
+import { SharedAgentMap } from './SharedAgentMap';
 
 type WorkspaceTab = 'people' | 'projects' | 'devices' | 'agents' | 'conversation' | 'recovery' | 'transfers';
 const TABS: { id: WorkspaceTab; label: string }[] = [
@@ -106,13 +107,19 @@ export function TeamWorkspace() {
   const teams = useMemo(() => serviceTeamRows(snapshot), [snapshot]);
   const chosenTeamRow = teams.find((team) => idOf(team, ['id', 'teamId']) === selectedTeamId) ?? teams[0];
   const selectedTeam = chosenTeamRow ? unwrap(chosenTeamRow, 'team') : {};
+  const selectedTeamKey = idOf(chosenTeamRow, ['id', 'teamId']) || selectedTeamId;
+  const teamRows = (rows: DistributedRecord[]) => rows.filter((row) => !readText(row, ['teamId']) || readText(row, ['teamId']) === selectedTeamKey);
   const teamContainers = [snapshot?.teams, chosenTeamRow, selectedTeam];
-  const sharedProjects = listSnapshot(snapshot, 'teams', ['projects', 'sharedProjects', 'items'], teamContainers);
-  const members = listSnapshot(snapshot, 'teams', ['members', 'roster', 'people'], [chosenTeamRow, selectedTeam]);
-  const invitations = listSnapshot(snapshot, 'teams', ['invitations', 'pendingInvitations'], [chosenTeamRow, selectedTeam]);
+  const bindings = listSnapshot(snapshot, 'execution', ['bindings']);
+  const sharedProjects = teamRows(listSnapshot(snapshot, 'teams', ['projects', 'sharedProjects', 'items'], teamContainers)).map((row) => {
+    const binding = bindings.find((binding) => binding.teamId === selectedTeamKey && binding.sharedProjectId === row.id);
+    return binding ? { ...row, localProjectId: binding.localProjectId } : row;
+  });
+  const members = teamRows(listSnapshot(snapshot, 'teams', ['members', 'roster', 'people'], [chosenTeamRow, selectedTeam]));
+  const invitations = teamRows(listSnapshot(snapshot, 'teams', ['invitations', 'pendingInvitations'], [chosenTeamRow, selectedTeam]));
   const devices = listSnapshot(snapshot, 'transport', ['devices', 'registeredDevices', 'roster'], teamContainers);
   const transportSection = asRecord(snapshot?.transport) ?? {};
-  const localDevice = asRecord(readValue(transportSection, ['localDevice', 'device'])) ?? {};
+  const localDevice = devices.find((device) => idOf(device, ['id', 'deviceId']) === readText(transportSection, ['deviceId'])) ?? asRecord(readValue(transportSection, ['localDevice', 'device'])) ?? {};
   const links = readList(transportSection, ['links', 'deviceLinks']);
   const agents = listSnapshot(snapshot, 'execution', ['agents', 'roster', 'remoteAgents'], teamContainers);
   const messages = listSnapshot(snapshot, 'execution', ['messages', 'conversation', 'chat'], teamContainers);
@@ -124,7 +131,8 @@ export function TeamWorkspace() {
   const commandRequests = listSnapshot(snapshot, 'commands', ['requests', 'commandRequests'], teamContainers);
   const commandAudit = listSnapshot(snapshot, 'commands', ['audit', 'audits', 'history', 'outcomes'], teamContainers);
   const selectedLocalProject = projects.find((project) => project.id === activeProjectId);
-  const teamsStatus = displayStatus(snapshot?.teams, ['status', 'state', 'connection']);
+  const teamSection = asRecord(snapshot?.teams);
+  const teamsStatus = teamSection?.error ? { label: 'Unavailable', tone: 'err' as const } : teamSection?.userId ? { label: 'Signed in', tone: 'ok' as const } : { label: snapshot ? 'Signed out' : 'Loading', tone: 'neutral' as const };
   const transportStatus = displayStatus(snapshot?.transport, ['status', 'state', 'connection']);
 
   const refreshSnapshot = useCallback(async (quiet = false) => {
@@ -137,8 +145,9 @@ export function TeamWorkspace() {
       const next = await distributedApi.snapshot(selectedTeamId || undefined, nextController.signal);
       if (sequence.current !== current) return;
       setSnapshot(next);
-      setError(null);
-      setErrorStatus(null);
+      const serviceError = readText(next.teams, ['error']) || readText(next.transport, ['error']);
+      setError(serviceError || null);
+      setErrorStatus(serviceError ? (/sign.?in/i.test(serviceError) ? 401 : 503) : null);
       setUpdatedAt(new Date().toISOString());
     } catch (cause) {
       if (nextController.signal.aborted || sequence.current !== current) return;
@@ -153,7 +162,7 @@ export function TeamWorkspace() {
     void refreshSnapshot();
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') void refreshSnapshot(true);
-    }, 12_000);
+    }, 5_000);
     const refreshOnReturn = () => { if (document.visibilityState === 'visible') void refreshSnapshot(true); };
     window.addEventListener('focus', refreshOnReturn);
     document.addEventListener('visibilitychange', refreshOnReturn);
@@ -187,16 +196,15 @@ export function TeamWorkspace() {
     } finally { setBusy(null); }
   };
 
-  const selectedTeamKey = idOf(chosenTeamRow, ['id', 'teamId']) || selectedTeamId;
   const deviceOptions = devices.map((device) => ({ value: idOf(device, ['id', 'deviceId']), label: `${nameOf(device, 'Device')} · ${displayStatus(device).label}` })).filter((option) => option.value && option.value !== idOf(localDevice, ['id', 'deviceId']));
 
   const currentTab = <>
     {tab === 'people' ? <PeoplePanel teamId={selectedTeamKey} team={selectedTeam} members={members} invitations={invitations} busy={busy} result={result} perform={perform} onCreatedTeam={setSelectedTeamId} /> : null}
     {tab === 'projects' ? <ProjectsPanel teamId={selectedTeamKey} sharedProjects={sharedProjects} localProject={selectedLocalProject} busy={busy} perform={perform} /> : null}
     {tab === 'devices' ? <DevicesPanel teamId={selectedTeamKey} localDevice={localDevice} devices={devices} links={links} busy={busy} result={result} perform={perform} /> : null}
-    {tab === 'agents' ? <AgentsPanel teamId={selectedTeamKey} sharedProjects={sharedProjects} localProject={selectedLocalProject} localSessions={localSessions} agents={agents} devices={devices} tasks={tasks} busy={busy} perform={perform} /> : null}
-    {tab === 'conversation' ? <ConversationPanel teamId={selectedTeamKey} sharedProjects={sharedProjects} messages={messages} tasks={tasks} timeline={executionEvents} busy={busy} perform={perform} /> : null}
-    {tab === 'recovery' ? <RecoveryPanel teamId={selectedTeamKey} sharedProjects={sharedProjects} agents={agents} requests={executionRequests} localDeviceId={idOf(localDevice, ['id', 'deviceId'])} localSessions={localSessions} sharedTasks={tasks} runs={boot?.runs ?? []} busy={busy} checkedApprovals={checkedApprovals} setCheckedApprovals={setCheckedApprovals} shareProgress={shareProgress} setShareProgress={setShareProgress} allowProviderSpend={allowProviderSpend} setAllowProviderSpend={setAllowProviderSpend} allowUnverifiedQuota={allowUnverifiedQuota} setAllowUnverifiedQuota={setAllowUnverifiedQuota} perform={perform} /> : null}
+    {tab === 'agents' ? <AgentsPanel teamId={selectedTeamKey} sharedProjects={sharedProjects} localProject={selectedLocalProject} localSessions={localSessions} agents={agents} devices={devices} tasks={tasks} members={members} busy={busy} perform={perform} /> : null}
+    {tab === 'conversation' ? <ConversationPanel teamId={selectedTeamKey} sharedProjects={sharedProjects} localTasks={(boot?.tasks ?? []).filter((task) => task.projectId === activeProjectId)} messages={messages} tasks={tasks} timeline={executionEvents} busy={busy} perform={perform} /> : null}
+    {tab === 'recovery' ? <RecoveryPanel teamId={selectedTeamKey} sharedProjects={sharedProjects} agents={agents} requests={executionRequests} localDeviceId={idOf(localDevice, ['id', 'deviceId'])} localSessions={localSessions} localTasks={(boot?.tasks ?? []).filter((task) => task.projectId === activeProjectId)} runs={boot?.runs ?? []} busy={busy} checkedApprovals={checkedApprovals} setCheckedApprovals={setCheckedApprovals} shareProgress={shareProgress} setShareProgress={setShareProgress} allowProviderSpend={allowProviderSpend} setAllowProviderSpend={setAllowProviderSpend} allowUnverifiedQuota={allowUnverifiedQuota} setAllowUnverifiedQuota={setAllowUnverifiedQuota} perform={perform} /> : null}
     {tab === 'transfers' ? <TransfersPanel teamId={selectedTeamKey} sharedProjects={sharedProjects} devices={deviceOptions} gitRequests={gitRequests} gitAudit={gitAudit} commandRequests={commandRequests} commandAudit={commandAudit} busy={busy} checkedApprovals={checkedApprovals} setCheckedApprovals={setCheckedApprovals} perform={perform} /> : null}
   </>;
 
@@ -215,7 +223,7 @@ export function TeamWorkspace() {
       <span><i className="distributed__dot" /> Device transport: {transportStatus.label}</span>
       <span>{updatedAt ? `Updated ${new Date(updatedAt).toLocaleTimeString()}` : loading ? 'Loading snapshot…' : 'Snapshot not available'}</span>
     </div>
-    {error ? <><InlineError onRetry={() => void refreshSnapshot()}>{error}{/migration|schema|table/i.test(error) ? ' A distributed service migration may be missing.' : errorStatus === 404 ? ' Distributed routes may not be integrated in this runtime yet.' : ''}</InlineError>{(errorStatus === 401 || /sign.?in required|authenticated account|required account/i.test(error)) ? <Button size="sm" onClick={() => useMingle.getState().openSettings({ section: 'account' })}>Open Account settings</Button> : null}</> : null}
+    {error ? <><InlineError onRetry={() => void refreshSnapshot()}>{error}{/migration|schema|table/i.test(error) ? ' A distributed service migration may be missing.' : errorStatus === 404 ? ' Distributed routes may not be integrated in this runtime yet.' : ''}</InlineError>{(errorStatus === 401 || /sign.?in|authenticated account|required account/i.test(error)) ? <Button size="sm" onClick={() => useMingle.getState().openSettings({ section: 'account' })}>Open Account settings</Button> : null}</> : null}
     {notice ? <p className="distributed__notice" role="status"><Check size={13} />{notice}</p> : null}
     <p className="distributed__principle"><LockKeyhole size={13} aria-hidden="true" /> Linking and publishing never starts an agent. Remote work needs a specific request and approval on the destination device.</p>
     <nav className="distributed__tabs" aria-label="Team workspace sections">
@@ -262,7 +270,7 @@ function PeoplePanel({ teamId, team, members, invitations, busy, result, perform
       const member = unwrap(raw, 'member', 'user');
       const userId = readText(raw, ['userId', 'accountId']) || readText(member, ['id', 'userId']);
       const memberId = idOf(raw, ['id', 'memberId']) || userId || `member-${index}`;
-      const memberName = nameOf(member, nameOf(raw, 'Team member'));
+      const memberName = nameOf(member, nameOf(raw, userId || 'Team member'));
       const memberEmail = text(member, ['email'], text(raw, ['email'], 'Email not shared'));
       const memberRole = text(raw, ['role'], 'Role unknown');
       return <article className="dw-row" key={memberId}><div className="dw-avatar" aria-hidden="true">{memberName.charAt(0).toUpperCase()}</div><div className="dw-row__main"><strong>{memberName}</strong><span>{memberEmail} · {memberRole}</span></div><Button size="sm" variant="danger" disabled={Boolean(busy) || !teamId || !userId} why={!userId ? 'Member identifier is not present in this snapshot' : undefined} onClick={() => { if (window.confirm(`Remove ${memberEmail} from this team? Their devices will lose future team authority.`)) void perform(`revoke-member:${userId}`, 'Team membership revoked.', () => distributedApi.revokeMember({ teamId, userId })); }}>Remove</Button></article>;
@@ -331,27 +339,27 @@ function DevicesPanel({ teamId, localDevice, devices, links, busy, result, perfo
       const id = idOf(row, ['id', 'deviceId']);
       const state = displayStatus(row);
       const fingerprintValue = readText(row, ['fingerprint'], 'Fingerprint not reported');
-      const linked = links.some((link) => readText(link, ['deviceId', 'peerDeviceId']) === id || (id && JSON.stringify(link).includes(id)));
       const localId = idOf(localDevice, ['id', 'deviceId']);
-      return <article className="dw-row dw-row--device" key={id || `device-${index}`}><span className="dw-icon"><Laptop size={15} /></span><div className="dw-row__main"><strong>{nameOf(row, 'Unnamed device')}</strong><span>{fingerprintValue} · owner {text(row, ['ownerName', 'ownerEmail', 'ownerId'], 'not reported')} · last seen {text(row, ['lastSeenAt', 'last_seen_at'], 'not reported')}</span></div><Badge tone={state.tone}>{state.label}</Badge><Badge tone={linked ? 'ok' : 'neutral'}>{linked ? 'Linked' : 'Not linked'}</Badge>{id && id !== localId ? <Button size="sm" variant="danger" disabled={Boolean(busy)} onClick={() => { if (window.confirm(`Revoke ${nameOf(row, 'this device')}? It will no longer receive future team messages.`)) void perform(`revoke-device:${id}`, 'Device revoked. Future delivery to this device is disabled.', () => distributedApi.revokeDevice({ teamId, deviceId: id })); }}>Revoke</Button> : null}</article>;
+      const linked = links.some((link) => link.deviceId === localId && link.peerDeviceId === id && link.mutual === true);
+      return <article className="dw-row dw-row--device" key={id || `device-${index}`}><span className="dw-icon"><Laptop size={15} /></span><div className="dw-row__main"><strong>{nameOf(row, 'Unnamed device')}</strong><span>ID {id || 'not reported'} · {fingerprintValue} · owner {text(row, ['ownerName', 'ownerEmail', 'ownerId'], 'not reported')} · last seen {text(row, ['lastSeenAt', 'last_seen_at'], 'not reported')}</span></div><Badge tone={state.tone}>{state.label}</Badge><Badge tone={linked ? 'ok' : 'neutral'}>{linked ? 'Linked' : 'Not linked'}</Badge>{id && id !== localId ? <Button size="sm" variant="danger" disabled={Boolean(busy)} onClick={() => { if (window.confirm(`Revoke ${nameOf(row, 'this device')}? It will no longer receive future team messages.`)) void perform(`revoke-device:${id}`, 'Device revoked. Future delivery to this device is disabled.', () => distributedApi.revokeDevice({ teamId, deviceId: id })); }}>Revoke</Button> : null}</article>;
     })}</div> : <p className="dw-empty">No registered devices were reported.</p>}
   </div>;
 }
 
-function AgentsPanel({ teamId, sharedProjects, localProject, localSessions, agents, devices, tasks, busy, perform }: {
-  teamId: string; sharedProjects: DistributedRecord[]; localProject?: Project; localSessions: Session[]; agents: DistributedRecord[]; devices: DistributedRecord[]; tasks: DistributedRecord[]; busy: string | null;
+function AgentsPanel({ teamId, sharedProjects, localProject, localSessions, agents, devices, tasks, members, busy, perform }: {
+  teamId: string; sharedProjects: DistributedRecord[]; localProject?: Project; localSessions: Session[]; agents: DistributedRecord[]; devices: DistributedRecord[]; tasks: DistributedRecord[]; members: DistributedRecord[]; busy: string | null;
   perform: (key: string, success: string, work: () => Promise<unknown>) => Promise<unknown | undefined>;
 }) {
   const options = sharedProjects.map((row) => ({ value: idOf(row, ['id', 'projectId']), label: nameOf(row, 'Shared project') })).filter((item) => item.value);
   const [projectId, setProjectId] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
-  const publishableSessions = localSessions.filter((session) => session.projectId === localProject?.id);
+  const publishableSessions = localSessions.filter((session) => session.projectId === localProject?.id && session.policy === 'supervised' && ['codex', 'claude', 'opencode'].includes(session.provider));
   useEffect(() => { if (!projectId && options[0]) setProjectId(options[0].value); }, [projectId, options]);
   const toggle = (id: string) => setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
   return <div className="distributed__panel">
     <div className="dw-card dw-card--wide">
       <div className="dw-card__heading"><span><Workflow size={15} /></span><div><h3>Publish selected local sessions</h3><p>Only the sessions you check are added to the shared roster. Publishing never runs or transfers a conversation.</p></div></div>
-      <div className="dw-form-row"><SelectControl label="Shared project" value={projectId} onChange={setProjectId} options={options} disabled={!options.length} /><div className="dw-form-actions"><Button size="sm" disabled={Boolean(busy) || !teamId || !projectId || !selected.some((id) => publishableSessions.some((session) => session.id === id))} busy={busy === 'publish-agents'} onClick={() => void perform('publish-agents', 'Selected agents published to the shared roster.', () => distributedApi.publishAgents({ teamId, sharedProjectId: projectId, sessionIds: selected.filter((id) => publishableSessions.some((session) => session.id === id)) }))}>Publish {selected.filter((id) => publishableSessions.some((session) => session.id === id)).length || ''} selected</Button><span>Current project: {localProject?.name ?? 'none selected'}</span></div></div>
+      <div className="dw-form-row"><SelectControl label="Shared project" value={projectId} onChange={setProjectId} options={options} disabled={!options.length} /><div className="dw-form-actions"><Button size="sm" disabled={Boolean(busy) || !teamId || !projectId || !selected.some((id) => publishableSessions.some((session) => session.id === id))} busy={busy === 'publish-agents'} onClick={() => void perform('publish-agents', 'Selected agents published to the shared roster.', () => distributedApi.publishAgents({ teamId, sharedProjectId: projectId, sessionIds: selected.filter((id) => publishableSessions.some((session) => session.id === id)) }))}>Publish {selected.filter((id) => publishableSessions.some((session) => session.id === id)).length || ''} selected</Button><Button size="sm" disabled={Boolean(busy) || !teamId || !projectId} onClick={() => void perform('unpublish-agents', 'This device’s agents are no longer shared for this project.', () => distributedApi.publishAgents({ teamId, sharedProjectId: projectId, sessionIds: [] }))}>Stop sharing</Button><span>Current project: {localProject?.name ?? 'none selected'}</span></div></div>
       <div className="dw-session-picks">{publishableSessions.map((session) => <label key={session.id} className="dw-session-pick"><input type="checkbox" checked={selected.includes(session.id)} onChange={() => toggle(session.id)} /><span><strong>{session.name}</strong><small>{session.provider} · {session.model} · {session.status}</small></span><Badge>{session.isolated ? 'Worktree' : 'Project folder'}</Badge></label>)}</div>
       {!publishableSessions.length ? <p className="dw-empty">There are no sessions in the current local project to publish.</p> : null}
     </div>
@@ -366,24 +374,27 @@ function AgentsPanel({ teamId, sharedProjects, localProject, localSessions, agen
       const quotaTone = quotaState === 'available' ? 'ok' : quotaState === 'exhausted' ? 'warn' : 'neutral';
       return <article className="dw-agent" key={idOf(agent, ['id', 'agentId']) || `agent-${index}`}><div className="dw-agent__top"><span className="dw-icon"><Workflow size={16} /></span><Badge tone={status.tone}>{status.label}</Badge></div><strong>{nameOf(agent, 'Remote agent')}</strong><span>{text(agent, ['provider'], 'Provider unknown')} · {text(agent, ['model'], 'Model unknown')}</span><span>{device ? nameOf(device, 'Device') : text(agent, ['deviceId'], 'Device not reported')}</span><dl><div><dt>Quota</dt><dd><Badge tone={quotaTone}>{quotaLabel}</Badge></dd></div><div><dt>Project</dt><dd>{text(agent, ['sharedProjectId'], 'Not reported')}</dd></div><div><dt>Policy</dt><dd>{text(agent, ['policy'], 'Not reported')}</dd></div><div><dt>Shared group</dt><dd>{text(agent, ['activeGroupId'], 'Not grouped')}</dd></div></dl><small>{text(agent, ['quotaReason'], 'Quota details are not reported.')} Owner approval is required for each request.</small></article>;
     })}</div> : <p className="dw-empty">No remote agents are published for this team snapshot.</p>}
-    <section className="dw-card"><div className="dw-section-head"><div><h3>Shared task and group map</h3><p>Only recorded device, agent, group and dependency identifiers are shown.</p></div><Badge>{tasks.length} tasks</Badge></div>{tasks.length ? <div className="dw-list dw-list--compact">{tasks.map((task, index) => { const groupId = readText(task, ['groupId']); const dependencyIds = readValue(task, ['dependsOn']); const dependencies = Array.isArray(dependencyIds) ? dependencyIds.map(String) : []; const taskAgent = readText(task, ['agentId']) ? agents.find((agent) => idOf(unwrap(agent, 'agent'), ['id', 'agentId']) === readText(task, ['agentId'])) : undefined; return <article className="dw-row" key={idOf(task, ['id', 'taskId']) || `map-task-${index}`}><span className="dw-icon"><Workflow size={14} /></span><div className="dw-row__main"><strong>{nameOf(task, 'Shared task')}</strong><span>Group {groupId || 'not assigned'} · agent {taskAgent ? nameOf(unwrap(taskAgent, 'agent'), 'Agent') : readText(task, ['agentId'], 'unassigned')} · depends on {dependencies.length ? dependencies.join(', ') : 'none'}</span></div><Badge>{text(task, ['status'], 'Status unknown')}</Badge></article>; })}</div> : <p className="dw-empty">No shared task relationships are reported.</p>}</section>
+    <SharedAgentMap members={members} devices={devices} agents={agents} tasks={tasks} />
+    <section className="dw-card"><div className="dw-section-head"><div><h3>Shared task relationships</h3><p>Only recorded device, agent, group and dependency identifiers are shown.</p></div><Badge>{tasks.length} tasks</Badge></div>{tasks.length ? <div className="dw-list dw-list--compact">{tasks.map((task, index) => { const groupId = readText(task, ['groupId']); const dependencyIds = readValue(task, ['dependsOn']); const dependencies = Array.isArray(dependencyIds) ? dependencyIds.map(String) : []; const taskAgent = readText(task, ['agentId']) ? agents.find((agent) => idOf(unwrap(agent, 'agent'), ['id', 'agentId']) === readText(task, ['agentId'])) : undefined; return <article className="dw-row" key={idOf(task, ['id', 'taskId']) || `map-task-${index}`}><span className="dw-icon"><Workflow size={14} /></span><div className="dw-row__main"><strong>{nameOf(task, 'Shared task')}</strong><span>Group {groupId || 'not assigned'} · agent {taskAgent ? nameOf(unwrap(taskAgent, 'agent'), 'Agent') : readText(task, ['agentId'], 'unassigned')} · depends on {dependencies.length ? dependencies.join(', ') : 'none'}</span></div><Badge>{text(task, ['status'], 'Status unknown')}</Badge></article>; })}</div> : <p className="dw-empty">No shared task relationships are reported.</p>}</section>
   </div>;
 }
 
-function ConversationPanel({ teamId, sharedProjects, messages, tasks, timeline, busy, perform }: {
-  teamId: string; sharedProjects: DistributedRecord[]; messages: DistributedRecord[]; tasks: DistributedRecord[]; timeline: DistributedRecord[]; busy: string | null;
+function ConversationPanel({ teamId, sharedProjects, localTasks, messages, tasks, timeline, busy, perform }: {
+  teamId: string; sharedProjects: DistributedRecord[]; localTasks: Task[]; messages: DistributedRecord[]; tasks: DistributedRecord[]; timeline: DistributedRecord[]; busy: string | null;
   perform: (key: string, success: string, work: () => Promise<unknown>) => Promise<unknown | undefined>;
 }) {
   const [sharedProjectId, setSharedProjectId] = useState('');
   const [message, setMessage] = useState('');
+  const [localTaskId, setLocalTaskId] = useState('');
   const options = sharedProjects.map((row) => ({ value: idOf(row, ['id', 'projectId']), label: nameOf(row, 'Shared project') })).filter((item) => item.value);
   useEffect(() => { if (!sharedProjectId && options[0]) setSharedProjectId(options[0].value); }, [sharedProjectId, options]);
   const orderedMessages = [...messages].sort((a, b) => readText(a, ['createdAt', 'timestamp']).localeCompare(readText(b, ['createdAt', 'timestamp'])));
   return <div className="distributed__panel">
     <section className="dw-card dw-conversation" aria-labelledby="dw-conversation-heading">
+      <div className="dw-form-row"><SelectControl label="Local task to share" value={localTaskId} onChange={setLocalTaskId} options={localTasks.map((task) => ({ value: task.id, label: task.title }))} /><Button size="sm" disabled={Boolean(busy) || !teamId || !sharedProjectId || !localTaskId} onClick={() => void perform('publish-task', 'Task and dependencies shared.', () => distributedApi.publishTask({ teamId, sharedProjectId, taskId: localTaskId }))}>Share task</Button></div>
       <div className="dw-card__heading"><span><MessageSquare size={15} /></span><div><h3 id="dw-conversation-heading">Shared conversation</h3><p>Messages are team records. Mentioned remote work still needs a separate destination-owner approval.</p></div></div>
       <div className="dw-message-list" aria-live="polite">{orderedMessages.length ? orderedMessages.map((row, index) => <article className="dw-message" key={idOf(row, ['id', 'messageId']) || `message-${index}`}><div><strong>{text(row, ['senderName', 'authorName'], `Device ${text(row, ['deviceId'], 'not reported')} · account ${text(row, ['ownerId'], 'not reported')}`)}</strong><time>{text(row, ['createdAt'], 'Time not reported')}</time></div><p>{text(row, ['content'], 'Message content unavailable')}</p><small>{text(row, ['kind'], 'kind not reported')} · agent {text(row, ['agentId'], 'none')} · group {text(row, ['groupId'], 'none')} · task {text(row, ['taskId'], 'none')}</small></article>) : <p className="dw-empty">No shared conversation messages are present in this snapshot.</p>}</div>
-      <form className="dw-message-form" onSubmit={(event: FormEvent) => { event.preventDefault(); if (!teamId || !sharedProjectId || !message.trim()) return; void perform('send-shared-message', 'Message sent to the shared conversation.', () => distributedApi.sendMessage({ teamId, sharedProjectId, content: message.trim(), idempotencyKey: createIdempotencyKey() })).then(() => setMessage('')); }}>
+      <form className="dw-message-form" onSubmit={(event: FormEvent) => { event.preventDefault(); if (!teamId || !sharedProjectId || !message.trim()) return; void perform('send-shared-message', 'Message sent to the shared conversation.', () => distributedApi.sendMessage({ teamId, sharedProjectId, content: message.trim(), idempotencyKey: createIdempotencyKey() })).then((response) => { if (response !== undefined) setMessage(''); }); }}>
         <SelectControl label="Project context" value={sharedProjectId} onChange={setSharedProjectId} options={options} disabled={!options.length} />
         <label className="dw-field"><span>Message</span><textarea className="input" value={message} rows={3} maxLength={20_000} placeholder="Share a note with the team…" onChange={(event) => setMessage(event.target.value)} /></label>
         <Button type="submit" size="sm" disabled={Boolean(busy) || !teamId || !sharedProjectId || !message.trim()} busy={busy === 'send-shared-message'}><Send size={13} /> Send message</Button>
@@ -416,7 +427,7 @@ function ApprovalDisclosure({ row, category }: { row: unknown; category: 'execut
   const purpose = readText(row, ['purpose', 'note', 'instructions', 'content', 'description'], 'Not reported');
   const taskDetails = `${readText(taskData, ['description'], '')}${readText(taskData, ['acceptanceCriteria']) ? ` · Acceptance: ${readText(taskData, ['acceptanceCriteria'])}` : ''}` || 'Not reported';
   const recovery = asRecord(readValue(row, ['evidence'])) ?? {};
-  return <><div className="dw-disclosures"><Disclosure title="Destination device" value={device} /><Disclosure title="Provider / model" value={`${provider} / ${model}`} /><Disclosure title="Quota state" value={quota} /><Disclosure title="Task" value={task} /><Disclosure title="Project" value={project} /><Disclosure title="Operation" value={operation} />{category === 'execution' ? <><Disclosure title="Destination owner" value={readText(row, ['targetOwnerId'], 'Not reported')} /><Disclosure title="Request digest" value={readText(row, ['digest'], 'Not reported')} /></> : null}</div>{category === 'execution' ? <div className="dw-exact-scope"><Disclosure title="Task description & acceptance" value={taskDetails} /><Disclosure title="Dependencies" value={exactList(readValue(taskData, ['dependsOn']))} /><Disclosure title="Group" value={readText(taskData, ['groupId']) || readText(row, ['groupId'], 'None')} /><Disclosure title="Request content" value={readText(row, ['content'], purpose)} /><Disclosure title="Recorded recovery evidence" value={`${readText(recovery, ['failureKind'], 'Not reported')}${readText(recovery, ['failureMessage']) ? ` · ${readText(recovery, ['failureMessage'])}` : ''}${readText(recovery, ['objective']) ? ` · ${readText(recovery, ['objective'])}` : ''}`} /></div> : null}{category === 'git' ? <div className="dw-exact-scope"><Disclosure title="Target branch" value={branchValue} /><Disclosure title="Source / base heads" value={exactList(refs)} /><Disclosure title="Bundle digest" value={readText(row, ['bundleSha256'], 'Not reported')} /><Disclosure title="Reason" value={purpose} /></div> : null}{category === 'command' ? <div className="dw-exact-scope"><Disclosure title="Structured operation" value={readText(operationData, ['kind'], 'Not reported')} /><Disclosure title="Operation parameters" value={Object.keys(operationData).length ? JSON.stringify(operationData) : 'Not reported'} /><Disclosure title="Project-relative directory" value={readText(row, ['cwd'], '.')} /></div> : null}</>;
+  return <><div className="dw-disclosures"><Disclosure title="Destination device" value={device} /><Disclosure title="Provider / model" value={`${provider} / ${model}`} /><Disclosure title="Quota state" value={quota} /><Disclosure title="Task" value={task} /><Disclosure title="Project" value={project} /><Disclosure title="Operation" value={operation} />{category === 'execution' ? <><Disclosure title="Destination owner" value={readText(row, ['targetOwnerId'], 'Not reported')} /><Disclosure title="Request digest" value={readText(row, ['digest'], 'Not reported')} /></> : null}</div>{category === 'execution' ? <div className="dw-exact-scope"><Disclosure title="Task description & acceptance" value={taskDetails} /><Disclosure title="Dependencies" value={exactList(readValue(taskData, ['dependsOn']))} /><Disclosure title="Group" value={readText(taskData, ['groupId']) || readText(row, ['groupId'], 'None')} /><Disclosure title="Request content" value={readText(row, ['content'], purpose)} /><Disclosure title="Source checkpoint commit" value={readText(asRecord(recovery.worktree), ['head'], 'Not reported')} /><Disclosure title="Committed artifact references" value={Array.isArray(recovery.committedReferences) ? recovery.committedReferences.map((item) => `${readText(item, ['revision'])} · ${readText(item, ['path'])}`).join('; ') || 'None' : 'Not reported'} /><Disclosure title="Recorded recovery evidence" value={`${readText(recovery, ['failureKind'], 'Not reported')}${readText(recovery, ['failureMessage']) ? ` · ${readText(recovery, ['failureMessage'])}` : ''}${readText(recovery, ['objective']) ? ` · ${readText(recovery, ['objective'])}` : ''}`} /></div> : null}{category === 'git' ? <div className="dw-exact-scope"><Disclosure title="Target branch" value={branchValue} /><Disclosure title="Source / base heads" value={exactList(refs)} /><Disclosure title="Bundle digest" value={readText(row, ['bundleSha256'], 'Not reported')} /><Disclosure title="Action / remote" value={`${readText(row, ['action'], 'Transfer')} / ${readText(row, ['remoteName'], 'None')}`} /><Disclosure title="Expected local HEAD" value={readText(row, ['expectedHead'], 'Not reported')} /><Disclosure title="Repository fingerprint" value={readText(row, ['expectedFingerprint'], 'Not reported')} /><Disclosure title="Request digest" value={readText(row, ['requestDigest'], 'Not reported')} /><Disclosure title="Reason" value={purpose} /></div> : null}{category === 'command' ? <div className="dw-exact-scope"><Disclosure title="Structured operation" value={readText(operationData, ['kind'], 'Not reported')} /><Disclosure title="Operation parameters" value={Object.keys(operationData).length ? JSON.stringify(operationData) : 'Not reported'} /><Disclosure title="Project-relative directory" value={readText(row, ['cwd'], '.')} /></div> : null}</>;
 }
 
 function OwnerDecision({ row, id, category, busy, checkedApprovals, setCheckedApprovals, shareProgress, setShareProgress, allowProviderSpend, setAllowProviderSpend, allowUnverifiedQuota, setAllowUnverifiedQuota, onDecision }: {
@@ -427,18 +438,18 @@ function OwnerDecision({ row, id, category, busy, checkedApprovals, setCheckedAp
   onDecision: (decision: 'approved' | 'denied') => void;
 }) {
   const state = readText(row, ['state', 'status']);
-  const pending = category === 'execution' ? state === 'awaiting-approval' : category === 'git' ? state === 'awaiting-destination-approval' : state === 'awaiting-approval';
+  const pending = category === 'execution' ? state === 'awaiting-approval' : category === 'git' ? (state === 'awaiting-destination-approval' || state === 'awaiting-source-approval') : state === 'awaiting-approval';
   const digest = readText(row, ['digest', 'requestDigest']);
   const digestValid = /^[a-f0-9]{64}$/i.test(digest);
   const provider = readText(row, ['provider']) || readText(asRecord(readValue(row, ['targetAgent', 'agent'])), ['provider']);
   const quotaState = readText(row, ['quotaState'], 'unknown');
   const needsUnverifiedQuota = category === 'execution' && (quotaState === 'unknown' || provider === 'opencode');
-  const phrase = `I reviewed the destination, model, quota, task, project and operation above for request ${id}.`;
+  const phrase = category === 'execution' ? `I reviewed the destination, model, quota, task, project and operation above for request ${id}.` : `I reviewed the exact ${category === 'git' ? 'Git action, revisions, remote and bundle' : 'command and directory'}, project and digest above for request ${id}.`;
   return <article className="dw-approval">
     <div className="dw-approval__head"><div><strong>{text(row, ['title', 'summary', 'requestType'], category === 'execution' ? 'Remote execution request' : category === 'git' ? 'Git transfer request' : 'Command request')}</strong><span>{text(row, ['requesterName', 'fromDeviceName', 'sourceDeviceName', 'requester'], 'Requester not reported')} · {text(row, ['createdAt', 'timestamp'], 'Time not reported')}</span></div><Badge tone={pending ? 'warn' : 'neutral'}>{text(row, ['status', 'state'], 'Decision state unknown')}</Badge></div>
     <ApprovalDisclosure row={row} category={category} />
     {pending ? <>
-      <p className="dw-owner-note"><Shield size={13} /> This decision must be made by the destination device owner. Team ownership does not grant approval on another device.</p>
+      <p className="dw-owner-note"><Shield size={13} /> This decision belongs to the local device owner. Remote execution and imports require the receiving owner; source transfers and integration require this repository’s owner.</p>
       {category === 'execution' ? <div className="dw-execution-consents">
         <label className="dw-ack"><input type="checkbox" checked={Boolean(shareProgress?.[id])} onChange={(event) => setShareProgress?.((current) => ({ ...current, [id]: event.target.checked }))} /><span>Share this device’s live progress and results with the team. Off by default.</span></label>
         <label className="dw-ack"><input type="checkbox" checked={Boolean(allowProviderSpend?.[id])} onChange={(event) => setAllowProviderSpend?.((current) => ({ ...current, [id]: event.target.checked }))} /><span>Allow this provider run to use this device’s provider account. Provider charges may apply; Mingle cannot guarantee a dollar cap.</span></label>
@@ -451,23 +462,24 @@ function OwnerDecision({ row, id, category, busy, checkedApprovals, setCheckedAp
   </article>;
 }
 
-function RecoveryPanel({ teamId, sharedProjects, agents, requests, localDeviceId, localSessions, sharedTasks, runs, busy, checkedApprovals, setCheckedApprovals, shareProgress, setShareProgress, allowProviderSpend, setAllowProviderSpend, allowUnverifiedQuota, setAllowUnverifiedQuota, perform }: {
-  teamId: string; sharedProjects: DistributedRecord[]; agents: DistributedRecord[]; requests: DistributedRecord[]; localDeviceId: string; localSessions: Session[]; sharedTasks: DistributedRecord[]; runs: { id: string; sessionId: string; status: string }[]; busy: string | null; checkedApprovals: Record<string, boolean>; setCheckedApprovals: (value: (current: Record<string, boolean>) => Record<string, boolean>) => void;
+function RecoveryPanel({ teamId, sharedProjects, agents, requests, localDeviceId, localSessions, localTasks, runs, busy, checkedApprovals, setCheckedApprovals, shareProgress, setShareProgress, allowProviderSpend, setAllowProviderSpend, allowUnverifiedQuota, setAllowUnverifiedQuota, perform }: {
+  teamId: string; sharedProjects: DistributedRecord[]; agents: DistributedRecord[]; requests: DistributedRecord[]; localDeviceId: string; localSessions: Session[]; localTasks: Task[]; runs: { id: string; sessionId: string; status: string }[]; busy: string | null; checkedApprovals: Record<string, boolean>; setCheckedApprovals: (value: (current: Record<string, boolean>) => Record<string, boolean>) => void;
   shareProgress: Record<string, boolean>; setShareProgress: (value: (current: Record<string, boolean>) => Record<string, boolean>) => void;
   allowProviderSpend: Record<string, boolean>; setAllowProviderSpend: (value: (current: Record<string, boolean>) => Record<string, boolean>) => void;
   allowUnverifiedQuota: Record<string, boolean>; setAllowUnverifiedQuota: (value: (current: Record<string, boolean>) => Record<string, boolean>) => void;
   perform: (key: string, success: string, work: () => Promise<unknown>) => Promise<unknown | undefined>;
 }) {
   const failed = localSessions.filter((session) => session.status === 'error' || Boolean(session.error) || runs.some((run) => run.sessionId === session.id && run.status === 'failed'));
-  const agentOptions = agents.map((row) => ({ value: idOf(unwrap(row, 'agent'), ['id', 'agentId']), label: `${nameOf(unwrap(row, 'agent'), 'Remote agent')} · ${text(row, ['provider'], 'provider unknown')} / ${text(row, ['model'], 'model unknown')}` })).filter((item) => item.value && agentDeviceId(item));
+  const agentOptions = agents.filter((row) => agentDeviceId(row) && agentDeviceId(row) !== localDeviceId).map((row) => ({ value: idOf(unwrap(row, 'agent'), ['id', 'agentId']), label: `${nameOf(unwrap(row, 'agent'), 'Remote agent')} · ${text(row, ['provider'], 'provider unknown')} / ${text(row, ['model'], 'model unknown')}` })).filter((item) => item.value);
   const projectOptions = sharedProjects.map((row) => ({ value: idOf(row, ['id', 'projectId']), label: nameOf(row, 'Shared project') })).filter((item) => item.value);
-  const taskOptions = sharedTasks.map((row) => ({ value: idOf(row, ['id', 'taskId']), label: nameOf(row, 'Shared task') })).filter((item) => item.value);
+  const taskOptions = localTasks.filter((task) => task.status !== 'done').map((task) => ({ value: task.id, label: task.title }));
   const [agentId, setAgentId] = useState('');
   const [sharedProjectId, setSharedProjectId] = useState('');
   const [taskId, setTaskId] = useState('');
   const [sourceSessionId, setSourceSessionId] = useState('');
   const [mode, setMode] = useState<'provider-failure' | 'unpublished-recovery'>('unpublished-recovery');
   const [instructions, setInstructions] = useState('');
+  const [allowUnverifiedTarget, setAllowUnverifiedTarget] = useState(false);
   const [failureSessionId, setFailureSessionId] = useState('');
   const [fallbackTaskId, setFallbackTaskId] = useState('');
   const [fallbackEligibility, setFallbackEligibility] = useState<unknown>(null);
@@ -496,13 +508,14 @@ function RecoveryPanel({ teamId, sharedProjects, agents, requests, localDeviceId
   return <div className="distributed__panel">
     <p className="dw-owner-note dw-owner-note--large"><Shield size={14} /> Local agents stay the default. Remote work is a separate, explicit request. The destination device owner must approve the exact provider, model, quota state, task and project before it runs. Provider spend is not dollar-capped by Mingle.</p>
     <div className="distributed__grid distributed__grid--forms">
-      <form className="dw-card" onSubmit={(event: FormEvent) => { event.preventDefault(); if (!teamId || !sharedProjectId || !sourceSessionId || !taskId || !agentId || !instructions.trim()) return; void perform('delegation', 'Remote execution request sent for destination-owner approval.', () => distributedApi.delegation({ teamId, sharedProjectId, sourceSessionId, taskId, agentId, mode, content: instructions.trim(), idempotencyKey: createIdempotencyKey() })); }}>
-        <div className="dw-card__heading"><span><Workflow size={15} /></span><div><h3>Request remote work</h3><p>The selected agent’s owner must approve before its provider can run.</p></div></div>
+      <form className="dw-card" onSubmit={(event: FormEvent) => { event.preventDefault(); if (!teamId || !sharedProjectId || !sourceSessionId || !taskId || !agentId || !instructions.trim()) return; void perform('delegation', 'Remote execution request sent for destination-owner approval.', () => distributedApi.delegation({ teamId, sharedProjectId, sourceSessionId, taskId, agentId, mode, allowUnverifiedTarget, content: instructions.trim(), idempotencyKey: createIdempotencyKey() })); }}>
+        <div className="dw-card__heading"><span><Workflow size={15} /></span><div><h3>Request remote recovery</h3><p>Commit and review source edits, transfer the commits through Git sync, and prepare a clean destination session. The selected agent’s owner then approves execution.</p></div></div>
         <SelectControl label="Remote agent" value={agentId} onChange={setAgentId} options={agentOptions} disabled={!agentOptions.length} />
         <SelectControl label="Shared project" value={sharedProjectId} onChange={setSharedProjectId} options={projectOptions} disabled={!projectOptions.length} />
         <SelectControl label="Source local session" value={sourceSessionId} onChange={setSourceSessionId} options={sessionOptions} disabled={!sessionOptions.length} />
-        <SelectControl label="Shared task" value={taskId} onChange={setTaskId} options={taskOptions} disabled={!taskOptions.length} />
+        <SelectControl label="Source local task" value={taskId} onChange={setTaskId} options={taskOptions} disabled={!taskOptions.length} />
         <SelectControl label="Reason" value={mode} onChange={(value) => setMode(value as 'provider-failure' | 'unpublished-recovery')} options={[{ value: 'provider-failure', label: 'Recorded provider failure' }, { value: 'unpublished-recovery', label: 'Human-requested unpublished recovery' }]} />
+        <label className="dw-ack"><input type="checkbox" checked={allowUnverifiedTarget} onChange={(event) => setAllowUnverifiedTarget(event.target.checked)} /><span>Request review from an agent with unknown quota. The destination owner must separately consent to one unverified attempt; unknown agents are excluded from automatic suggestions.</span></label>
         <label className="dw-field"><span>Work request</span><textarea className="input" rows={3} value={instructions} maxLength={10_000} required onChange={(event) => setInstructions(event.target.value)} placeholder="Describe the exact task for the selected remote agent" /></label>
         <Button type="submit" size="sm" disabled={Boolean(busy) || !teamId || !sharedProjectId || !sourceSessionId || !taskId || !agentId || !instructions.trim()} busy={busy === 'delegation'}>Send approval request</Button>
       </form>
@@ -510,7 +523,7 @@ function RecoveryPanel({ teamId, sharedProjects, agents, requests, localDeviceId
         <div className="dw-card__heading"><span><CircleHelp size={15} /></span><div><h3>Check recovery eligibility</h3><p>Only recorded local failures can request candidates. This check does not create a delegation.</p></div></div>
         {failed.length ? <>
           <SelectControl label="Recorded local failure" value={failureSessionId} onChange={setFailureSessionId} options={failedSessionOptions} />
-          <SelectControl label="Shared task" value={fallbackTaskId} onChange={setFallbackTaskId} options={taskOptions} disabled={!taskOptions.length} />
+          <SelectControl label="Source local task" value={fallbackTaskId} onChange={setFallbackTaskId} options={taskOptions} disabled={!taskOptions.length} />
           <SelectControl label="Shared project" value={sharedProjectId} onChange={setSharedProjectId} options={projectOptions} disabled={!projectOptions.length} />
           <Button size="sm" disabled={Boolean(busy) || !teamId || !sharedProjectId || !failureSessionId || !fallbackTaskId} busy={busy === 'fallback-check'} onClick={() => { setFallbackEligibility(null); setFallbackCandidateId(''); void perform('fallback-check', 'Recovery eligibility refreshed.', () => distributedApi.suggestFallback({ teamId, sharedProjectId, sourceSessionId: failureSessionId, taskId: fallbackTaskId })).then((response) => setFallbackEligibility(response ?? null)); }}>Check eligible agents</Button>
           {fallbackEligibility ? <FallbackCandidates response={fallbackEligibility} agents={agents} candidateId={fallbackCandidateId} setCandidateId={setFallbackCandidateId} /> : null}
@@ -574,7 +587,7 @@ function TransfersPanel({ teamId, sharedProjects, devices, gitRequests, gitAudit
   const [remoteNames, setRemoteNames] = useState<Record<string, string>>({});
   useEffect(() => { if (!projectId && projectOptions[0]) setProjectId(projectOptions[0].value); }, [projectId, projectOptions]);
   useEffect(() => { if (!deviceId && devices[0]) setDeviceId(devices[0].value); }, [deviceId, devices]);
-  const pendingGit = gitRequests.filter((row) => row.direction === 'incoming' && row.status === 'awaiting-destination-approval');
+  const pendingGit = gitRequests.filter((row) => (row.direction === 'incoming' && row.status === 'awaiting-destination-approval') || ((row.direction === 'outgoing' || row.direction === 'local') && row.status === 'awaiting-source-approval'));
   const pendingCommands = commandRequests.filter((row) => row.direction === 'incoming' && row.status === 'awaiting-approval');
   const integrationRequests = gitRequests.filter((row) => row.direction === 'incoming' && row.kind === 'transfer' && row.status === 'imported');
   const decide = (kind: 'git' | 'command', row: DistributedRecord, value: 'approved' | 'denied') => {
@@ -624,7 +637,7 @@ function TransfersPanel({ teamId, sharedProjects, devices, gitRequests, gitAudit
         <Button type="submit" size="sm" disabled={Boolean(busy) || !teamId || !deviceId || !projectId || !commandFieldsValid} busy={busy === 'command-request'}>Request read operation</Button>
       </form>
     </div>
-    <DecisionList title="Incoming Git bundle approvals" note="The request digest shown in the current snapshot is included in this decision; the UI does not fetch a replacement before submitting." category="git" rows={pendingGit} busy={busy} checkedApprovals={checkedApprovals} setCheckedApprovals={setCheckedApprovals} onDecision={(row, value) => decide('git', row, value)} />
+    <DecisionList title="Git transfer and integration approvals" note="The request digest shown in the current snapshot is included in this decision; the UI does not fetch a replacement before submitting." category="git" rows={pendingGit} busy={busy} checkedApprovals={checkedApprovals} setCheckedApprovals={setCheckedApprovals} onDecision={(row, value) => decide('git', row, value)} />
     <DecisionList title="Incoming structured command approvals" note="Review the exact operation and project scope before deciding. Decisions bind to the displayed request digest." category="command" rows={pendingCommands} busy={busy} checkedApprovals={checkedApprovals} setCheckedApprovals={setCheckedApprovals} onDecision={(row, value) => decide('command', row, value)} />
     <section className="dw-decision-section"><div className="dw-section-head"><div><h3>Git integration</h3><p>Request merge or push only after the incoming bundle is imported; HEAD and fingerprint are read from the displayed request snapshot.</p></div><Badge>{integrationRequests.length}</Badge></div>{integrationRequests.length ? <div className="dw-approval-list">{integrationRequests.map((row, index) => {
       const id = idOf(row, ['id', 'requestId']) || `incoming-${index}`;

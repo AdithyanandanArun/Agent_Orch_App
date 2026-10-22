@@ -27,6 +27,7 @@ export interface RequestDelegationInput {
   taskId: string;
   agentId: string;
   mode: 'provider-failure' | 'unpublished-recovery';
+  allowUnverifiedTarget?: boolean;
   content: string;
   idempotencyKey: string;
 }
@@ -147,6 +148,7 @@ export const distributedApi = {
   delegation: (input: RequestDelegationInput) => call<unknown>(`${base}/delegations`, 'POST', input),
   suggestFallback: (input: { teamId: string; sharedProjectId: string; sourceSessionId: string; taskId: string }) => call<unknown>(`${base}/fallbacks/suggest`, 'POST', input),
   decideExecution: (id: string, input: ExecutionDecisionBody) => call<unknown>(idPath('approvals', id), 'POST', input),
+  publishTask: (input: { teamId: string; sharedProjectId: string; taskId: string }) => call<unknown>(`${base}/tasks/publish`, 'POST', input),
   sendMessage: (input: SendRemoteMessageInput) => call<unknown>(`${base}/messages`, 'POST', input),
   requestGit: (input: GitTransferInput) => call<unknown>(`${base}/git/request`, 'POST', input),
   integrateGit: (input: GitIntegrationInput) => call<unknown>(`${base}/git/integrate`, 'POST', input),

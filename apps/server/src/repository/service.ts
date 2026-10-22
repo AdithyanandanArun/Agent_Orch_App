@@ -110,6 +110,11 @@ export class RepositoryService {
 
   // ── mutations ────────────────────────────────────────────────────────────
 
+  /** Shares the local repository lease with approved distributed Git operations. */
+  withExternalMutation<T>(projectId: string, operation: () => Promise<T>): Promise<T> {
+    return this.mutate(projectId, undefined, async () => operation());
+  }
+
   commit(projectId: string, input: RepositoryCommit): Promise<RepositoryMutationResult> {
     return this.mutate(projectId, input.sessionId, async ({ scope, snap, top }) => {
       const state = snap.state;

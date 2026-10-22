@@ -32,7 +32,7 @@ class FakeQuery implements PromiseLike<{ data: unknown; error: unknown }> {
 }
 
 const cloud = {
-  mingle_members: [{ team_id: TEAM, user_id: OWNER_A }, { team_id: TEAM, user_id: OWNER_B }],
+  mingle_members: [{ team_id: TEAM, user_id: OWNER_A, revoked_at: null }, { team_id: TEAM, user_id: OWNER_B, revoked_at: null }],
   mingle_projects: [{ id: SHARED_PROJECT, team_id: TEAM }],
   mingle_devices: [
     { id: DEVICE_A, team_id: TEAM, owner_id: OWNER_A, revoked_at: null },
@@ -73,7 +73,7 @@ afterEach(async () => {
 });
 
 interface Fixture {
-  service: RemoteExecutionService; db: ReturnType<typeof openDatabase>; transport: FakeTransport;
+  service: RemoteExecutionService; workspace: RemoteExecutionWorkspace; db: ReturnType<typeof openDatabase>; transport: FakeTransport;
   runCalls: Array<{ sessionId: string; content: string; options?: { taskId?: string; userMessage?: { content: string; kind?: string } } }>;
   progressListeners: Array<(event: { runId: string; kind: 'status' | 'progress' | 'result'; status?: string; summary?: string; delta?: string; terminal?: boolean }) => void>;
   quota: { state: 'available' | 'exhausted' | 'unknown'; observedAt: string | null };
@@ -107,7 +107,7 @@ function createFixture(input: { deviceId: string; peerId: string; ownerId: strin
     const checkpoint = {
       id: `checkpoint_${input.sessionId}`, version: 1, sessionId: input.sessionId, runId, reason: 'Provider failed', capturedAt: created,
       objective: 'Finish task_exec', tasks: [{ id: 'task_exec', title: 'Fix the fixture', description: 'Implement one bounded change', acceptanceCriteria: 'Keep the fixture safe', status: 'ready' }],
-      worktree: { path: `/tmp/${projectId}/worktree`, branch: 'main', head: 'a'.repeat(40), dirtyPaths: ['src/partial.ts'], dirtyPathsTruncated: false, isRepository: true, statusKnown: true },
+      worktree: { path: `/tmp/${projectId}/worktree`, branch: 'main', head: 'a'.repeat(40), dirtyPaths: [], dirtyPathsTruncated: false, isRepository: true, statusKnown: true },
       artifacts: [{ id: 'artifact1', path: 'src/base.ts', revision: 'b'.repeat(40), taskId: 'task_exec' }],
       pendingApprovals: [], errors: [], uncertainTools: [], notices: [],
     };
@@ -137,7 +137,7 @@ function createFixture(input: { deviceId: string; peerId: string; ownerId: strin
   const service = new RemoteExecutionService({ store: { db }, account: makeAccount(input.ownerId), transport, runtime, providers, workspace, changed: () => undefined });
   services.push(service);
   return {
-    service, db, transport, runCalls, progressListeners,
+    service, workspace, db, transport, runCalls, progressListeners,
     get quota() { return quota; }, set quota(value) { quota = value; },
     get alternativeState() { return alternativeState; }, set alternativeState(value) { alternativeState = value; },
   };
@@ -168,6 +168,26 @@ describe('RemoteExecutionService', () => {
     source.alternativeState = 'quota-exhausted';
     const eligible = await source.service.suggestFallback({ teamId: TEAM, sharedProjectId: SHARED_PROJECT, sourceSessionId: 'session_a', taskId: 'task_exec' });
     expect(eligible).toMatchObject({ eligible: true, candidates: [{ id: agent!.id, quotaState: 'available', presence: 'idle' }] });
+    expect(source.runCalls).toHaveLength(0);
+  });
+
+  it('blocks recovery when unfinished source files are absent from the committed checkpoint', async () => {
+    const source = createFixture({ deviceId: DEVICE_A, peerId: DEVICE_B, ownerId: OWNER_A, projectId: 'dirty_source', sessionId: 'dirty_session', sessionName: 'Source', provider: 'codex', seedFailure: true });
+    await source.service.bindProject({ teamId: TEAM, sharedProjectId: SHARED_PROJECT, localProjectId: 'dirty_source' });
+    source.workspace.captureCheckpoint = async () => { throw new Error('Git inspection failed'); };
+    const unavailable = await source.service.suggestFallback({ teamId: TEAM, sharedProjectId: SHARED_PROJECT, sourceSessionId: 'dirty_session', taskId: 'task_exec' });
+    expect(unavailable.eligible).toBe(false);
+    expect(unavailable.reason).toMatch(/checkpoint could not be refreshed/i);
+    delete source.workspace.captureCheckpoint;
+    const row = source.db.prepare('SELECT checkpoint_json FROM session_checkpoints').get() as { checkpoint_json: string };
+    const checkpoint = JSON.parse(row.checkpoint_json);
+    checkpoint.worktree.dirtyPaths = ['src/unfinished.ts'];
+    source.db.prepare('UPDATE session_checkpoints SET checkpoint_json = ?').run(JSON.stringify(checkpoint));
+    source.alternativeState = 'provider-unavailable';
+    const result = await source.service.suggestFallback({ teamId: TEAM, sharedProjectId: SHARED_PROJECT, sourceSessionId: 'dirty_session', taskId: 'task_exec' });
+    expect(result.eligible).toBe(false);
+    expect(result.reason).toMatch(/commit.*source changes/i);
+    expect(source.transport.sent.some((item) => item.kind === 'execution.request')).toBe(false);
     expect(source.runCalls).toHaveLength(0);
   });
 
@@ -216,6 +236,12 @@ describe('RemoteExecutionService', () => {
     expect((await destination.service.snapshot(TEAM)).approvals).toHaveLength(0);
 
     destination.quota = { state: 'available', observedAt: now() };
+    destination.workspace.validateDestinationCheckpoint = async () => { throw new Error('Source checkpoint commit is missing at destination'); };
+    await expect(destination.service.decide({ requestId: request.id, expectedDigest: request.digest, decision: 'approved', allowProviderSpend: true }))
+      .rejects.toThrow(/checkpoint commit is missing/i);
+    expect(destination.runCalls).toHaveLength(0);
+    expect((await destination.service.snapshot(TEAM)).approvals).toHaveLength(0);
+    destination.workspace.validateDestinationCheckpoint = async () => undefined;
     const dispatched = await destination.service.decide({ requestId: request.id, expectedDigest: request.digest, decision: 'approved', allowProviderSpend: true, shareProgress: true });
     expect(dispatched).toMatchObject({ state: 'dispatched', runId: 'remote_run_1' });
     expect(destination.runCalls).toHaveLength(1);

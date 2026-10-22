@@ -47,6 +47,14 @@ The integration file exercises the real remote execution service with separate l
 
 Run `supabase/tests/distributed_rls.sql` with the disposable Supabase database runner after applying the account and team migrations. Its 30 pgTAP assertions use `authenticated` JWT claims and cover membership/invitation constraints (including expiry and replay), device ownership, reciprocal fingerprint pins, mailbox sender/recipient authorization, and revocation. The local PGlite policy checks currently pass 25 assertions against the migrations; that verifies local PostgreSQL-compatible policy behavior but does not establish deployed Supabase behavior. No production migration is run by either suite.
 
+## Integration verification (2026-10-22)
+
+All six OpenCode Luna implementation workers were integrated locally. The focused distributed suite passes 43 tests across eight files, including 25 real PostgreSQL-compatible assertions within the policy test. The full backend suite passes 240 tests across 34 files. UI client tests pass four checks. Workspace typechecks and the production build pass. No automated check invokes paid inference.
+
+A browser acceptance run against a temporary, clearly labelled example workspace verifies the signed-out account action, explicit device IDs and reciprocal-link display, the actual ownership/assignment graph, provider/quota consent gating, progress sharing off by default, exact displayed-digest execution/Git payloads, and a 900px layout without page overflow or runtime errors. Team snapshots and approval responses for the positive UI scenarios are intercepted example fixtures; the signed-out response comes from the running local service. These checks do not establish live cloud or physical-device operation.
+
+Mailbox polling and visible team snapshot refresh use five-second intervals. Already-shared local tasks and published agent metadata refresh periodically without inference; unpublished tasks remain local. Remote provider text/results are shared only after explicit receiving-owner consent. Recovery fails closed if the fresh source checkpoint cannot be captured, if uncommitted source edits remain, or if the destination lacks the source commits or has local edits.
+
 ## Current validation limits
 
 - The team/mailbox schema is local source only until separately reviewed and deployed to the selected Supabase project.

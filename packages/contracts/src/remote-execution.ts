@@ -94,7 +94,7 @@ export const RemoteExecutionSnapshotSchema = z.object({
 }).strict();
 
 export const BindRemoteProjectSchema = z.object({ teamId: z.string().min(1).max(100), sharedProjectId: z.string().min(1).max(100), localProjectId: z.string().min(1).max(100) }).strict();
-export const PublishRemoteAgentsSchema = z.object({ teamId: z.string().min(1).max(100), sharedProjectId: z.string().min(1).max(100), sessionIds: z.array(z.string().min(1).max(100)).min(1).max(50) }).strict();
+export const PublishRemoteAgentsSchema = z.object({ teamId: z.string().min(1).max(100), sharedProjectId: z.string().min(1).max(100), sessionIds: z.array(z.string().min(1).max(100)).max(50) }).strict();
 /** Refreshes metadata for the already-published local roster without probing provider quota or inference. */
 export const RefreshRemoteAgentsSchema = z.object({ teamId: z.string().min(1).max(100), sharedProjectId: z.string().min(1).max(100) }).strict();
 export const SuggestRemoteFallbackSchema = z.object({ teamId: z.string().min(1).max(100), sharedProjectId: z.string().min(1).max(100), sourceSessionId: z.string().min(1).max(100), taskId: z.string().min(1).max(100) }).strict();

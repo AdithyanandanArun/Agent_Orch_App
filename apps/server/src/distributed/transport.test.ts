@@ -104,6 +104,7 @@ class MailboxCloud {
     return { data: null, error: { code: '0A000', message: 'unsupported test operation' } };
   }
   private table(table: string): Row[] {
+    if (table === 'mingle_members') return [...this.members].flatMap(([team_id, users]) => [...users].map((user_id) => ({ team_id, user_id, revoked_at: null })));
     if (table === 'mingle_devices') return this.devices as unknown as Row[];
     if (table === 'mingle_device_links') return this.links as unknown as Row[];
     if (table === 'mingle_envelopes') return this.envelopes as unknown as Row[];
@@ -111,7 +112,7 @@ class MailboxCloud {
   }
   private canRead(user: string, table: string, row: Row): boolean {
     if (!this.active(user, row.team_id)) return false;
-    if (table === 'mingle_devices') return true;
+    if (table === 'mingle_members' || table === 'mingle_devices') return true;
     if (table === 'mingle_device_links') return this.owns(user, row.device_id, row.team_id) || this.owns(user, row.peer_device_id, row.team_id);
     return row.to_device_id === this.devices.find((device) => device.team_id === row.team_id && device.owner_id === user && !device.revoked_at)?.id &&
       this.mutual(row.team_id, row.from_device_id, row.to_device_id) && Date.parse(row.expires_at) > this.now();
@@ -257,6 +258,23 @@ describe('TransportService authenticated mailbox', () => {
       await first.close();
       await second.close();
     }
+  });
+
+  it('rejects a locally persisted message after sender membership is revoked', async () => {
+    const cloud = new MailboxCloud();
+    const { first, second, b } = await pairedServices(cloud);
+    try {
+      await first.send({ teamId, toDeviceId: b.id, kind: 'collaboration.message', payload: { text: 'queued before revocation' }, idempotencyKey: 'sender-revoked' });
+      await second.sync();
+      cloud.members.get(teamId)!.delete(userA);
+      const delivered: unknown[] = [];
+      const unsubscribe = second.onMessage((message) => { delivered.push(message); });
+      await second.sync();
+      unsubscribe();
+      expect(delivered).toEqual([]);
+      const db = (second as unknown as { db: DatabaseSync }).db;
+      expect(db.prepare('SELECT status FROM mingle_transport_inbox').get()).toMatchObject({ status: 'rejected' });
+    } finally { await first.close(); await second.close(); }
   });
 
   it('keeps cloud retries queued and rechecks recipient membership before dispatch', async () => {

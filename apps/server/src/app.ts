@@ -35,6 +35,8 @@ import { AttachmentService } from './attachments/service.ts';
 import { handleAttachmentRequest } from './attachments/router.ts';
 import { AccountService } from './account/service.ts';
 import { RecoveryService } from './recovery/service.ts';
+import { DistributedWorkspaceService } from './distributed/service.ts';
+import { RequestRemoteDelegationSchema } from '../../../packages/contracts/src/remote-execution.ts';
 
 export interface ApplicationOptions extends ConfigOptions {
   /** Provider adapters and detection. Inject a fake in tests; the CLI entry passes ./providers/index.ts. */
@@ -63,6 +65,7 @@ export interface MingleApplication {
   readonly repository: RepositoryService;
   readonly attachments: AttachmentService;
   readonly recovery: RecoveryService;
+  readonly distributed: DistributedWorkspaceService;
   /** Runs recovery-independent async setup (example workspace). Called by listen(); safe to call repeatedly. */
   initialize(): Promise<void>;
   listen(): Promise<{ host: string; port: number; url: string }>;
@@ -162,8 +165,34 @@ export function createApplication(options: ApplicationOptions): MingleApplicatio
   const teamMcp = new TeamMcpBridge(groups, store, () => boundPort, () => config.host);
   runtime.setGroupServices(groups, teamMcp);
   groups.recover();
+  const distributed = new DistributedWorkspaceService({ store, account, runtime, providers, recovery, groups, repository, dataDir: config.dataDir });
+  teamMcp.setDistributedTools({
+    recoveryShape: RequestRemoteDelegationSchema.shape,
+    members: async (context, sessionId) => {
+      const session = store.getSession(sessionId);
+      if (!session || groups.forSession(sessionId)?.group.id !== context.groupId) throw new HttpError(403, 'Remote agents are scoped to the current group.');
+      const snapshot = await distributed.execution.snapshot();
+      const bindings = snapshot.bindings.filter((binding) => binding.localProjectId === session.projectId);
+      return { localFirst: true, agents: snapshot.agents.filter((agent) => bindings.some((binding) => binding.teamId === agent.teamId && binding.sharedProjectId === agent.sharedProjectId)) };
+    },
+    recover: async (context, sessionId, input) => {
+      const roster = groups.members(context) as { canAssign?: boolean };
+      if (roster.canAssign !== true) throw new HttpError(403, 'Only the current group planner may propose remote recovery.');
+      const parsed = RequestRemoteDelegationSchema.parse(input);
+      if (parsed.mode !== 'provider-failure') throw new HttpError(403, 'Recovery of unpublished work requires an explicit human request.');
+      const source = store.getSession(parsed.sourceSessionId);
+      const caller = store.getSession(sessionId);
+      if (!source || !caller || source.projectId !== caller.projectId || groups.forSession(source.id)?.group.id !== context.groupId) throw new HttpError(403, 'The failed source must belong to this group and project.');
+      const snapshot = await distributed.execution.snapshot(parsed.teamId);
+      if (!snapshot.bindings.some((binding) => binding.sharedProjectId === parsed.sharedProjectId && binding.localProjectId === source.projectId)) throw new HttpError(403, 'The shared project is not bound to this group project.');
+      const suggestion = await distributed.execution.suggestFallback({ teamId: parsed.teamId, sharedProjectId: parsed.sharedProjectId, sourceSessionId: parsed.sourceSessionId, taskId: parsed.taskId });
+      if (!suggestion.eligible || !suggestion.candidates.some((agent) => agent.id === parsed.agentId)) throw new HttpError(409, 'Automatic recovery proposals require a currently eligible agent with known available quota.');
+      if ((groups.members(context) as { canAssign?: boolean }).canAssign !== true) throw new HttpError(403, 'The group planning authority changed while recovery was being checked.');
+      return distributed.execution.requestDelegation({ ...parsed, allowUnverifiedTarget: false });
+    },
+  });
   const services: Services = {
-    config, store, hub, runtime, tasks, terminals, providers, browser, intelligence, repository, groups, handoffs, workspace, attachments, account, recovery, setupSignal: setupLifecycle.signal,
+    config, store, hub, runtime, tasks, terminals, providers, browser, intelligence, repository, groups, handoffs, workspace, attachments, account, recovery, distributed, setupSignal: setupLifecycle.signal,
     imports: new ImportService(store, options.providers, providers, runtime), directories: new DirectoryService(), projectSources: new ProjectSources(workspace), startedAt: Date.now(), getPort: () => boundPort,
   };
   hub.bind({ onMessage: (socket, raw) => terminals.handleMessage(socket, raw), onClose: (socket) => terminals.releaseSocket(socket) });
@@ -234,12 +263,13 @@ export function createApplication(options: ApplicationOptions): MingleApplicatio
   const address = () => ({ host: config.host, port: boundPort, url: `http://${config.host.includes(':') ? `[${config.host}]` : config.host}:${boundPort}` });
 
   const app: MingleApplication = {
-    config, store, server, runtime, groups, terminals, hub, providers, browser, intelligence, repository, attachments, recovery,
+    config, store, server, runtime, groups, terminals, hub, providers, browser, intelligence, repository, attachments, recovery, distributed,
     initialize() {
       initialized ??= (async () => {
         if (options.exampleWorkspace !== false) await seedExampleWorkspace(store, config.dataDir, log);
         intelligence.start();
         attachments.start();
+        distributed.start();
       })();
       return initialized;
     },
@@ -261,6 +291,7 @@ export function createApplication(options: ApplicationOptions): MingleApplicatio
     close() {
       closing ??= (async () => {
         setupLifecycle.abort();
+        await distributed.close();
         await account.close();
         if (pendingNotify) clearTimeout(pendingNotify);
         await Promise.all([closeAntigravityInstall(config.dataDir), closeAntigravityAuth(config.dataDir)]);

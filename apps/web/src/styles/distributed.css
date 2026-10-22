@@ -137,3 +137,12 @@
   .dw-row--device .dw-row__main { flex-basis: calc(100% - 45px); }
   .dw-row--device .btn { margin-left: auto; }
 }
+.group-remote-activity { margin: 16px 0; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-panel); }
+.group-remote-activity summary { cursor: pointer; font-weight: 600; }
+.group-remote-activity article { margin: 12px 0; padding-top: 10px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.group-remote-activity p { white-space: pre-wrap; margin: 6px 0; }
+.group-remote-activity small { color: var(--fg-2); }
+
+.dw-shared-map { height: 420px; width: 100%; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.dw-map-node { width: 230px; white-space: pre-line; overflow-wrap: anywhere; font-size: 11px; }
+.dw-map-node--owner { border-style: dashed; }

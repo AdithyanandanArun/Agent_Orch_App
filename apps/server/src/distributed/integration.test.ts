@@ -50,8 +50,8 @@ class MemoryQuery implements PromiseLike<QueryResult> {
 class MemoryCloud {
   readonly tables: Record<string, CloudRow[]> = {
     mingle_members: [
-      { team_id: TEAM, user_id: OWNER_A },
-      { team_id: TEAM, user_id: OWNER_B },
+      { team_id: TEAM, user_id: OWNER_A, revoked_at: null },
+      { team_id: TEAM, user_id: OWNER_B, revoked_at: null },
     ],
     mingle_projects: [{ id: SHARED_PROJECT, team_id: TEAM }],
     mingle_devices: [
@@ -371,6 +371,10 @@ describe('distributed two-device execution integration', () => {
     await destinationService.onEnvelope(requestEnvelope);
     expect(destinationRuntime.starts).toHaveLength(1);
 
+    const sourceMembership = cloud.tables.mingle_members!.find((row) => row.user_id === OWNER_A)!;
+    sourceMembership.revoked_at = new Date().toISOString();
+    await expect(destinationService.onEnvelope({ ...messageEnvelope, id: 'revoked-member-envelope', payload: { ...(messageEnvelope.payload as Record<string, unknown>), id: 'revoked-member-message' } })).rejects.toThrow(/active member/i);
+    sourceMembership.revoked_at = null;
     bus.revoke(DEVICE_A);
     const afterRevocation: AuthenticatedEnvelope = {
       ...messageEnvelope, id: 'envelope-after-revocation',

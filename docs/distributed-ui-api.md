@@ -38,4 +38,6 @@ Git decisions bind to the displayed `requestDigest`; bundle imports and merge/pu
 
 The execution worker is changing `RequestRemoteDelegationSchema.maxSpendUsd` from a required cap to an optional informational field. The UI intentionally omits it rather than inventing a dollar budget. The destination decision uses explicit `allowProviderSpend` consent and displays that Mingle cannot guarantee a dollar cap.
 
-Snapshot polling runs every 12 seconds while this Settings section is mounted and visible; browser focus, visibility return and local workspace event changes also refresh it. Form drafts are held in component state and are not reset by snapshot refreshes. HTTP failures remain visible, including sign-in, missing-route, migration and network errors.
+Snapshot polling runs every 5 seconds while this Settings section is mounted and visible; browser focus, visibility return and local workspace event changes also refresh it. Form drafts are held in component state and are not reset by snapshot refreshes. HTTP failures remain visible, including sign-in, missing-route, migration and network errors.
+
+The integration includes an interactive shared agent map using reported ownership, hosting, assignment and explicit dependency relationships. Source-transfer and local merge/push approvals appear alongside incoming-import approvals. Execution disclosure includes the source checkpoint commit and committed artifact references. The local project binding is read from the execution binding records, and device rows expose their IDs for reciprocal linking.

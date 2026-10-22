@@ -19,6 +19,7 @@ import { AgentPresenceRail } from './AgentPresenceRail';
 import { GroupResultSummary } from './GroupResultSummary';
 import { AttachmentHistory } from '../AttachmentHistory';
 import { appendContextReference, ContextReferenceChips } from '../MessageContextControls';
+import { GroupRemoteActivity } from '../distributed/GroupRemoteActivity';
 
 const NO_SESSIONS: Session[] = [];
 const NO_MESSAGES: Message[] = [];
@@ -300,6 +301,7 @@ export function GroupConversation({ snapshot }: { snapshot: GroupSnapshot }) {
           {plans.map((plan) => <SessionPlanCard key={plan.id} plan={plan} reviewReady={allRuns.some((run) => run.id === plan.runId && run.status === 'completed')} speaker={bySession.get(plan.sessionId) ?? null} />)}
           {questions.map((question) => <UserQuestionCard key={question.id} question={question} speaker={bySession.get(question.sessionId) ?? null} />)}
           <GroupResultSummary snapshot={snapshot} sessions={sessions} messages={messages} runs={allRuns} tasks={tasks} />
+          <GroupRemoteActivity key={snapshot.group.id} groupId={snapshot.group.id} />
         </div>
       </div>
       {away ? (

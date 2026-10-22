@@ -48,7 +48,16 @@ pnpm start
 
 ## Mingle account
 
-Open **Settings → Account → Continue with Google** to sign in and explicitly save or restore appearance and model defaults across devices. The current Google app is in testing mode with the owner's account allowed. Desktop sign-ins use the OS keyring when available; Node/web-only sessions are memory-only. Local projects remain usable while signed out. Repository data, provider credentials and permission grants are not synchronized. This adds identity for future team projects; shared multi-user projects are not implemented. See [Google accounts and preferences](docs/accounts.md).
+Open **Settings → Account → Continue with Google** to sign in and explicitly save or restore appearance and model defaults across devices. The current Google app is in testing mode with the owner's account allowed. Desktop sign-ins use the OS keyring when available; Node/web-only sessions are memory-only. Local projects remain usable while signed out. Repository data, provider credentials and permission grants are not synchronized. Team collaboration is available in **Settings → Team workspace** after the distributed schema is deployed. See [Google accounts and preferences](docs/accounts.md).
+
+
+## Team workspaces and linked devices
+
+**Settings → Team workspace** supports team invitations, shared projects, reciprocal device fingerprint linking, selected Claude/Codex/OpenCode agents, shared messages and tasks, availability, recovery approvals, Git bundle transfers, and restricted Git inspection commands. The Agents view maps the reported developers, devices, agents and tasks. Shared recovery activity also appears in its source group conversation.
+
+Remote execution is reserved for exceptional recovery. Automatic suggestions require a recorded local quota/provider failure and exhausted local alternatives. A human may explicitly request recovery of unpublished committed work. The destination owner reviews the exact request and separately consents to provider use, unknown quota when applicable, and progress sharing. Recovery never copies uncommitted edits: commit and review the source work, transfer it through approved Git sync, and prepare a clean destination session first. Push and merge require separate local approvals.
+
+Messages use signed, encrypted outbound cloud mailboxes with durable retries and duplicate suppression. Interrupted dispatches remain uncertain and require human recovery. The cloud migration has not been applied by the implementation or tests; production OAuth and a real two-device/provider acceptance run remain deployment prerequisites. See the [deployment and verification runbook](docs/distributed-workspaces.md).
 
 ## Provider setup
 

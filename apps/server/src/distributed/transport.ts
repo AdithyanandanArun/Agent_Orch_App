@@ -108,7 +108,7 @@ export class TransportService {
   /** Starts the optional outbound polling loop; no inbound listener or network port is opened. */
   start(): void {
     if (this.closed || this.timer) return;
-    const intervalMs = this.options.syncIntervalMs ?? 20_000;
+    const intervalMs = this.options.syncIntervalMs ?? 5_000;
     void this.sync();
     this.timer = setInterval(() => { void this.sync(); }, Math.max(1_000, intervalMs));
     this.timer.unref();
@@ -467,6 +467,11 @@ export class TransportService {
           if (own.device_id !== row.to_device_id) throw new Error('device-revoked');
           await this.refreshTeam(client, user.id, row.team_id, own.device_id);
           const senderRow = this.deviceCacheRow(user.id, row.team_id, row.from_device_id);
+          if (senderRow) {
+            const member = await this.query<{ user_id: string } | null>(client.from('mingle_members').select('user_id')
+              .eq('team_id', row.team_id).eq('user_id', senderRow.owner_id).is('revoked_at', null).maybeSingle(), 'The sender membership could not be verified.');
+            if (!member) throw new HttpError(403, 'The sender is no longer an active team member.');
+          }
           return { own, senderRow };
         });
         if (own.device_id !== row.to_device_id || !senderRow || senderRow.revoked_at ||

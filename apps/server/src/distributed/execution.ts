@@ -19,9 +19,9 @@ interface SupabaseQuery extends PromiseLike<QueryResult> {
   select(columns: string): SupabaseQuery;
   eq(column: string, value: string): SupabaseQuery;
   is(column: string, value: null): SupabaseQuery;
-  maybeSingle(): Promise<QueryResult>;
+  maybeSingle(): PromiseLike<QueryResult>;
 }
-interface AuthenticatedClient { from(table: string): { select(columns: string): SupabaseQuery } }
+export interface AuthenticatedClient { from(table: string): { select(columns: string): SupabaseQuery } }
 interface AuthenticatedUser { id: string }
 
 /** The account bridge must call auth.getUser() on every callback and must not expose session tokens. */
@@ -61,6 +61,8 @@ export interface RemoteExecutionWorkspace {
   captureCheckpoint?(sessionId: string, reason: string, runId?: string): Promise<unknown>;
   /** Read from the local repository/task store; caller-provided `unpublished` flags are not accepted. */
   isUnpublishedWork(input: { projectId: string; sourceSessionId: string; taskId: string }): Promise<boolean>;
+  /** Verify that approved source commits are present in the destination session before using its provider. */
+  validateDestinationCheckpoint?(session: Session, evidence: RemoteRecoveryEvidence): Promise<void>;
   /** Store subscription is filtered to status/progress/result summaries; never provide tool I/O or approval inputs. */
   subscribeSession(sessionId: string, listener: (event: RemoteExecutionProgress) => void): () => void;
 }
@@ -246,7 +248,7 @@ export class RemoteExecutionService {
   }
 
   private async assertMember(client: AuthenticatedClient, teamId: string, ownerId: string): Promise<void> {
-    const result = await client.from('mingle_members').select('team_id').eq('team_id', teamId).eq('user_id', ownerId).maybeSingle();
+    const result = await client.from('mingle_members').select('team_id').eq('team_id', teamId).eq('user_id', ownerId).is('revoked_at', null).maybeSingle();
     if (result.error || !asRow(result.data)) throw new HttpError(403, 'The signed-in account is not an active member of this team.');
   }
   private async assertSharedProject(client: AuthenticatedClient, teamId: string, sharedProjectId: string): Promise<void> {
@@ -329,7 +331,7 @@ export class RemoteExecutionService {
     if (this.closed) throw new HttpError(503, 'Remote execution service is closed.');
     return this.options.account.withAuthenticatedClient(async (client, user) => {
       if (!user?.id) throw new HttpError(401, 'A verified Mingle account is required.');
-      const teamsResult = await client.from('mingle_members').select('team_id').eq('user_id', user.id);
+      const teamsResult = await client.from('mingle_members').select('team_id').eq('user_id', user.id).is('revoked_at', null);
       if (teamsResult.error) throw new HttpError(503, 'Team membership could not be verified.');
       const teamIds = [...new Set(asRows(teamsResult.data).map((row) => row.team_id).filter((id): id is string => typeof id === 'string'))];
       const combined: RemoteExecutionSnapshot = { bindings: [], agents: [], requests: [], approvals: [], messages: [], tasks: [], events: [] };
@@ -576,8 +578,8 @@ export class RemoteExecutionService {
           agent.presenceKnown && agent.quotaState === 'available' && agent.quotaKnown && agent.quotaObservedAt &&
           Date.now() - Date.parse(agent.quotaObservedAt) < 5 * 60_000 && agent.presenceObservedAt && Date.now() - Date.parse(agent.presenceObservedAt) < 2 * 60_000);
       }) : [];
-      const reason = !positiveFailure ? 'No recorded quota-exhausted or provider-unavailable failure supports fallback.'
-        : !proof.ready ? proof.reason : !exhausted ? 'At least one eligible local alternative is busy, unknown, available, or not proven exhausted.'
+      const reason = !proof.ready ? proof.reason : !positiveFailure ? 'No recorded quota-exhausted or provider-unavailable failure supports fallback.'
+        : !exhausted ? 'At least one eligible local alternative is busy, unknown, available, or not proven exhausted.'
           : candidates.length === 0 ? 'No remote agent has both known idle presence and known available quota.' : null;
       this.recordEvent(identity, parsed.sharedProjectId, 'fallback.suggested', canSuggest ? 'Remote fallback candidates were suggested; no work was transferred.' : 'Remote fallback is not currently eligible.', {
         sourceSessionId: source.id, taskId: task.id, eligibleAgentIds: candidates.map((agent) => agent.id), reason,
@@ -603,8 +605,9 @@ export class RemoteExecutionService {
     }
 
     let checkpointRow = runId ? this.get('SELECT checkpoint_json FROM session_checkpoints WHERE session_id = ? AND run_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1', source.id, runId) : undefined;
-    if (!checkpointRow && this.options.workspace.captureCheckpoint) {
-      try { await this.options.workspace.captureCheckpoint(source.id, 'Remote execution recovery handoff', runId ?? undefined); } catch { /* No recovery proof is better than caller-supplied claims. */ }
+    if (this.options.workspace.captureCheckpoint) {
+      try { await this.options.workspace.captureCheckpoint(source.id, 'Remote execution recovery handoff', runId ?? undefined); }
+      catch { return { ready: false, reason: 'The current source checkpoint could not be refreshed. Inspect the local repository before transferring work.', evidence: null, failureKind: 'unknown', runId }; }
       checkpointRow = runId ? this.get('SELECT checkpoint_json FROM session_checkpoints WHERE session_id = ? AND run_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1', source.id, runId)
         : this.get('SELECT checkpoint_json FROM session_checkpoints WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1', source.id);
     }
@@ -628,6 +631,9 @@ export class RemoteExecutionService {
       if (!unpublished) return { ready: false, reason: 'Local recovery storage does not prove that this task contains unpublished work.', evidence: null, failureKind: 'human_requested_recovery', runId };
     }
     if (!checkpoint) return { ready: false, reason: 'No durable source checkpoint is available; no recovery content was transferred.', evidence: null, failureKind: failure?.kind ?? 'human_requested_recovery', runId };
+    if (!checkpoint.worktree.statusKnown || !checkpoint.worktree.head || checkpoint.worktree.dirtyPaths.length || checkpoint.worktree.dirtyPathsTruncated) {
+      return { ready: false, reason: 'Commit and review unfinished source changes, then refresh the recovery checkpoint before transferring work. Recovery requests do not copy uncommitted files.', evidence: null, failureKind: failure?.kind ?? 'human_requested_recovery', runId };
+    }
     if (checkpoint.uncertainTools.length > 0 || checkpoint.pendingApprovals.length > 0) {
       return { ready: false, reason: 'The checkpoint includes uncertain tool effects or pending approvals; resolve them locally before transfer.', evidence: null, failureKind: failure?.kind ?? 'human_requested_recovery', runId };
     }
@@ -795,6 +801,12 @@ export class RemoteExecutionService {
       }
       if (this.options.runtime.isActive(session.id) || session.status === 'running' || session.status === 'waiting') throw conflict('The destination session is busy or still cleaning up.');
       if (request.evidence.unverifiedAtDestination !== true) throw conflict('Recovery evidence is not marked unverified at the destination.');
+      if (this.options.workspace.validateDestinationCheckpoint) await this.options.workspace.validateDestinationCheckpoint(session, request.evidence);
+      // Git inspection may await several processes. Recheck live authority before reserving paid work.
+      await this.assertMember(client, request.teamId, identity.ownerId);
+      await this.assertLinkedDevices(client, request.teamId, identity.deviceId, request.sourceDeviceId);
+      const currentSession = this.localSession(session.id);
+      if (currentSession.model !== session.model || currentSession.provider !== session.provider || currentSession.policy !== 'supervised' || currentSession.worktreePath !== session.worktreePath) throw conflict('The destination session changed while validating recovery. Review the request again.');
       const prompt = this.destinationPrompt(request);
 
       // Consume the approval and reserve dispatch atomically before the only call to runtime.start().
@@ -1158,7 +1170,8 @@ export class RemoteExecutionService {
       const terminal = new Set(['completed', 'failed', 'uncertain', 'denied', 'cancelled']);
       const accepted = this.transaction(() => {
         if (!this.recordEnvelope(envelope)) return false;
-        if (!terminal.has(String(request.state))) {
+        const latePendingStatus = state === 'awaiting-approval' && request.state !== 'awaiting-approval';
+        if (!terminal.has(String(request.state)) && !latePendingStatus) {
           this.run('UPDATE mingle_remote_requests SET state = ?, run_id = COALESCE(?, run_id), updated_at = ? WHERE id = ?', state, runId, nowIso(), payload.requestId as string);
         }
         this.recordEvent(identity, String(request.shared_project_id), `execution.${state}`, 'Destination device reported remote execution status.', {

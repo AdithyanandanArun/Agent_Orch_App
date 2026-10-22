@@ -34,8 +34,11 @@ import type { AccountService } from './account/service.ts';
 import type { RecoveryService } from './recovery/service.ts';
 import { AccountConnectionSchema, SaveAccountPreferencesSchema } from '@mingle/contracts';
 import { ATTACHMENT_LIMITS, NativeActionCatalogQuerySchema, nativeActionCommands, nativeActionSkills, unsupportedActionNotes } from '@mingle/contracts';
+import type { DistributedWorkspaceService } from './distributed/service.ts';
+import { registerDistributedRoutes } from './distributed/routes.ts';
 
 export interface Services {
+  distributed: DistributedWorkspaceService;
   account: AccountService;
   setupSignal: AbortSignal;
   config: ServerConfig; store: Store; hub: Hub; workspace: WorkspaceService; runtime: SessionRuntime; tasks: TaskService; handoffs: HandoffService;
@@ -46,7 +49,7 @@ export class Reply {
   constructor(readonly status: number, readonly body: unknown) {}
 }
 
-interface Ctx { req: IncomingMessage; res: ServerResponse; url: URL; params: Record<string, string>; body<T>(schema: z.ZodType<T>): Promise<T> }
+export interface Ctx { req: IncomingMessage; res: ServerResponse; url: URL; params: Record<string, string>; body<T>(schema: z.ZodType<T>): Promise<T> }
 type Handler = (ctx: Ctx) => Promise<unknown> | unknown;
 interface Route { method: string; regex: RegExp; keys: string[]; handler: Handler }
 
@@ -100,6 +103,7 @@ const RevealDirectory = z.object({ path: z.string().min(1).max(4096) }).strict()
 export function buildRouter(s: Services) {
   const routes: Route[] = [];
   const add = (method: string, pattern: string, handler: Handler) => routes.push({ method, ...compile(pattern), handler });
+  registerDistributedRoutes(add, s.distributed);
   const touch = () => s.store.touch();
   const param = (ctx: Ctx, key: string) => {
     const value = ctx.params[key]!;
@@ -462,7 +466,12 @@ export function buildRouter(s: Services) {
   });
 
   add('POST', '/api/handoffs', async (ctx) => new Reply(201, await s.handoffs.create(await ctx.body(HandoffSchema))));
-  add('POST', '/api/approvals/:id', async (ctx) => s.runtime.decide(param(ctx, 'id'), (await ctx.body(ApprovalDecisionSchema)).decision));
+  add('POST', '/api/approvals/:id', async (ctx) => {
+    const id = param(ctx, 'id');
+    const body = await ctx.body(ApprovalDecisionSchema);
+    await s.distributed.authorizeNativeApproval(id);
+    return s.runtime.decide(id, body.decision);
+  });
 
   add('GET', '/api/settings', () => s.store.getSettings());
   add('PATCH', '/api/settings', async (ctx) => {
