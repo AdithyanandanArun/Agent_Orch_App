@@ -1,7 +1,7 @@
 import { build } from 'esbuild';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { access, chmod, copyFile, cp, mkdir, readdir, readFile, readlink, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, copyFile, cp, mkdir, readdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 import { dirname, isAbsolute, join, relative, resolve, sep, delimiter } from 'node:path';
@@ -101,10 +101,17 @@ try {
 } finally { await rm(deployWorkspace, { recursive: true, force: true }); }
 // Mingle uses separately installed provider CLIs. Do not redistribute the optional native Claude CLI.
 const virtualStore = join(server, 'node_modules/.pnpm');
-const cliPlatform = target === 'win32-x64' ? 'win32-x64' : 'linux-';
-for (const entry of await readdir(virtualStore)) {
-  if (entry.startsWith(`@anthropic-ai+claude-agent-sdk-${cliPlatform}`)) await rm(join(virtualStore, entry), { recursive: true, force: true });
+// pnpm shortens long Windows store folder names with a hash. Inspect package names
+// inside the store instead of assuming the store folder retains the full name.
+async function removeNativeCliPackages(directory) {
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    if (/^claude-agent-sdk-(?:linux|darwin|win32)-/.test(entry.name)) {
+      await rm(path, { recursive: true, force: true });
+    } else if (entry.isDirectory() && !entry.isSymbolicLink()) await removeNativeCliPackages(path);
+  }
 }
+await removeNativeCliPackages(join(server, 'node_modules'));
 // Legacy deploy hoists a package self-reference. It is unnecessary at runtime and can make
 // recursive installers follow a directory link back to the server root.
 await rm(join(virtualStore, 'node_modules/@mingle/server'), { recursive: true, force: true });
@@ -118,14 +125,10 @@ async function removeBrokenLinks(directory) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name);
     if (entry.isSymbolicLink()) {
-      if (!(await present(path))) {
-        if (!(await readlink(path)).includes(`claude-agent-sdk-${cliPlatform}`)) throw new Error(`Broken runtime dependency link: ${path}`);
-        await rm(path, { recursive: true, force: true });
-      } else {
-        const resolved = await realpath(path);
-        if (!pathIsWithin(serverRoot, resolved)) throw new Error(`Runtime dependency escapes the release directory: ${path}`);
-        if (pathIsWithin(resolved, path)) throw new Error(`Recursive runtime dependency link is not safe to package: ${path}`);
-      }
+      // Windows access() can succeed on a dangling junction; realpath is the check.
+      const resolved = await realpath(path).catch(error => { throw new Error(`Broken runtime dependency link: ${path}`, { cause: error }); });
+      if (!pathIsWithin(serverRoot, resolved)) throw new Error(`Runtime dependency escapes the release directory: ${path}`);
+      if (pathIsWithin(resolved, path)) throw new Error(`Recursive runtime dependency link is not safe to package: ${path}`);
     } else if (entry.isDirectory()) await removeBrokenLinks(path);
   }
 }
