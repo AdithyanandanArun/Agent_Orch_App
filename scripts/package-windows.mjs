@@ -182,12 +182,12 @@ if (await present(join(stage, 'resources/workspace/apps/server/node_modules/.pnp
   throw new Error('Staged pnpm self-reference was not removed; NSIS must not recurse through it.');
 }
 
-const smokeRoot = await mkdtemp(join(tmpdir(), 'mingle-win-package-'));
+const smokeRoot = await mkdtemp(join(tmpdir(), 'mp-'));
 try {
   await smokeRuntime(smokeRoot);
   await run(makensis, makensisArgs(installer));
   if (!(await present(installer))) throw new Error('NSIS returned success without creating the installer executable.');
-  await smokeInstaller(makensis, join(smokeRoot, 'installer-check'));
+  await smokeInstaller(makensis, smokeRoot);
   const checksum = await sha256(installer);
   await writeFile(`${installer}.sha256`, `${checksum}  ${stageName}-setup.exe\n`);
   console.log(`Unsigned Windows installer: ${installer}\nSHA256: ${checksum}`);

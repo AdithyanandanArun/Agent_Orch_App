@@ -97,7 +97,10 @@ for (const project of ['apps/server', 'apps/web', 'apps/desktop', 'packages/cont
 for (const project of ['apps/server', 'packages/contracts']) await cp(join(root, project, 'src'), join(deployWorkspace, project, 'src'), { recursive: true });
 try {
   // No source-workspace install is needed: deploy installs the selected production graph directly.
-  await runPnpm(['--config.verify-deps-before-run=false', '--dir', deployWorkspace, '--filter', '@mingle/server', 'deploy', '--legacy', '--prod', server], { env: environment });
+  // A conventional node_modules tree keeps installed Windows paths below the
+  // limits of NSIS and Windows DLL loaders, without changing package versions.
+  const linker = target === 'win32-x64' ? ['--config.node-linker=hoisted'] : [];
+  await runPnpm(['--config.verify-deps-before-run=false', ...linker, '--dir', deployWorkspace, '--filter', '@mingle/server', 'deploy', '--legacy', '--prod', server], { env: environment });
 } finally { await rm(deployWorkspace, { recursive: true, force: true }); }
 // Mingle uses separately installed provider CLIs. Do not redistribute the optional native Claude CLI.
 const virtualStore = join(server, 'node_modules/.pnpm');
@@ -115,6 +118,7 @@ await removeNativeCliPackages(join(server, 'node_modules'));
 // Legacy deploy hoists a package self-reference. It is unnecessary at runtime and can make
 // recursive installers follow a directory link back to the server root.
 await rm(join(virtualStore, 'node_modules/@mingle/server'), { recursive: true, force: true });
+await rm(join(server, 'node_modules/@mingle/server'), { recursive: true, force: true });
 // Remove dependency symlinks to the excluded optional CLI, retaining all JS SDK dependencies.
 const serverRoot = resolve(server);
 const pathIsWithin = (parent, candidate) => {
@@ -175,7 +179,7 @@ async function inventoryPackage(packageDir) {
   inventory.push({ name: info.name, version: info.version, license: info.license ?? 'unspecified', files });
 }
 // Preserve notices for deployed backend dependencies.
-for (const versioned of await readdir(virtualStore)) {
+for (const versioned of target === 'linux-x64' ? await readdir(virtualStore) : []) {
   const modules = join(virtualStore, versioned, 'node_modules');
   if (!(await present(modules))) continue;
   const names = [];
@@ -190,6 +194,24 @@ for (const versioned of await readdir(virtualStore)) {
       await inventoryPackage(packageDir);
     } catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
+}
+if (target === 'win32-x64') {
+  async function inventoryModules(directory) {
+    if (!(await present(directory))) return;
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (entry.name.startsWith('.')) continue;
+      const path = join(directory, entry.name);
+      if (entry.name.startsWith('@')) {
+        for (const name of await readdir(path)) await inventoryHoistedPackage(join(path, name));
+      } else await inventoryHoistedPackage(path);
+    }
+  }
+  async function inventoryHoistedPackage(directory) {
+    if (!(await present(join(directory, 'package.json')))) return;
+    await inventoryPackage(directory);
+    await inventoryModules(join(directory, 'node_modules'));
+  }
+  await inventoryModules(join(server, 'node_modules'));
 }
 // The UI bundles its dependency code, so its notices must accompany the binary too.
 const visitedFrontend = new Set();
