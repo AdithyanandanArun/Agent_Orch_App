@@ -98,7 +98,12 @@ class MemoryTwoDeviceTransport {
       }),
       send: async (input) => {
         const existing = this.sent.find((envelope) => envelope.fromDeviceId === deviceId && envelope.toDeviceId === input.toDeviceId && envelope.idempotencyKey === input.idempotencyKey);
-        if (existing) return existing;
+        if (existing) {
+          if (input.kind === 'execution.request' && JSON.stringify(existing.payload) !== JSON.stringify(input.payload)) {
+            throw new Error('Transport idempotency key was reused with a different immutable request payload.');
+          }
+          return existing;
+        }
         const envelope: PendingEnvelope = {
           id: `envelope-${++this.sequence}`, teamId: input.teamId, fromDeviceId: deviceId,
           toDeviceId: input.toDeviceId, kind: input.kind, payload: structuredClone(input.payload), idempotencyKey: input.idempotencyKey,
@@ -288,9 +293,24 @@ describe('distributed two-device execution integration', () => {
     // The service instance is intentionally configured with static dependencies; this fresh instance represents
     // the same device process after durable local failure evidence has been recorded.
     await sourceService.close();
+    let refreshedCheckpoint = 0;
+    const sourceWorkspace: RemoteExecutionWorkspace = {
+      ...workspace,
+      captureCheckpoint: async (sessionId, _reason, runId) => {
+        if (!runId) throw new Error('Expected a failed source run checkpoint.');
+        const row = source.store.db.prepare(`SELECT id, checkpoint_json FROM session_checkpoints WHERE session_id = ? AND run_id = ?
+          ORDER BY created_at DESC, rowid DESC LIMIT 1`).get(sessionId, runId) as { id: string; checkpoint_json: string } | undefined;
+        if (!row) throw new Error('Missing integration checkpoint.');
+        const checkpoint = JSON.parse(row.checkpoint_json) as { id: string; capturedAt: string };
+        checkpoint.id = `checkpoint-refresh-${++refreshedCheckpoint}`;
+        checkpoint.capturedAt = new Date().toISOString();
+        source.store.db.prepare('UPDATE session_checkpoints SET id = ?, checkpoint_json = ?, created_at = ? WHERE id = ?')
+          .run(checkpoint.id, JSON.stringify(checkpoint), checkpoint.capturedAt, row.id);
+      },
+    };
     const sourceServiceWithFailure = new RemoteExecutionService({
       store: source.store, account: cloud.account(OWNER_A), transport: bus.forDevice(DEVICE_A),
-      runtime: sourceRuntime.implementation, workspace, providers: sourceProviders, changed: () => undefined,
+      runtime: sourceRuntime.implementation, workspace: sourceWorkspace, providers: sourceProviders, changed: () => undefined,
     });
     fixture.sourceService = sourceServiceWithFailure;
 
@@ -305,9 +325,15 @@ describe('distributed two-device execution integration', () => {
     const request = await sourceServiceWithFailure.requestDelegation(requestInput);
     expect(request.maxSpendUsd).toBeNull();
     expect(request.allowUnverifiedTarget).toBe(false);
-    const sameRequest = await sourceServiceWithFailure.requestDelegation(requestInput);
-    expect(sameRequest.id).toBe(request.id);
     const requestEnvelope = bus.sent.find((envelope) => envelope.kind === 'execution.request')!;
+    await bus.deliverAll();
+    await bus.forDevice(DEVICE_B).send({ teamId: TEAM, toDeviceId: DEVICE_A, kind: 'execution.status',
+      payload: { requestId: request.id, sharedProjectId: SHARED_PROJECT, state: 'awaiting-approval', runId: null,
+        destinationDeviceId: DEVICE_B, updatedAt: new Date().toISOString() }, idempotencyKey: `status:${request.id}:awaiting-approval` });
+    await bus.deliverAll();
+    const sameRequest = await sourceServiceWithFailure.requestDelegation(requestInput);
+    expect(sameRequest).toMatchObject({ id: request.id, digest: request.digest, state: 'awaiting-approval' });
+    expect(sameRequest.evidence.checkpointId).toBe(request.evidence.checkpointId);
     await bus.deliverAll();
     expect((await destinationService.snapshot(TEAM)).requests.find((item) => item.id === request.id)?.state).toBe('awaiting-approval');
     await expect(destinationService.onEnvelope({

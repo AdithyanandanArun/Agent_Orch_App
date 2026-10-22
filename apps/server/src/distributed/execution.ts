@@ -114,6 +114,11 @@ const digestableRequest = (request: RemoteExecutionRequest) => ({
   taskId: request.taskId, task: request.task, content: request.content, mode: request.mode, evidence: request.evidence,
   maxSpendUsd: request.maxSpendUsd ?? null, allowUnverifiedTarget: request.allowUnverifiedTarget, currency: request.currency, targetConfigDigest: request.targetConfigDigest,
 });
+/** A fresh recovery capture may have a new durable row ID while describing identical safe evidence. */
+const delegationIntentDigest = (request: RemoteExecutionRequest) => {
+  const value = digestableRequest(request);
+  return digest({ ...value, evidence: { ...value.evidence, checkpointId: null } });
+};
 
 const REMOTE_TABLES = `
   CREATE TABLE IF NOT EXISTS mingle_remote_project_bindings (
@@ -712,12 +717,13 @@ export class RemoteExecutionService {
       const existing = this.get('SELECT * FROM mingle_remote_requests WHERE team_id = ? AND source_device_id = ? AND idempotency_key = ?', parsed.teamId, identity.deviceId, parsed.idempotencyKey);
       if (existing) {
         const current = this.requestFromRow(existing);
-        if (current.digest !== req.digest) throw conflict('This delegation idempotency key already names a different request.');
-        // A status update mutates the durable request after its original immutable wire payload was sent.
-        // Never try to reuse that transport idempotency key with a changed status/runId/timestamp.
+        if (delegationIntentDigest(current) !== delegationIntentDigest(req)) throw conflict('This delegation idempotency key already names a different request.');
+        // The approval digest and first wire payload retain the original checkpoint ID. A fresh capture
+        // only affects identity comparison above; it never replaces approved evidence or changes that digest.
         if (current.state === 'awaiting-approval') {
+          const originalWireRequest = { ...current, state: 'awaiting-approval' as const, runId: null, updatedAt: current.createdAt };
           await this.options.transport.send({ teamId: parsed.teamId, toDeviceId: targetDeviceId, kind: 'execution.request',
-            payload: current, idempotencyKey: parsed.idempotencyKey });
+            payload: originalWireRequest, idempotencyKey: parsed.idempotencyKey });
         }
         return current;
       }

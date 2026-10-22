@@ -61,7 +61,17 @@ class FakeTransport implements RemoteExecutionTransport {
       { id: this.remoteDeviceId, teamId: TEAM, ownerId: remoteOwner, linked: true, revokedAt: null, online: true },
     ] };
   }
-  async send(input: { teamId: string; toDeviceId: string; kind: string; payload: unknown; idempotencyKey: string }) { this.sent.push(input); return { accepted: true }; }
+  async send(input: { teamId: string; toDeviceId: string; kind: string; payload: unknown; idempotencyKey: string }) {
+    if (input.kind === 'execution.request') {
+      const existing = this.sent.find((entry) => entry.kind === input.kind && entry.idempotencyKey === input.idempotencyKey);
+      if (existing) {
+        if (JSON.stringify(existing.payload) !== JSON.stringify(input.payload)) throw new Error('Transport idempotency key was reused with a different immutable request payload.');
+        return { accepted: true };
+      }
+    }
+    this.sent.push(input);
+    return { accepted: true };
+  }
   onMessage(handler: (envelope: AuthenticatedEnvelope) => Promise<void>): () => void { this.handler = handler; return () => { this.handler = null; }; }
 }
 
@@ -145,6 +155,21 @@ function createFixture(input: { deviceId: string; peerId: string; ownerId: strin
 
 function envelope(fromDeviceId: string, toDeviceId: string, kind: string, payload: unknown, id = randomUUID()): AuthenticatedEnvelope {
   return { id, teamId: TEAM, fromDeviceId, toDeviceId, kind, payload };
+}
+
+let checkpointRefresh = 0;
+function installFreshCheckpointCapture(fixture: Fixture, sessionId: string, runId: string, changeHead: () => boolean): void {
+  fixture.workspace.captureCheckpoint = async () => {
+    const row = fixture.db.prepare('SELECT id, checkpoint_json FROM session_checkpoints WHERE session_id = ? AND run_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1')
+      .get(sessionId, runId) as { id: string; checkpoint_json: string } | undefined;
+    if (!row) throw new Error('Missing source checkpoint fixture.');
+    const checkpoint = JSON.parse(row.checkpoint_json) as { id: string; capturedAt: string; worktree: { head: string | null } };
+    checkpoint.id = `checkpoint_refresh_${++checkpointRefresh}`;
+    checkpoint.capturedAt = now();
+    if (changeHead()) checkpoint.worktree.head = 'c'.repeat(40);
+    fixture.db.prepare('UPDATE session_checkpoints SET id = ?, checkpoint_json = ?, created_at = ? WHERE id = ?')
+      .run(checkpoint.id, JSON.stringify(checkpoint), checkpoint.capturedAt, row.id);
+  };
 }
 
 describe('RemoteExecutionService', () => {
@@ -256,6 +281,66 @@ describe('RemoteExecutionService', () => {
     expect(sharedProgress?.payload).toMatchObject({ ownerId: OWNER_B, deviceId: DEVICE_B, agentId: agent.id, taskId: 'task_exec', dependsOn: ['task_base'], kind: 'progress' });
     expect(sharedProgress?.payload).toMatchObject({ content: 'Progress contains [redacted] and no tool input.' });
     await expect(destination.service.decide({ requestId: request.id, expectedDigest: request.digest, decision: 'approved', allowProviderSpend: true })).rejects.toThrow(/no longer awaiting/i);
+    expect(destination.runCalls).toHaveLength(1);
+  });
+
+  it('keeps delegation retries bound to the first captured evidence across status updates and terminal completion', async () => {
+    const source = createFixture({ deviceId: DEVICE_A, peerId: DEVICE_B, ownerId: OWNER_A, projectId: 'project_retry_a', sessionId: 'session_retry_a', sessionName: 'Source', provider: 'codex', seedFailure: true });
+    const destination = createFixture({ deviceId: DEVICE_B, peerId: DEVICE_A, ownerId: OWNER_B, projectId: 'project_retry_b', sessionId: 'session_retry_b', sessionName: 'Destination', provider: 'claude' });
+    destination.quota = { state: 'available', observedAt: now() };
+    await destination.service.bindProject({ teamId: TEAM, sharedProjectId: SHARED_PROJECT, localProjectId: 'project_retry_b' });
+    const [agent] = await destination.service.publishAgents({ teamId: TEAM, sharedProjectId: SHARED_PROJECT, sessionIds: ['session_retry_b'] });
+    await source.service.bindProject({ teamId: TEAM, sharedProjectId: SHARED_PROJECT, localProjectId: 'project_retry_a' });
+    await source.service.onEnvelope(envelope(DEVICE_B, DEVICE_A, 'execution.agents', destination.transport.sent.find((entry) => entry.kind === 'execution.agents')!.payload));
+    source.alternativeState = 'provider-unavailable';
+    let changeHead = false;
+    installFreshCheckpointCapture(source, 'session_retry_a', 'run_session_retry_a', () => changeHead);
+    const requestInput = { teamId: TEAM, sharedProjectId: SHARED_PROJECT, sourceSessionId: 'session_retry_a', taskId: 'task_exec',
+      agentId: agent!.id, mode: 'provider-failure' as const, content: 'Retry the exact saved recovery intent.', allowUnverifiedTarget: true,
+      idempotencyKey: 'fresh-checkpoint-retry' };
+
+    const request = await source.service.requestDelegation(requestInput);
+    const wireEnvelope = source.transport.sent.find((entry) => entry.kind === 'execution.request')!;
+    const retryBeforeStatus = await source.service.requestDelegation(requestInput);
+    expect(retryBeforeStatus).toMatchObject({ id: request.id, digest: request.digest, evidence: { checkpointId: request.evidence.checkpointId } });
+    await expect(source.service.requestDelegation({ ...requestInput, content: 'Changed intent with the same key.' })).rejects.toThrow(/different request/i);
+
+    await destination.service.onEnvelope(envelope(DEVICE_A, DEVICE_B, 'execution.request', wireEnvelope.payload));
+    await source.service.onEnvelope(envelope(DEVICE_B, DEVICE_A, 'execution.status', {
+      requestId: request.id, sharedProjectId: SHARED_PROJECT, state: 'awaiting-approval', runId: null, destinationDeviceId: DEVICE_B, updatedAt: now(),
+    }));
+    const retryAfterAwaiting = await source.service.requestDelegation(requestInput);
+    expect(retryAfterAwaiting).toMatchObject({ id: request.id, state: 'awaiting-approval', digest: request.digest });
+    expect(source.transport.sent.filter((entry) => entry.kind === 'execution.request')).toHaveLength(1);
+
+    const dispatched = await destination.service.decide({ requestId: request.id, expectedDigest: request.digest, decision: 'approved', allowProviderSpend: true });
+    expect(dispatched).toMatchObject({ state: 'dispatched', runId: 'remote_run_1' });
+    await source.service.onEnvelope(envelope(DEVICE_B, DEVICE_A, 'execution.status', {
+      requestId: request.id, sharedProjectId: SHARED_PROJECT, state: 'dispatched', runId: dispatched.runId,
+      destinationDeviceId: DEVICE_B, updatedAt: now(),
+    }));
+    expect(await source.service.requestDelegation(requestInput)).toMatchObject({ id: request.id, state: 'dispatched', digest: request.digest });
+    expect(destination.runCalls).toHaveLength(1);
+
+    destination.progressListeners[0]!({ runId: dispatched.runId!, kind: 'result', status: 'completed', terminal: true, summary: 'Completed safely.' });
+    let completedStatus: { state?: string; runId?: string | null } | undefined;
+    for (let attempt = 0; attempt < 20 && !completedStatus; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      completedStatus = destination.transport.sent.map((entry) => entry.payload as { state?: string; runId?: string | null })
+        .find((payload) => payload.state === 'completed');
+    }
+    expect(completedStatus).toMatchObject({ state: 'completed', runId: dispatched.runId });
+    await source.service.onEnvelope(envelope(DEVICE_B, DEVICE_A, 'execution.status', {
+      requestId: request.id, sharedProjectId: SHARED_PROJECT, state: 'completed', runId: dispatched.runId,
+      destinationDeviceId: DEVICE_B, updatedAt: now(),
+    }));
+    const completionRetry = await source.service.requestDelegation(requestInput);
+    expect(completionRetry).toMatchObject({ id: request.id, state: 'completed', runId: dispatched.runId, digest: request.digest });
+    expect(completionRetry.evidence.checkpointId).toBe(request.evidence.checkpointId);
+    expect(destination.runCalls).toHaveLength(1);
+
+    changeHead = true;
+    await expect(source.service.requestDelegation(requestInput)).rejects.toThrow(/different request/i);
     expect(destination.runCalls).toHaveLength(1);
   });
 
