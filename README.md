@@ -2,7 +2,9 @@
 
 A local development workspace for independent coding-agent sessions. Mingle is the current product name; the original product vision is retained as historical context in [the product vision](docs/vision.md).
 
-This repository establishes the local foundation: an original React workspace, a Node runtime, persistent sessions and events, isolated Git worktrees, provider adapters, task dependencies, artifact handoffs and an Electron desktop app with Linux and Windows packaging. Distributed team networking, voice orchestration and automatic integration remain later milestones.
+This repository includes an original React workspace, a Node runtime, persistent sessions and events, isolated Git worktrees, provider adapters, task dependencies, artifact handoffs and an Electron desktop app with Linux and Windows packaging. Opt-in distributed team services are implemented; complete live two-device acceptance remains outstanding. Voice orchestration remains a later milestone.
+
+New here? Start with [onboarding and setup](ONBOARDING.md). Developers and coding agents can read [current project context](CONTEXT.md) for architecture, implementation status, validation evidence and next steps.
 
 ## Desktop app (Linux and Windows x64)
 
@@ -59,7 +61,7 @@ Open **Settings → Account → Continue with Google** to sign in and explicitly
 
 Remote execution is reserved for exceptional recovery. Automatic suggestions require a recorded local quota/provider failure and exhausted local alternatives. A human may explicitly request recovery of unpublished committed work. The destination owner reviews the exact request and separately consents to provider use, unknown quota when applicable, and progress sharing. Recovery never copies uncommitted edits: commit and review the source work, transfer it through approved Git sync, and prepare a clean destination session first. Push and merge require separate local approvals.
 
-Messages use signed, encrypted outbound cloud mailboxes with durable retries and duplicate suppression. Interrupted dispatches remain uncertain and require human recovery. The cloud migration has not been applied by the implementation or tests; production OAuth and a real two-device/provider acceptance run remain deployment prerequisites. See the [deployment and verification runbook](docs/distributed-workspaces.md).
+Messages use signed, encrypted outbound cloud mailboxes with durable retries and duplicate suppression. Interrupted dispatches remain uncertain and require human recovery. The dedicated deployment's team migration and one-account team creation/loading were verified on 2026-10-22. Production OAuth access and a complete live two-device/provider acceptance run remain outstanding; tests do not apply cloud migrations. See the [acceptance evidence](docs/distributed-acceptance.md) and [deployment and verification runbook](docs/distributed-workspaces.md).
 
 ## Provider setup
 
@@ -134,6 +136,8 @@ The Electron launcher starts the same Node server on a selected loopback port. I
 
 ## Project documents
 
+- [Onboarding and setup](ONBOARDING.md)
+- [Current project context and handoff](CONTEXT.md)
 - [Original vision](docs/vision.md)
 - [Product and interaction specification](docs/product-experience.md)
 - [Minimal workspace revision and T3 UI references](docs/ui-direction.md)
