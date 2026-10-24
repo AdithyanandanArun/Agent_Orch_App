@@ -1,0 +1,22 @@
+:root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif; color: #ededed; background: #0b0b0c; }
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 48px 24px; background: radial-gradient(ellipse at 50% 0%, #232329 0%, transparent 60%); }
+.invitation { width: min(100%, 540px); }
+.brand { display: inline-flex; align-items: center; gap: 10px; color: #ededed; font-size: 20px; font-weight: 600; text-decoration: none; margin-bottom: 68px; }
+.eyebrow { color: #a1a1aa; font-size: 13px; letter-spacing: .04em; }
+h1 { font-size: clamp(36px, 7vw, 52px); line-height: 1.1; letter-spacing: -.045em; margin: 14px 0 20px; font-weight: 550; }
+p { font-size: 15px; line-height: 1.65; color: #b1b1ba; }
+.actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 28px 0 0; }
+[hidden] { display: none !important; }
+.button { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 11px 19px; font: inherit; font-size: 14px; font-weight: 550; border: 1px solid #ededed; border-radius: 8px; color: #171719; background: #ededed; text-decoration: none; cursor: pointer; }
+.button:hover { background: #fff; }
+.button.secondary { border-color: #36363d; background: #1b1b20; color: #ededed; }
+.button.secondary:hover { background: #292930; }
+a { color: #dedee5; text-underline-offset: 3px; }
+a:focus-visible, button:focus-visible { outline: 2px solid #b9b9ff; outline-offset: 5px; }
+.notice { min-height: 24px; font-size: 13px; margin-top: 16px; }
+.install { border-top: 1px solid #2a2a30; margin-top: 36px; padding-top: 26px; }
+.install strong { font-size: 14px; font-weight: 550; }
+.install p { font-size: 14px; margin: 8px 0; }
+.footnote { margin-top: 28px; font-size: 12px; color: #868691; }
+@media (max-width: 420px) { body { padding: 32px 22px; } .brand { margin-bottom: 44px; } .actions { flex-direction: column; } .button { width: 100%; } }

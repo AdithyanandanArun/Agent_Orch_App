@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Join a project · Mingle</title>
+    <link rel="icon" href="./mingle.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="./join.css">
+    <script type="module" src="./join.mjs"></script>
+  </head>
+  <body>
+    <main class="invitation">
+      <a class="brand" href="https://github.com/AdithyanandanArun/Mingle-dev" rel="noreferrer"><img src="./mingle.svg" width="36" height="36" alt="">Mingle</a>
+      <p class="eyebrow">A place to build together</p>
+      <h1>Join your project.</h1>
+      <p id="description">Open your invitation in Mingle to sign in, choose your project folder and add your first agent.</p>
+      <div class="actions" id="actions" hidden>
+        <a class="button" id="open-mingle" rel="noreferrer">Open Mingle</a>
+        <button class="button secondary" id="copy-link" type="button">Copy app link</button>
+      </div>
+      <p class="notice" id="status" role="status" aria-live="polite">Checking the invitation link…</p>
+      <noscript><p>Enable JavaScript to open this invitation. The invitation is handled on your device.</p></noscript>
+      <div class="install">
+        <strong>Need the desktop app?</strong>
+        <p><a href="https://github.com/AdithyanandanArun/Mingle-dev/releases" rel="noreferrer">Download Mingle for Linux or Windows</a>, then reopen your invitation.</p>
+      </div>
+      <p class="footnote">Joining asks for your confirmation in Mingle. It does not start an agent or grant permission to run commands.</p>
+    </main>
+  </body>
+</html>

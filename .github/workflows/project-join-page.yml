@@ -1,0 +1,38 @@
+name: Publish project invitation page
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: project-invitation-page
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check invitation link handling
+        run: node --test website/join/join.test.mjs
+      - name: Stage public files only
+        run: |
+          mkdir -p public-site/join
+          cp website/join/index.html website/join/join.css website/join/join.mjs website/join/mingle.svg public-site/join/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public-site
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/deploy-pages@v4
+        id: deployment
