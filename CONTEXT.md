@@ -82,13 +82,14 @@ The app is version **0.1.0**. Linux/Windows packaging stages Electron, a checksu
 
 | Check | Recorded result and evidence |
 | --- | --- |
-| Integrated validation at source `74095d7` | [Passed: typecheck, backend tests, build and smoke](https://github.com/AdithyanandanArun/Mingle-dev/actions/runs/39812465484). |
-| Debian native packaging | [Passed on Ubuntu 22.04, updated invitations](https://github.com/AdithyanandanArun/Mingle-dev/actions/runs/40084149695): runtime, terminal, install, desktop rendering and removal checks. |
-| Windows native packaging | [Passed on Windows Server 2022, updated invitations](https://github.com/AdithyanandanArun/Mingle-dev/actions/runs/40084153825): runtime/ConPTY, silent install, installed desktop rendering and uninstall checks. |
-| Temporary release verification | [Passed for updated invitations](https://github.com/AdithyanandanArun/Mingle-dev/actions/runs/40084563368): native build evidence plus all four asset names, sizes and SHA-256 digests. |
+| Integrated validation at source `e5807fb` | [Passed: typecheck, backend tests, build and smoke](https://github.com/AdithyanandanArun/Mingle-dev/actions/runs/40089759157). |
+| Debian native packaging | [Passed on Ubuntu 22.04, secure sign-in update](https://github.com/AdithyanandanArun/Mingle-dev/actions/runs/40089759643): runtime, terminal, install, desktop rendering and removal checks. |
+| Windows native packaging | [Passed on Windows Server 2022, secure sign-in update](https://github.com/AdithyanandanArun/Mingle-dev/actions/runs/40089762279): runtime/ConPTY, silent install, installed desktop rendering and uninstall checks. |
+| Temporary release verification | [Passed for secure sign-in update](https://github.com/AdithyanandanArun/Mingle-dev/actions/runs/40090120894): native build evidence plus all four asset names, sizes and SHA-256 digests. |
+| Local Arch installation | Updated package installed; the running app reports secure storage available via GNOME Keyring. [Evidence](docs/account-storage-acceptance.md). |
 | Distributed acceptance | [Recorded local, browser and live evidence](docs/distributed-acceptance.md), with fixtures and remaining live gates identified. |
 
-The [temporary prerelease](https://github.com/AdithyanandanArun/Mingle-dev/releases/tag/temporary-downloads-20261024) contains `.deb`, `.exe` and checksum files. It was published for downloads and may be removed after the owner's confirmation. Do not delete it merely to clear old failed workflow history. Windows signing, automatic updates and public AUR publication remain unfinished. macOS distribution is unverified.
+The [temporary prerelease](https://github.com/AdithyanandanArun/Mingle-dev/releases/tag/temporary-downloads-20261024-keyring) contains `.deb`, `.exe` and checksum files. It was published for downloads and may be removed after the owner's confirmation. Do not delete it merely to clear old failed workflow history. Windows signing, automatic updates and public AUR publication remain unfinished. macOS distribution is unverified.
 
 Earlier red publication runs are historical failures. The last failure used an API lookup that did not find the draft after upload. The corrected workflow uses draft-aware inspection. Publication reruns verify an existing prerelease without overwriting its assets; mismatches fail. Creating the tag/draft is an owner step. See [desktop distribution](docs/desktop-distribution.md).
 
