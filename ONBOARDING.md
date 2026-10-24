@@ -4,7 +4,7 @@ Start here to use Mingle or set up a development checkout. For the project's cur
 
 ## Install the desktop app
 
-Download a package from [GitHub releases](https://github.com/AdithyanandanArun/Mingle-dev/releases). The [temporary download prerelease](https://github.com/AdithyanandanArun/Mingle-dev/releases/tag/temporary-downloads-20261022) contains a Debian/Ubuntu amd64 `.deb`, a Windows x64 setup `.exe`, and their SHA-256 files. Temporary downloads may be removed after use; they do not expire automatically.
+Download a package from [GitHub releases](https://github.com/AdithyanandanArun/Mingle-dev/releases). The [temporary download prerelease](https://github.com/AdithyanandanArun/Mingle-dev/releases/tag/temporary-downloads-20261024) contains a Debian/Ubuntu amd64 `.deb`, a Windows x64 setup `.exe`, and their SHA-256 files. Temporary downloads may be removed after use; they do not expire automatically.
 
 - Debian/Ubuntu: install the downloaded package with `sudo apt install ./mingle_0.1.0_amd64.deb`.
 - Windows: run `mingle-0.1.0-win32-x64-setup.exe`. Installation is per-user. The installer is unsigned, so Windows may show an unknown-publisher prompt.
@@ -53,7 +53,7 @@ An explicit `ANTHROPIC_API_KEY` in the runtime environment takes precedence over
 
 ## Accounts and team collaboration
 
-Open **Settings → Account → Continue with Google** for a Mingle identity and explicit preference sync. This is separate from provider authentication. The configured Google app was last verified in Testing mode; additional testers need access from the deployment owner.
+Open **Settings → Account → Continue with Google** for a Mingle identity and explicit preference sync. This is separate from provider authentication. The configured Google app is In production with basic identity scopes; no tester allowlist is needed.
 
 If Mingle says secure desktop storage is unavailable, that runtime keeps the sign-in only in memory until it closes. Node/web development sessions behave this way; desktop persistence requires an available OS keyring. See [account storage](docs/accounts.md#desktop-credential-storage).
 
@@ -61,7 +61,7 @@ For the project-first collaboration flow, open a Git project and choose **Add te
 
 The project agent controls show both local and published teammate agents. Mingle prepares team/project/device binding behind the scenes and limits invitation-based pairing to the leader and joining device. Existing **Settings → Team workspace** controls remain available for advanced setup and diagnostics.
 
-Email delivery needs the reviewed collaboration migration, deployed delivery function, sender secrets and a published HTTPS join page. A missing setup is shown explicitly; the app does not claim an email was sent. See [project teammates and sender setup](docs/project-teammates.md). The earlier dedicated deployment's team creation/loading was verified on 2026-10-22; that evidence does not establish this new email join flow is deployed.
+Email delivery needs the reviewed collaboration migration, deployed delivery function, sender secrets and a published HTTPS join page. A missing setup is shown explicitly; the app does not claim an email was sent. See [project teammates and sender setup](docs/project-teammates.md). The reviewed setup is deployed. On 2026-10-24, live Gmail receipt, installed Linux invitation opening, exact-account join and leader visibility of the recipient’s idle agent were verified using two accounts on one computer; see the [dated acceptance record](docs/project-collaboration-acceptance.md).
 Remote execution is reserved for exceptional recovery: qualifying local quota/provider failure with exhausted local alternatives, or an explicit human request to recover unpublished committed work. The destination owner must approve the exact request and provider use. Git transfer, merge, push and restricted remote commands have their own approvals. Uncommitted edits are not transferred by recovery. Follow the [two-device runbook](docs/distributed-workspaces.md); complete physical-device acceptance remains outstanding.
 
 ## Verify a change

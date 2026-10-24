@@ -43,7 +43,7 @@ The static files in [website/join](../website/join) contain no account keys or b
 
 The manual [invitation-page workflow](../.github/workflows/project-join-page.yml) stages only public page files and deploys them to GitHub Pages. Before running it, enable Pages with **GitHub Actions** as its source in repository settings. This publication is separate from implementation and requires the owner's permission. Set `MINGLE_INVITE_JOIN_URL` to the resulting `/join/` URL after publication; do not guess that an unpublished URL works.
 
-Deploy the reviewed project-collaboration migration and delivery function to the same Supabase project as the app's account connection. The public static page does not replace account/email checks: preview and acceptance run through authenticated invitation RPCs. Keep any Google testing-mode tester restrictions in mind when adding another account.
+Deploy the reviewed project-collaboration migration and delivery function to the same Supabase project as the app's account connection. The public static page does not replace account/email checks: preview and acceptance run through authenticated invitation RPCs. The deployed Google sign-in app was switched to In production on 2026-10-24; basic identity sign-in no longer needs a tester allowlist.
 
 ## Validation boundaries
 

@@ -57,20 +57,22 @@ Git conflict inspection is conservative and may require manual review where text
 
 The new project-first implementation adds **Add teammates** beside **Add agent**, email invitation creation, a private-fragment HTTPS join page, installed-app invitation links, checkout/clone and initial-provider selection, and combined local/remote project agent controls. It reuses the distributed services rather than changing remote execution authority. See [project teammates](docs/project-teammates.md), [the API](docs/project-collaboration-api.md) and [desktop link handling](docs/project-invitation-links.md).
 
-The invitation delivery function supports a cloud-configured Gmail sender over implicit TLS or an optional verified-domain Resend sender. No sender credentials ship in the desktop app. The static page and cloud changes require publication/deployment and private sender configuration before real email invitations are usable; local fixture checks alone do not establish live delivery.
+The invitation delivery function supports a cloud-configured Gmail sender over implicit TLS or an optional verified-domain Resend sender. No sender credentials ship in the desktop app. The static page, reviewed cloud migration and delivery function are deployed. Private Gmail sender configuration was entered directly into Supabase.
 
-Local acceptance passed 267 server tests, 21 invitation/mail boundary tests, eight project-onboarding browser checks, 24 existing distributed-browser checks, the production build and runtime smoke. See [dated acceptance and remaining release checks](docs/project-collaboration-acceptance.md). Gmail credentials were entered privately into Supabase, but real email delivery and the new cloud/static-page deployment remain unverified.
+Local acceptance passed 267 server tests, 21 invitation/mail boundary tests, eight project-onboarding browser checks, 24 existing distributed-browser checks, the production build and runtime smoke. See [dated acceptance and remaining release checks](docs/project-collaboration-acceptance.md). Live Gmail inbox receipt, installed Linux invitation-link opening, exact-account join and leader visibility of the recipient’s idle OpenCode agent were verified with two accounts and separate device identities on one computer. No provider run started; physical devices on different networks remain a separate acceptance check.
 
 ## Cloud and account status
 
-Google sign-in uses Supabase PKCE and verified identity. Account preferences synchronize only an allowlist of portable defaults. The Google consent screen was last verified in Testing mode, so additional testers need deployment-owner access. Provider authentication remains local and separate.
+Google sign-in uses Supabase PKCE and verified identity. Account preferences synchronize only an allowlist of portable defaults. Google Auth Platform was verified **In production** on 2026-10-24, with published homepage/privacy/terms and basic identity scopes; no tester allowlist is needed. Provider authentication remains local and separate.
 
-The dedicated Mingle deployment has both reviewed migrations recorded:
+The dedicated Mingle deployment has these reviewed migrations recorded:
 
 - `supabase/migrations/20261020170423_mingle_accounts.sql`
 - `supabase/migrations/20261022100932_mingle_teams.sql`
+- `supabase/migrations/20261024094104_mingle_project_collaboration.sql`
+- `supabase/migrations/20261024094433_mingle_invitation_limit_rls.sql`
 
-On 2026-10-22, a missing team deployment was reproduced in the installed app, corrected, and verified through actual team creation and owner-roster loading after reload using Supabase/PostgREST. This is one-account live evidence. Two-account invitation acceptance, physical devices on different networks, cloud mailbox delivery/revocation propagation and live remote provider recovery still need acceptance. The automated tests never apply production migrations.
+On 2026-10-22, a missing team deployment was reproduced in the installed app, corrected, and verified through actual team creation and owner-roster loading after reload using Supabase/PostgREST. This is one-account live evidence. The project-first flow subsequently passed two-account live invitation acceptance and encrypted cloud roster delivery on one host (2026-10-24). Physical devices on different networks, revocation propagation and live remote provider recovery still need acceptance. The automated tests never apply production migrations.
 
 Electron uses OS-protected key material and authenticated encrypted account storage when secure storage is available. Node/web-only runtimes and desktops without a usable keyring retain sign-in in memory until exit. Cross-platform keyring/session persistence needs device verification. Switching Mingle accounts does not partition the local SQLite workspace or remove local data on sign-out. See [accounts](docs/accounts.md) and [corrective live verification](docs/distributed-acceptance.md#corrective-live-team-verification-2026-10-22).
 
@@ -81,12 +83,12 @@ The app is version **0.1.0**. Linux/Windows packaging stages Electron, a checksu
 | Check | Recorded result and evidence |
 | --- | --- |
 | Integrated validation at source `74095d7` | [Passed: typecheck, backend tests, build and smoke](https://github.com/AdithyanandanArun/Mingle-dev/actions/runs/39812465484). |
-| Debian native packaging | [Passed on Ubuntu 22.04](https://github.com/AdithyanandanArun/Mingle-dev/actions/runs/39784288177): runtime, terminal, install, desktop rendering and removal checks. |
-| Windows native packaging | [Passed on Windows Server 2022](https://github.com/AdithyanandanArun/Mingle-dev/actions/runs/39792501063): runtime/ConPTY, silent install, installed desktop rendering and uninstall checks. |
-| Temporary release verification | [Passed](https://github.com/AdithyanandanArun/Mingle-dev/actions/runs/39812481457): native build evidence plus all four asset names, sizes and SHA-256 digests. |
+| Debian native packaging | [Passed on Ubuntu 22.04, updated invitations](https://github.com/AdithyanandanArun/Mingle-dev/actions/runs/40084149695): runtime, terminal, install, desktop rendering and removal checks. |
+| Windows native packaging | [Passed on Windows Server 2022, updated invitations](https://github.com/AdithyanandanArun/Mingle-dev/actions/runs/40084153825): runtime/ConPTY, silent install, installed desktop rendering and uninstall checks. |
+| Temporary release verification | [Passed for updated invitations](https://github.com/AdithyanandanArun/Mingle-dev/actions/runs/40084563368): native build evidence plus all four asset names, sizes and SHA-256 digests. |
 | Distributed acceptance | [Recorded local, browser and live evidence](docs/distributed-acceptance.md), with fixtures and remaining live gates identified. |
 
-The [temporary prerelease](https://github.com/AdithyanandanArun/Mingle-dev/releases/tag/temporary-downloads-20261022) contains `.deb`, `.exe` and checksum files. It was published for downloads and may be removed after the owner's confirmation. Do not delete it merely to clear old failed workflow history. Windows signing, automatic updates and public AUR publication remain unfinished. macOS distribution is unverified.
+The [temporary prerelease](https://github.com/AdithyanandanArun/Mingle-dev/releases/tag/temporary-downloads-20261024) contains `.deb`, `.exe` and checksum files. It was published for downloads and may be removed after the owner's confirmation. Do not delete it merely to clear old failed workflow history. Windows signing, automatic updates and public AUR publication remain unfinished. macOS distribution is unverified.
 
 Earlier red publication runs are historical failures. The last failure used an API lookup that did not find the draft after upload. The corrected workflow uses draft-aware inspection. Publication reruns verify an existing prerelease without overwriting its assets; mismatches fail. Creating the tag/draft is an owner step. See [desktop distribution](docs/desktop-distribution.md).
 
@@ -101,6 +103,6 @@ Priorities for the next validation stage:
 1. Complete the [two-device runbook](docs/distributed-workspaces.md) with distinct confirmed accounts and physical computers on different networks. Record observed outcomes separately from local fixture results.
 2. Verify invitation expiry/replay and roles through the live API, reciprocal device linking, encrypted mailbox delivery, offline/reconnect recovery, duplicate suppression and revocation.
 3. With explicit permission for provider use, verify one exact-owner-approved remote recovery, including local-alternative exhaustion, committed Git preparation, destination approval and progress/result delivery.
-4. Verify secure session persistence and installer behavior on real target desktops, then address signing/update delivery and wider OAuth availability before public launch.
+4. Verify secure session persistence and installer behavior on real target desktops, then address signing/update delivery before public launch.
 
 Historical architecture, roadmap and validation documents describe earlier stages. For current deployment claims, use the corrective live section in the distributed acceptance report and the dated desktop checks above.

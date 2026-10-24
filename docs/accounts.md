@@ -7,7 +7,7 @@ Mingle remains a local application. Settings → Account connects a Google ident
 - Supabase project: `xpirzwppqyvbubqwsqzi` (Mingle), Mumbai (`ap-south-1`), in the owner's selected organization. Project creation was quoted at $0/month on the Free plan; future usage and plan changes follow Supabase's billing.
 - Google Cloud project: `mingle-512217`, dedicated to Mingle authentication; no paid compute or billing account was enabled as part of this setup.
 - Google OAuth client: **Mingle Google sign-in**, Web application. Its client secret is held in Supabase's Google provider settings, never in application source, settings, logs or this guide.
-- Google consent screen: External, **Testing**. The owner's account is an allowed test user. Additional testers must be added in Google Auth Platform → Audience before signing in. Public launch, domains, privacy policy and Google verification remain separate release work.
+- Google consent screen: External, **In production** (verified 2026-10-24). Basic Google identity sign-in is available without a tester allowlist. The public homepage, privacy policy and terms are published on GitHub Pages. Gmail invitation delivery uses a separate private SMTP app password; Mingle does not request Gmail OAuth access.
 - The project's public URL and **publishable** key are application configuration in `apps/server/src/account/public-connection.json`. This key is intentionally distributable; database policies, not key secrecy, protect account data. Never replace it with a secret/service-role key.
 
 Google callback URI:
