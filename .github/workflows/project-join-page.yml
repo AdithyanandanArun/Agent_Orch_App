@@ -1,4 +1,4 @@
-name: Publish project invitation page
+name: Publish Mingle website and invitation page
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: project-invitation-page
+  group: mingle-public-site
   cancel-in-progress: false
 
 jobs:
@@ -19,8 +19,11 @@ jobs:
         run: node --test website/join/join.test.mjs
       - name: Stage public files only
         run: |
-          mkdir -p public-site/join
+          mkdir -p public-site/join public-site/privacy public-site/terms
+          cp website/index.html website/site.css public-site/
           cp website/join/index.html website/join/join.css website/join/join.mjs website/join/mingle.svg public-site/join/
+          cp website/privacy/index.html public-site/privacy/
+          cp website/terms/index.html public-site/terms/
       - uses: actions/upload-pages-artifact@v3
         with:
           path: public-site

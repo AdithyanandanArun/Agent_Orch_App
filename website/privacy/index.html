@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
+    <meta name="description" content="How Mingle handles account, project, device, and provider data.">
+    <title>Privacy &amp; data use · Mingle</title>
+    <link rel="icon" href="../join/mingle.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="../site.css">
+  </head>
+  <body class="policy-page">
+    <header class="site-header shell">
+      <a class="brand" href="../" aria-label="Mingle home"><img src="../join/mingle.svg" width="32" height="32" alt=""><span>Mingle</span></a>
+      <nav class="top-nav" aria-label="Main navigation">
+        <a href="https://github.com/AdithyanandanArun/Mingle-dev" rel="noreferrer">Source</a>
+        <a href="../join/">Project invitations</a>
+        <a class="nav-join" href="../terms/">Terms</a>
+      </nav>
+    </header>
+    <main class="policy-main shell">
+      <a class="back-link" href="../">← Back to Mingle</a>
+      <p class="eyebrow">Clear about what goes where</p>
+      <h1>Privacy &amp; data use</h1>
+      <p class="policy-intro">Mingle is a local development environment with optional account, team, and device features. This page describes the information those features handle and where it goes.</p>
+      <p class="policy-meta">For questions or cloud-data requests, contact <a href="mailto:mingledevteam@gmail.com">mingledevteam@gmail.com</a>.</p>
+
+      <div class="policy-content">
+        <section>
+          <h2>Local workspace and account sign-in</h2>
+          <p>Your project folders, source files, conversations, and local app data are used by Mingle on your computer. When you choose Google sign-in, Mingle verifies your basic profile and email through Supabase Auth. The app's account session is stored locally encrypted using the operating system's secure storage when available; when secure storage is unavailable, the session is kept in memory instead.</p>
+          <p>Provider credentials are not stored by Mingle. They remain with the local provider tools and accounts you set up.</p>
+        </section>
+
+        <section>
+          <h2>Account preferences and team features</h2>
+          <p>If you use cloud account preferences, Mingle stores an allowlisted set of preferences, such as your theme and provider/model defaults, in Supabase under your account.</p>
+          <p>If you use team and device features, Supabase stores team membership, shared project names and repository URLs, device public keys and presence, and encrypted device-to-device mailbox messages. Mailbox contents are encrypted for the participating devices before they are sent to Supabase.</p>
+        </section>
+
+        <section>
+          <h2>Work sent to coding providers</h2>
+          <p>When you explicitly send a request to an agent, Mingle passes the work and context needed for that request to the provider you selected. The provider processes that information under its own terms and privacy practices. Mingle does not control how a provider handles information after receiving it.</p>
+        </section>
+
+        <section>
+          <h2>Project invitation emails</h2>
+          <p>When a project invitation is emailed, the message includes the recipient's email address, project name, repository URL, and a single-use invitation token so the recipient can open the invitation in Mingle. Invitation email is sent through Gmail from <a href="mailto:mingledevteam@gmail.com">mingledevteam@gmail.com</a>.</p>
+        </section>
+
+        <section>
+          <h2>Logs and this website</h2>
+          <p>Passwords and tokens are not written to Mingle application logs. This public website uses no analytics and loads no third-party assets or scripts.</p>
+        </section>
+
+        <section>
+          <h2>Sign-out, unlinking, and data requests</h2>
+          <p>Signing out or unlinking a device does not automatically delete your cloud account or all cloud data. Contact <a href="mailto:mingledevteam@gmail.com">mingledevteam@gmail.com</a> for account or cloud-data requests. Mingle does not publish a general retention duration for these records, so no specific deletion timeline is promised here.</p>
+        </section>
+      </div>
+      <aside class="contact-card">
+        <p>Questions about information handled by Mingle?</p>
+        <a href="mailto:mingledevteam@gmail.com">mingledevteam@gmail.com ↗</a>
+      </aside>
+    </main>
+    <footer class="site-footer policy-footer shell">
+      <a class="footer-brand" href="../"><img src="../join/mingle.svg" width="24" height="24" alt=""> Mingle</a>
+      <p>Thoughtful tools for work that stays yours.</p>
+      <nav aria-label="Footer navigation"><a href="../privacy/" aria-current="page">Privacy</a><a href="../terms/">Terms</a><a href="mailto:mingledevteam@gmail.com">Contact</a></nav>
+    </footer>
+  </body>
+</html>
