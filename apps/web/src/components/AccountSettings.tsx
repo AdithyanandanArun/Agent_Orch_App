@@ -212,7 +212,7 @@ export function AccountSettings({ settings }: { settings: AppSettings }) {
           </div>
         </div>
       </> : <p className="settings-page__hint">Sign in to save and restore your account preferences.</p>}
-      <p className="account-settings__privacy">Repository files, chats, provider logins, browser data, local paths and permission settings stay on this device. Team project sharing will be a separate action.</p>
+      <p className="account-settings__privacy">Provider logins, browser data, local paths and permission settings stay on this device. Project collaboration shares the agents, notes and tasks you explicitly publish.</p>
       <details className="account-settings__connection">
         <summary>Account connection</summary>
         <p className="settings-page__hint">{account.configurationSource === 'application' ? 'Connected to the Mingle account service.' : account.configurationSource === 'environment' ? 'Configured by the runtime environment.' : 'Custom Supabase account service for this device.'} Google OAuth credentials belong in Supabase, not in Mingle.</p>
