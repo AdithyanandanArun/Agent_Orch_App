@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   createProjectInvitationDispatcher,
   createProjectInvitationUrl,
+  isProjectInvitationWorkspaceUrl,
   MAX_PENDING_PROJECT_INVITATIONS,
   parseProjectInvitationUrl,
 } from './project-invitation.mjs';
@@ -47,41 +48,47 @@ test('builds the UI handoff only on Mingle’s local loopback origin', () => {
   assert.equal(createProjectInvitationUrl('http://user@127.0.0.1:4310', token), null);
 });
 
-test('holds links until the workspace is ready and navigates queued links serially', async () => {
-  const window = {};
+test('allows IPC only for the exact local workspace origin', () => {
+  const workspaceUrl = 'http://127.0.0.1:4310';
+  assert.equal(isProjectInvitationWorkspaceUrl('http://127.0.0.1:4310/?join=secret', workspaceUrl), true);
+  assert.equal(isProjectInvitationWorkspaceUrl('http://user@127.0.0.1:4310/', workspaceUrl), false);
+  assert.equal(isProjectInvitationWorkspaceUrl('http://127.0.0.1:4311/', workspaceUrl), false);
+  assert.equal(isProjectInvitationWorkspaceUrl('https://127.0.0.1:4310/', workspaceUrl), false);
+  assert.equal(isProjectInvitationWorkspaceUrl('file:///tmp/index.html', workspaceUrl), false);
+});
+
+test('uses the first queued link for cold startup and sends warm links without reloading', () => {
+  const sent = [];
+  const window = { webContents: { send: (_channel, value) => sent.push(value) } };
   let windowReady = false;
   let focused = 0;
-  const navigations = [];
-  const completeNavigation = [];
+  const loadedUrls = [];
+  window.loadURL = url => loadedUrls.push(url);
   const dispatcher = createProjectInvitationDispatcher({
     getWorkspaceUrl: () => 'http://127.0.0.1:4310',
     getWindow: () => windowReady ? window : null,
     focusWindow: () => { focused++; },
-    navigate: (_window, url) => {
-      navigations.push(url);
-      return new Promise(resolve => completeNavigation.push(resolve));
-    },
+    sendInvitation: (_window, value) => window.webContents.send('mingle.project-invitation', value),
   });
 
   assert.equal(dispatcher.accept(invitation(token)), true);
   assert.equal(dispatcher.accept(invitation('B'.repeat(32))), true);
-  assert.equal(navigations.length, 0);
+  assert.equal(dispatcher.accept(invitation('B'.repeat(32))), true);
+  assert.equal(sent.length, 0);
   assert.equal(focused, 0);
   assert.equal(dispatcher.getPendingCount(), 2);
 
+  const coldStartUrl = dispatcher.getStartupUrl();
+  assert.equal(coldStartUrl, `http://127.0.0.1:4310/?join=${token}`);
   windowReady = true;
+  window.loadURL(coldStartUrl); // The one initial cold-start navigation.
   dispatcher.markWorkspaceReady();
-  assert.deepEqual(navigations, [`http://127.0.0.1:4310/?join=${token}`]);
+  assert.deepEqual(sent, ['B'.repeat(32)]);
   assert.equal(focused, 1);
 
-  completeNavigation.shift()();
-  await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(navigations, [
-    `http://127.0.0.1:4310/?join=${token}`,
-    `http://127.0.0.1:4310/?join=${'B'.repeat(32)}`,
-  ]);
-  completeNavigation.shift()();
-  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(dispatcher.accept(invitation('C'.repeat(32))), true);
+  assert.deepEqual(sent, ['B'.repeat(32), 'C'.repeat(32)]);
+  assert.equal(loadedUrls.length, 1);
   assert.equal(dispatcher.getPendingCount(), 0);
 });
 
@@ -90,12 +97,14 @@ test('rejects invalid links and bounds queued dispatch without native handler mu
     getWorkspaceUrl: () => null,
     getWindow: () => null,
     focusWindow: () => assert.fail('No window should be focused'),
-    navigate: () => assert.fail('No navigation should start before a workspace is ready'),
+    sendInvitation: () => assert.fail('No invitation should dispatch before a workspace is ready'),
   });
   assert.equal(dispatcher.accept('https://example.com'), false);
+  const distinctTokens = Array.from({ length: MAX_PENDING_PROJECT_INVITATIONS + 1 }, (_, index) => Buffer.alloc(24, index).toString('base64url'));
   for (let index = 0; index < MAX_PENDING_PROJECT_INVITATIONS; index++) {
-    assert.equal(dispatcher.accept(invitation(token)), true);
+    assert.equal(dispatcher.accept(invitation(distinctTokens[index])), true);
   }
-  assert.equal(dispatcher.accept(invitation(token)), false);
+  for (let count = 0; count < 100; count++) assert.equal(dispatcher.accept(invitation(distinctTokens[0])), true);
+  assert.equal(dispatcher.accept(invitation(distinctTokens[MAX_PENDING_PROJECT_INVITATIONS])), false);
   assert.equal(dispatcher.getPendingCount(), MAX_PENDING_PROJECT_INVITATIONS);
 });

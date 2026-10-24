@@ -5,7 +5,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { createServer } from 'node:net';
 import { dirname, delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createProjectInvitationDispatcher } from './project-invitation.mjs';
+import { createProjectInvitationDispatcher, isProjectInvitationWorkspaceUrl } from './project-invitation.mjs';
 
 const root = app.isPackaged ? join(process.resourcesPath, 'workspace') : fileURLToPath(new URL('../../', import.meta.url));
 const serverRoot = join(root, 'apps/server');
@@ -42,8 +42,7 @@ function isLiveWindow(window) { return Boolean(window && !window.isDestroyed());
 
 function isWorkspaceFrame(event) {
   if (!workspaceUrl || event.senderFrame !== event.sender.mainFrame) return false;
-  try { return new URL(event.senderFrame.url).origin === new URL(workspaceUrl).origin; }
-  catch { return false; }
+  return isProjectInvitationWorkspaceUrl(event.senderFrame.url, workspaceUrl);
 }
 
 function openExternalWebTarget(target, origin) {
@@ -81,11 +80,17 @@ function focusMainWindow() {
   mainWindow.focus();
 }
 
+function sendProjectInvitation(window, token) {
+  if (!isLiveWindow(window) || window !== mainWindow || !window.webContents || window.webContents.isDestroyed()) return;
+  if (!isProjectInvitationWorkspaceUrl(window.webContents.getURL(), workspaceUrl)) return;
+  window.webContents.send('mingle.project-invitation', token);
+}
+
 const projectInvitationDispatcher = createProjectInvitationDispatcher({
   getWorkspaceUrl: () => workspaceUrl,
   getWindow: () => isLiveWindow(mainWindow) ? mainWindow : null,
   focusWindow: () => focusMainWindow(),
-  navigate: (window, targetUrl) => window.loadURL(targetUrl),
+  sendInvitation: sendProjectInvitation,
 });
 
 ipcMain.handle('mingle.browser.open-popout', async (event, sessionId) => {
@@ -260,7 +265,7 @@ async function openWorkspace() {
   });
   mainWindow = window;
   configureWorkspaceWindow(window, new URL(url).origin);
-  await window.loadURL(url);
+  await window.loadURL(projectInvitationDispatcher.getStartupUrl());
   projectInvitationDispatcher.markWorkspaceReady();
 }
 

@@ -30,54 +30,88 @@ export function createProjectInvitationUrl(workspaceUrl, token) {
   return target.href;
 }
 
-/**
- * Holds valid links until the local workspace window is ready, then navigates
- * serially. Callbacks keep Electron/OS APIs out of parser and dispatch tests.
- */
-export function createProjectInvitationDispatcher({ getWorkspaceUrl, getWindow, focusWindow, navigate }) {
-  let ready = false;
-  let dispatching = false;
-  const pending = [];
+/** Checks a candidate page against Mingle's exact loopback workspace origin. */
+export function isProjectInvitationWorkspaceUrl(candidateUrl, workspaceUrl) {
+  if (typeof candidateUrl !== 'string' || typeof workspaceUrl !== 'string') return false;
+  let candidate;
+  let workspace;
+  try {
+    candidate = new URL(candidateUrl);
+    workspace = new URL(workspaceUrl);
+  } catch { return false; }
+  return workspace.protocol === 'http:'
+    && workspace.hostname === '127.0.0.1'
+    && !workspace.username
+    && !workspace.password
+    && !candidate.username
+    && !candidate.password
+    && candidate.origin === workspace.origin;
+}
 
-  async function drain() {
-    if (!ready || dispatching || pending.length === 0) return;
+/**
+ * Uses the first pre-window link as the cold-start URL, then sends all later
+ * invitations to the existing window without navigating it.
+ */
+export function createProjectInvitationDispatcher({ getWorkspaceUrl, getWindow, focusWindow, sendInvitation }) {
+  let ready = false;
+  let startupUrlClaimed = false;
+  let startupToken = null;
+  let draining = false;
+  const pending = [];
+  const queuedTokens = new Set();
+
+  function drain() {
+    if (!ready || draining || pending.length === 0) return;
     const window = getWindow();
     if (!window) return;
 
-    const token = pending.shift();
-    const targetUrl = createProjectInvitationUrl(getWorkspaceUrl(), token);
-    if (!targetUrl) {
-      void drain();
-      return;
-    }
-
-    dispatching = true;
+    draining = true;
     try {
-      focusWindow(window);
-      await navigate(window, targetUrl);
-    } catch { /* A failed navigation must not expose invitation data in logs. */ }
-    finally {
-      dispatching = false;
-      void drain();
-    }
+      while (pending.length > 0) {
+        const token = pending.shift();
+        try {
+          focusWindow(window);
+          sendInvitation(window, token);
+        } catch { /* Failed delivery must not expose invitation data in logs. */ }
+        finally {
+          queuedTokens.delete(token);
+        }
+      }
+    } finally { draining = false; }
   }
 
   return Object.freeze({
     accept(value) {
       const token = parseProjectInvitationUrl(value);
-      if (!token || pending.length + Number(dispatching) >= MAX_PENDING_PROJECT_INVITATIONS) return false;
+      if (!token) return false;
+      if (queuedTokens.has(token)) return true;
+      if (queuedTokens.size >= MAX_PENDING_PROJECT_INVITATIONS) return false;
       pending.push(token);
+      queuedTokens.add(token);
       const window = getWindow();
-      if (window) {
+      if (window && !ready) {
         try { focusWindow(window); } catch { /* Focus is best-effort. */ }
       }
-      void drain();
+      drain();
       return true;
+    },
+    getStartupUrl() {
+      const workspaceUrl = getWorkspaceUrl();
+      if (startupUrlClaimed) return workspaceUrl;
+      startupUrlClaimed = true;
+      const token = pending.shift();
+      if (!token) return workspaceUrl;
+      startupToken = token;
+      return createProjectInvitationUrl(workspaceUrl, token) ?? workspaceUrl;
     },
     markWorkspaceReady() {
       ready = true;
-      void drain();
+      if (startupToken) {
+        queuedTokens.delete(startupToken);
+        startupToken = null;
+      }
+      drain();
     },
-    getPendingCount() { return pending.length + Number(dispatching); },
+    getPendingCount() { return queuedTokens.size; },
   });
 }
