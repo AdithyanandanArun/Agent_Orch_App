@@ -4,7 +4,12 @@ import * as fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { accountKeyFilePath, createAccountKeyManager, isCanonicalAccountKey } from './account-key.mjs';
+import {
+  accountKeyFilePath,
+  createAccountKeyManager,
+  isCanonicalAccountKey,
+  MAX_WRAPPED_ACCOUNT_KEY_BYTES,
+} from './account-key.mjs';
 
 function createFixture() {
   const root = fs.mkdtempSync(join(tmpdir(), 'mingle-account-key-test-'));
@@ -123,14 +128,18 @@ test('reports transient wrapped-key read failures as retryable without replacing
   const wrappedBefore = fs.readFileSync(fixture.keyFile);
   let failRead = true;
   const fileSystem = {
+    closeSync: fs.closeSync,
     existsSync: fs.existsSync,
+    fstatSync: fs.fstatSync,
+    lstatSync: fs.lstatSync,
     mkdirSync: fs.mkdirSync,
-    readFileSync: (...args) => {
+    openSync: fs.openSync,
+    readSync: (...args) => {
       if (failRead) {
         failRead = false;
         throw new Error('private native read failure');
       }
-      return fs.readFileSync(...args);
+      return fs.readSync(...args);
     },
     renameSync: fs.renameSync,
     rmSync: fs.rmSync,
@@ -144,6 +153,58 @@ test('reports transient wrapped-key read failures as retryable without replacing
   assert.deepEqual(fs.readFileSync(fixture.keyFile), wrappedBefore);
   assert.deepEqual(getAccountKey(), original);
   assert.deepEqual(fs.readFileSync(fixture.keyFile), wrappedBefore);
+});
+
+test('rejects oversized wrapped-key files before opening or decrypting, without mutation', t => {
+  const fixture = createFixture();
+  t.after(() => fs.rmSync(fixture.root, { recursive: true, force: true }));
+  fs.mkdirSync(fixture.userData, { recursive: true, mode: 0o700 });
+  const oversized = Buffer.alloc(MAX_WRAPPED_ACCOUNT_KEY_BYTES + 1, 0x5a);
+  fs.writeFileSync(fixture.keyFile, oversized, { mode: 0o600 });
+  const bytesBefore = fs.readFileSync(fixture.keyFile);
+  let openCount = 0;
+  let encryptCount = 0;
+  let decryptCount = 0;
+  const safeStorage = secureStorage();
+  safeStorage.encryptString = () => { encryptCount++; return Buffer.from('unexpected'); };
+  safeStorage.decryptString = () => { decryptCount++; return Buffer.alloc(32).toString('base64'); };
+  const fileSystem = {
+    closeSync: fs.closeSync,
+    existsSync: fs.existsSync,
+    fstatSync: fs.fstatSync,
+    lstatSync: fs.lstatSync,
+    mkdirSync: fs.mkdirSync,
+    openSync: (...args) => { openCount++; return fs.openSync(...args); },
+    readSync: fs.readSync,
+    renameSync: fs.renameSync,
+    rmSync: fs.rmSync,
+    writeFileSync: fs.writeFileSync,
+  };
+
+  const result = manager(fixture, { safeStorage, fileSystem })();
+  assert.deepEqual(result, {
+    key: null,
+    storage: { status: 'unavailable', backend: 'gnome_libsecret', reason: 'key-unreadable', retryable: false },
+  });
+  assert.equal(openCount, 0);
+  assert.equal(encryptCount, 0);
+  assert.equal(decryptCount, 0);
+  assert.deepEqual(fs.readFileSync(fixture.keyFile), bytesBefore);
+});
+
+test('rejects a nonregular wrapped-key path without invoking safeStorage', t => {
+  const fixture = createFixture();
+  t.after(() => fs.rmSync(fixture.root, { recursive: true, force: true }));
+  fs.mkdirSync(fixture.userData, { recursive: true, mode: 0o700 });
+  fs.mkdirSync(fixture.keyFile);
+  const safeStorage = secureStorage();
+  safeStorage.encryptString = () => assert.fail('must not encrypt for a nonregular key path');
+  safeStorage.decryptString = () => assert.fail('must not decrypt for a nonregular key path');
+
+  const result = manager(fixture, { safeStorage })();
+  assert.equal(result.storage.reason, 'key-unreadable');
+  assert.equal(result.storage.retryable, false);
+  assert.equal(fs.statSync(fixture.keyFile).isDirectory(), true);
 });
 
 test('preserves wrapped bytes if decryption returns a noncanonical key', t => {
