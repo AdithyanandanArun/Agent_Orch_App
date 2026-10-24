@@ -10,47 +10,55 @@ export function writePrivateJson(file: string, value: unknown): void {
   } finally { rmSync(temporary, { force: true }); }
 }
 
-/** The key crosses a private parent/child IPC channel, never argv, the environment or the renderer. */
-export async function desktopAccountKey(): Promise<Buffer | null> {
-  const expected = process.env.MINGLE_ACCOUNT_IPC === '1' && Boolean(process.channel);
-  delete process.env.MINGLE_ACCOUNT_IPC;
-  if (!expected) return null;
-  return new Promise((resolve) => {
-    const finish = (key: Buffer | null) => {
-      clearTimeout(timer);
-      process.off('message', receive);
-      if (process.connected) process.disconnect();
-      resolve(key);
-    };
-    const receive = (message: unknown) => {
-      if (!message || typeof message !== 'object' || !('type' in message) || message.type !== 'mingle.account-key') return;
-      const raw = 'key' in message ? message.key : null;
-      const key = typeof raw === 'string' && /^[A-Za-z0-9+/]{43}=$/.test(raw) ? Buffer.from(raw, 'base64') : null;
-      finish(key?.length === 32 ? key : null);
-    };
-    const timer = setTimeout(() => finish(null), 5000);
-    process.on('message', receive);
-    process.send?.({ type: 'mingle.account-key.request' });
-  });
+export class AccountVaultError extends Error {
+  constructor(readonly reason: 'session-unreadable' | 'storage-write-failed') { super(reason); }
 }
 
 /** Supabase storage adapter. PKCE verifiers and Google's tokens are never written to disk. */
 export class AccountVault {
   private values = new Map<string, string>();
   readonly file: string;
-  constructor(dataDir: string, private key: Buffer | null) {
+  constructor(dataDir: string, private key: Buffer | null, private readonly failed?: (reason: 'storage-write-failed') => void) {
     this.file = path.join(dataDir, 'account-session.enc');
-    if (key && existsSync(this.file)) {
+    if (key) this.values = this.readSaved(key);
+  }
+  private readSaved(key: Buffer): Map<string, string> {
+    if (!existsSync(this.file)) return new Map();
+    try {
       if (statSync(this.file).size > 1024 * 1024) throw new Error('Saved account session is too large');
       const record = JSON.parse(readFileSync(this.file, 'utf8')) as { iv: string; tag: string; data: string };
-      const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(record.iv, 'base64'));
+      const decode = (value: unknown, length?: number) => {
+        if (typeof value !== 'string' || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) throw new Error('Invalid ciphertext');
+        const bytes = Buffer.from(value, 'base64');
+        if (bytes.toString('base64') !== value || (length !== undefined && bytes.length !== length)) throw new Error('Invalid ciphertext');
+        return bytes;
+      };
+      const decipher = createDecipheriv('aes-256-gcm', key, decode(record.iv, 12));
       decipher.setAAD(Buffer.from('mingle-account-session-v1'));
-      decipher.setAuthTag(Buffer.from(record.tag, 'base64'));
-      const raw = Buffer.concat([decipher.update(Buffer.from(record.data, 'base64')), decipher.final()]).toString('utf8');
+      decipher.setAuthTag(decode(record.tag, 16));
+      const raw = Buffer.concat([decipher.update(decode(record.data)), decipher.final()]).toString('utf8');
       const entries = Object.entries(JSON.parse(raw) as Record<string, unknown>);
-      if (entries.some(([name, value]) => !name.startsWith('mingle-account-session') || typeof value !== 'string')) throw new Error('Invalid saved account session');
-      this.values = new Map(entries as [string, string][]);
+      if (entries.some(([name, value]) => name !== 'mingle-account-session' || typeof value !== 'string')) throw new Error('Invalid saved account session');
+      return new Map(entries as [string, string][]);
+    } catch { throw new AccountVaultError('session-unreadable'); }
+  }
+  /** Preserve the current account and pending PKCE verifier while upgrading an in-memory session. */
+  enablePersistence(key: Buffer, restoreSaved: boolean): { restored: boolean } {
+    const saved = this.readSaved(key); // Authenticate existing ciphertext before replacing anything.
+    const restored = restoreSaved && !this.values.has('mingle-account-session') && saved.has('mingle-account-session');
+    const previous = this.values;
+    if (restored) this.values = new Map([...saved, ...this.values]);
+    const previousKey = this.key;
+    this.key = key;
+    try {
+      // With only a pending verifier, leave the prior saved session untouched until sign-in completes.
+      if (this.values.has('mingle-account-session')) this.writeSession();
+    } catch {
+      this.key = previousKey; this.values = previous;
+      throw new AccountVaultError('storage-write-failed');
     }
+    if (previousKey && previousKey !== key) previousKey.fill(0);
+    return { restored };
   }
   get persistent() { return Boolean(this.key); }
   getItem = (key: string): string | null => this.values.get(key) ?? null;
@@ -64,13 +72,25 @@ export class AccountVault {
     this.values.set(key, value);
     this.persist();
   };
-  removeItem = (key: string): void => { this.values.delete(key); this.persist(); };
+  removeItem = (key: string): void => {
+    this.values.delete(key);
+    if (key === 'mingle-account-session') rmSync(this.file, { force: true });
+    else this.persist();
+  };
   clear(): void { this.values.clear(); rmSync(this.file, { force: true }); }
   close(): void { this.values.clear(); this.key?.fill(0); this.key = null; }
   private persist(): void {
     if (!this.key) return;
+    try { this.writeSession(); }
+    catch {
+      this.key.fill(0); this.key = null;
+      this.failed?.('storage-write-failed');
+    }
+  }
+  private writeSession(): void {
+    if (!this.key) return;
     const persisted = Object.fromEntries([...this.values].filter(([key]) => !key.endsWith('-code-verifier')));
-    if (!Object.keys(persisted).length) { rmSync(this.file, { force: true }); return; }
+    if (!Object.keys(persisted).length) return;
     const iv = randomBytes(12);
     const cipher = createCipheriv('aes-256-gcm', this.key, iv);
     cipher.setAAD(Buffer.from('mingle-account-session-v1'));

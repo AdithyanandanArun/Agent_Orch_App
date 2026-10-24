@@ -26,6 +26,13 @@ export const AccountConnectionSchema = z.object({
   publishableKey: z.string().trim().regex(/^sb_publishable_[A-Za-z0-9_-]{10,}$/, 'Use a Supabase publishable key, never a secret or service-role key').max(4096),
 }).strict();
 export type AccountConnection = z.infer<typeof AccountConnectionSchema>;
+/** Safe diagnostics only. Keys, tokens, paths and native error text never cross this boundary. */
+export interface AccountStorageState {
+  status: 'available' | 'unavailable';
+  backend: string | null;
+  reason: 'web-runtime' | 'no-keyring' | 'keyring-unavailable' | 'key-unreadable' | 'storage-write-failed' | 'ipc-unavailable' | 'session-unreadable' | null;
+  retryable: boolean;
+}
 export interface AccountState {
   configured: boolean;
   connection: AccountConnection | null;
@@ -33,6 +40,7 @@ export interface AccountState {
   status: 'signed-out' | 'restoring' | 'signing-in' | 'signed-in';
   user: { id: string; email: string | null; name: string | null } | null;
   sessionStorage: 'os-encrypted' | 'memory';
+  storage?: AccountStorageState;
   error: string | null;
   /** Only while the explicit sign-in attempt is active. Never persisted or logged. */
   authorizationUrl: string | null;

@@ -134,6 +134,7 @@ export function buildRouter(s: Services) {
   add('POST', '/api/account/sign-in', async (ctx) => { await ctx.body(emptyBrowserBody); return s.account.startSignIn(); });
   add('DELETE', '/api/account/sign-in', async (ctx) => { await ctx.body(emptyBrowserBody); return s.account.cancelSignIn(); });
   add('POST', '/api/account/sign-out', async (ctx) => { await ctx.body(emptyBrowserBody); return s.account.signOut(); });
+  add('POST', '/api/account/storage/retry', async (ctx) => { await ctx.body(emptyBrowserBody); return s.account.retryStorage(); });
   add('GET', '/api/account/preferences', () => s.account.loadPreferences());
   add('PUT', '/api/account/preferences', async (ctx) => {
     const body = await ctx.body(SaveAccountPreferencesSchema);

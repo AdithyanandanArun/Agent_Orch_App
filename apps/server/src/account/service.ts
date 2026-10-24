@@ -9,7 +9,8 @@ import { createClient, type SupabaseClient, type User } from '@supabase/supabase
 import { AccountConnectionSchema, AccountPreferencesSchema, type AccountConnection, type AccountState, type SavedAccountPreferences } from '@mingle/contracts';
 import { HttpError, conflict } from '../util.ts';
 import publicConnection from './public-connection.json';
-import { AccountVault, desktopAccountKey, writePrivateJson } from './vault.ts';
+import { AccountVault, AccountVaultError, writePrivateJson } from './vault.ts';
+import { DesktopAccountStorage } from './desktop-storage.ts';
 
 interface Attempt { server: Server; state: string; timer: NodeJS.Timeout; consumed: boolean }
 const STORAGE_KEY = 'mingle-account-session';
@@ -18,6 +19,7 @@ const STORAGE_KEY = 'mingle-account-session';
 export class AccountService {
   private client: SupabaseClient | null = null;
   private vault: AccountVault | null = null;
+  private readonly desktopStorage = new DesktopAccountStorage();
   private attempt: Attempt | null = null;
   private callbackWork: Promise<void> | null = null;
   private closing = new AbortController();
@@ -37,9 +39,14 @@ export class AccountService {
   snapshot(): AccountState { return structuredClone(this.state); }
   private notify(patch: Partial<AccountState>) { Object.assign(this.state, patch); this.changed(); }
   private async initialize(env: NodeJS.ProcessEnv) {
-    const key = await desktopAccountKey();
-    try { this.vault = new AccountVault(this.dataDir, key); }
-    catch { key?.fill(0); this.vault = new AccountVault(this.dataDir, null); this.state.error = 'Saved sign-in could not be unlocked. Sign in again; this session will stay in memory.'; }
+    const { key, storage } = await this.desktopStorage.request();
+    this.state.storage = storage;
+    try { this.vault = new AccountVault(this.dataDir, key, () => this.storageWriteFailed()); }
+    catch {
+      key?.fill(0);
+      this.vault = new AccountVault(this.dataDir, null, () => this.storageWriteFailed());
+      this.state.storage = { ...storage, status: 'unavailable', reason: 'session-unreadable', retryable: false };
+    }
     this.state.sessionStorage = this.vault.persistent ? 'os-encrypted' : 'memory';
     try {
       let raw: unknown;
@@ -66,6 +73,45 @@ export class AccountService {
     }
   }
   private get connectionFile() { return path.join(this.dataDir, 'account-connection.json'); }
+  private storageWriteFailed() {
+    this.notify({ sessionStorage: 'memory', storage: { status: 'unavailable', backend: this.state.storage?.backend ?? null, reason: 'storage-write-failed', retryable: true } });
+  }
+  retryStorage(): Promise<AccountState> {
+    return this.exclusive(async () => {
+      if (this.vault!.persistent) return this.snapshot();
+      if (this.state.storage?.reason === 'session-unreadable') return this.snapshot();
+      const result = await this.desktopStorage.request();
+      if (!result.key) {
+        this.notify({ storage: result.storage, sessionStorage: 'memory' });
+        return this.snapshot();
+      }
+      let restored = false;
+      try {
+        ({ restored } = this.vault!.enablePersistence(result.key, !this.attempt && !this.state.user));
+      } catch (error) {
+        result.key.fill(0);
+        const reason = error instanceof AccountVaultError ? error.reason : 'storage-write-failed';
+        this.notify({ sessionStorage: 'memory', storage: { ...result.storage, status: 'unavailable', reason, retryable: reason !== 'session-unreadable' } });
+        return this.snapshot();
+      }
+      this.notify({ storage: result.storage, sessionStorage: 'os-encrypted' });
+      if (restored && this.state.connection) {
+        // A client initialized with empty memory has already cached a signed-out state.
+        // Recreate it only when an explicit retry restores a previously saved account.
+        this.client?.auth.stopAutoRefresh();
+        this.connect(this.state.connection);
+        try {
+          const { data, error } = await this.client!.auth.getSession();
+          if (error) throw error;
+          if (data.session) await this.verifyUser();
+          this.notify({ status: this.state.user ? 'signed-in' : 'signed-out', error: null });
+        } catch {
+          this.notify({ status: 'signed-out', user: null, error: 'Secure storage is ready. The saved account could not be verified; check your connection or sign in again.' });
+        }
+      }
+      return this.snapshot();
+    });
+  }
   private connect(connection: AccountConnection) {
     this.fenceAccountOperations();
     this.state.connection = { ...connection, url: new URL(connection.url).origin };
@@ -309,6 +355,7 @@ export class AccountService {
   }
   async close() {
     this.closing.abort();
+    this.desktopStorage.close();
     await this.ready;
     this.finishAttempt();
     await this.callbackWork;
