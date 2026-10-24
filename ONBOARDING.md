@@ -55,7 +55,7 @@ An explicit `ANTHROPIC_API_KEY` in the runtime environment takes precedence over
 
 Open **Settings → Account → Continue with Google** for a Mingle identity and explicit preference sync. This is separate from provider authentication. The configured Google app is In production with basic identity scopes; no tester allowlist is needed.
 
-If Mingle says secure desktop storage is unavailable, that runtime keeps the sign-in only in memory until it closes. Node/web development sessions behave this way; desktop persistence requires an available OS keyring. See [account storage](docs/accounts.md#desktop-credential-storage).
+Settings → Account shows whether sign-in is saved securely. On Linux, Mingle selects a detected Secret Service/KWallet backend automatically. If the keyring is locked, unlock it and choose **Retry secure storage**; this saves the current login without restarting. A missing keyring or a Node/web-only runtime keeps sign-in in memory and explains the required setup. See [account storage](docs/accounts.md#desktop-credential-storage).
 
 For the project-first collaboration flow, open a Git project and choose **Add teammates** beside **Add agent**. Enter the teammate's email and send the invitation. They open **Join project** from the email, open installed Mingle, sign in with the invited account, select/clone the project locally and choose their first provider/model. The agent is created idle with Supervised permissions; joining does not start a model run.
 

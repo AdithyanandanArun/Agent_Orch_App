@@ -17,6 +17,7 @@ export class AccountVaultError extends Error {
 /** Supabase storage adapter. PKCE verifiers and Google's tokens are never written to disk. */
 export class AccountVault {
   private values = new Map<string, string>();
+  private signInPending = false;
   readonly file: string;
   constructor(dataDir: string, private key: Buffer | null, private readonly failed?: (reason: 'storage-write-failed') => void) {
     this.file = path.join(dataDir, 'account-session.enc');
@@ -52,7 +53,7 @@ export class AccountVault {
     this.key = key;
     try {
       // With only a pending verifier, leave the prior saved session untouched until sign-in completes.
-      if (this.values.has('mingle-account-session')) this.writeSession();
+      if (!this.signInPending && this.values.has('mingle-account-session')) this.writeSession();
     } catch {
       this.key = previousKey; this.values = previous;
       throw new AccountVaultError('storage-write-failed');
@@ -61,6 +62,13 @@ export class AccountVault {
     return { restored };
   }
   get persistent() { return Boolean(this.key); }
+  /** OAuth can replace storage before its user is verified. Commit only a verified sign-in. */
+  beginSignIn(): void { this.signInPending = true; }
+  finishSignIn(verified: boolean): void {
+    this.signInPending = false;
+    if (verified) this.persist();
+    else this.values.clear();
+  }
   getItem = (key: string): string | null => this.values.get(key) ?? null;
   setItem = (key: string, value: string): void => {
     if (!key.endsWith('-code-verifier')) {
@@ -74,13 +82,13 @@ export class AccountVault {
   };
   removeItem = (key: string): void => {
     this.values.delete(key);
-    if (key === 'mingle-account-session') rmSync(this.file, { force: true });
+    if (key === 'mingle-account-session' && !this.signInPending) rmSync(this.file, { force: true });
     else this.persist();
   };
-  clear(): void { this.values.clear(); rmSync(this.file, { force: true }); }
+  clear(): void { this.values.clear(); if (!this.signInPending) rmSync(this.file, { force: true }); }
   close(): void { this.values.clear(); this.key?.fill(0); this.key = null; }
   private persist(): void {
-    if (!this.key) return;
+    if (!this.key || this.signInPending) return;
     try { this.writeSession(); }
     catch {
       this.key.fill(0); this.key = null;

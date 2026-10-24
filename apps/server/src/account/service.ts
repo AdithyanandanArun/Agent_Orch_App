@@ -240,18 +240,21 @@ export class AccountService {
         if (!url.searchParams.has('error') && (codes.length !== 1 || !codes[0] || codes[0].length > 4096)) return reply(400, 'The sign-in response was incomplete. Please try again.');
         attempt.consumed = true;
         this.callbackWork = (async () => {
+          this.vault!.beginSignIn();
           try {
             if (url.searchParams.has('error')) throw new Error('denied');
             const { error } = await this.client!.auth.exchangeCodeForSession(codes[0]!);
             if (error) throw error;
             await this.verifyUser();
             if (this.closing.signal.aborted) throw new Error('closed');
+            this.vault!.finishSignIn(true);
             this.notify({ status: 'signed-in', error: null });
             reply(200, 'You are signed in. Your local workspace is ready.');
           } catch {
             this.notify({ status: 'signed-out', user: null, error: 'Google sign-in did not finish. Check Google provider setup and redirect URLs, then try again.' });
             await this.client!.auth.signOut({ scope: 'local' }).catch(() => undefined);
             this.vault!.clear();
+            this.vault!.finishSignIn(false);
             reply(400, 'Sign-in did not finish. Please try again from Mingle.');
           } finally { this.finishAttempt(); }
         })();

@@ -101,6 +101,7 @@ it('reports a disk write failure and keeps the login usable in memory', () => {
 });
 
 async function identityFixture() {
+  let rejectNextUser = false;
   const user = { id: '72000000-0000-4000-8000-000000000001', email: 'example-storage@example.test', email_confirmed_at: '2026-01-01T00:00:00Z', aud: 'authenticated', created_at: '2026-01-01T00:00:00Z', identities: [{ provider: 'google', id: 'example-google' }], app_metadata: { provider: 'google' }, user_metadata: { full_name: 'Example storage test' } };
   const b64 = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
   const token = `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64({ sub: user.id, exp: Math.floor(Date.now() / 1000) + 3600, aud: 'authenticated' })}.${Buffer.alloc(32).toString('base64url')}`;
@@ -108,14 +109,17 @@ async function identityFixture() {
     res.setHeader('content-type', 'application/json');
     const url = new URL(req.url!, 'http://127.0.0.1');
     if (url.pathname === '/auth/v1/settings') res.end(JSON.stringify({ external: { google: true } }));
-    else if (url.pathname === '/auth/v1/user') res.end(JSON.stringify(user));
+    else if (url.pathname === '/auth/v1/user') {
+      if (rejectNextUser) { rejectNextUser = false; res.statusCode = 401; res.end(JSON.stringify({ message: 'Example rejected account', code: 'bad_jwt' })); }
+      else res.end(JSON.stringify(user));
+    }
     else if (url.pathname === '/auth/v1/token') res.end(JSON.stringify({ access_token: token, refresh_token: 'example-refresh-token', token_type: 'bearer', expires_in: 3600, user }));
     else { res.statusCode = 404; res.end('{}'); }
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   cleanup.push(() => new Promise<void>((resolve) => { server.close(() => resolve()); server.closeAllConnections(); }));
   const address = server.address() as { port: number };
-  return { env: { MINGLE_SUPABASE_URL: `http://127.0.0.1:${address.port}`, MINGLE_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_example_storage_only' }, user };
+  return { env: { MINGLE_SUPABASE_URL: `http://127.0.0.1:${address.port}`, MINGLE_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_example_storage_only' }, user, rejectNextUser: () => { rejectNextUser = true; } };
 }
 
 async function makeService(dir: string, env: NodeJS.ProcessEnv) {
@@ -169,6 +173,29 @@ it('keeps a signed-in memory session usable when retry still cannot unlock secur
   expect((await service.retryStorage()).sessionStorage).toBe('memory');
   expect(service.snapshot().user).toEqual(before.user);
   expect(await service.withAuthenticatedClient(async (_client, user) => user.id)).toBe(fixture.user.id);
+});
+
+it('preserves an opaque saved session after denied or unverified OAuth and restores it on recovery', async () => {
+  const fixture = await identityFixture(), dir = directory(), key = randomBytes(32);
+  const request = vi.spyOn(DesktopAccountStorage.prototype, 'request').mockImplementation(async () => available(key));
+  const initial = await makeService(dir, fixture.env);
+  await initial.startSignIn(); await finishSignIn(initial); await initial.close();
+  const file = join(dir, 'account-session.enc'), original = readFileSync(file);
+  request.mockResolvedValueOnce(unavailable());
+  const locked = await makeService(dir, fixture.env);
+  await locked.startSignIn();
+  let oauth = new URL(locked.snapshot().authorizationUrl!);
+  expect((await fetch(oauth.searchParams.get('redirect_to')! + '?error=access_denied')).status).toBe(400);
+  expect(readFileSync(file)).toEqual(original);
+  // A new token exchange may write the SDK storage before user verification fails.
+  await locked.startSignIn();
+  oauth = new URL(locked.snapshot().authorizationUrl!);
+  fixture.rejectNextUser();
+  expect((await fetch(oauth.searchParams.get('redirect_to')! + '?code=example-unverified')).status).toBe(400);
+  expect(readFileSync(file)).toEqual(original);
+  expect((await locked.retryStorage()).status).toBe('signed-in');
+  await locked.signOut();
+  expect(() => readFileSync(file)).toThrow();
 });
 
 it('exposes safe web-runtime status and validates retries at the real HTTP boundary', async () => {
