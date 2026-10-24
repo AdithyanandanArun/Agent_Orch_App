@@ -51,6 +51,11 @@ Section "Install Mingle"
   CreateShortcut "$SMPROGRAMS\Mingle\Mingle.lnk" "$INSTDIR\mingle.exe" "" "$INSTDIR\mingle.exe"
   CreateShortcut "$DESKTOP\Mingle.lnk" "$INSTDIR\mingle.exe" "" "$INSTDIR\mingle.exe"
 
+  WriteRegStr HKCU "Software\Classes\mingle" "" "URL:Mingle Project Invitation"
+  WriteRegStr HKCU "Software\Classes\mingle" "URL Protocol" ""
+  WriteRegStr HKCU "Software\Classes\mingle\DefaultIcon" "" '"$INSTDIR\mingle.exe",0'
+  WriteRegStr HKCU "Software\Classes\mingle\shell\open\command" "" '"$INSTDIR\mingle.exe" "%1"'
+
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Mingle" "DisplayName" "Mingle"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Mingle" "DisplayVersion" "${APP_VERSION}"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Mingle" "InstallLocation" "$INSTDIR"
@@ -75,6 +80,10 @@ Section "Uninstall"
   Delete "$DESKTOP\Mingle.lnk"
   Delete "$SMPROGRAMS\Mingle\Mingle.lnk"
   RMDir "$SMPROGRAMS\Mingle"
+  ReadRegStr $0 HKCU "Software\Classes\mingle\shell\open\command" ""
+  StrCmp $0 '"$INSTDIR\mingle.exe" "%1"' 0 protocol_registration_is_not_ours
+  DeleteRegKey HKCU "Software\Classes\mingle"
+  protocol_registration_is_not_ours:
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Mingle"
   RMDir /r "$INSTDIR"
 SectionEnd

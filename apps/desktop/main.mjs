@@ -5,6 +5,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { createServer } from 'node:net';
 import { dirname, delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createProjectInvitationDispatcher } from './project-invitation.mjs';
 
 const root = app.isPackaged ? join(process.resourcesPath, 'workspace') : fileURLToPath(new URL('../../', import.meta.url));
 const serverRoot = join(root, 'apps/server');
@@ -79,6 +80,13 @@ function focusMainWindow() {
   mainWindow.show();
   mainWindow.focus();
 }
+
+const projectInvitationDispatcher = createProjectInvitationDispatcher({
+  getWorkspaceUrl: () => workspaceUrl,
+  getWindow: () => isLiveWindow(mainWindow) ? mainWindow : null,
+  focusWindow: () => focusMainWindow(),
+  navigate: (window, targetUrl) => window.loadURL(targetUrl),
+});
 
 ipcMain.handle('mingle.browser.open-popout', async (event, sessionId) => {
   if (!isLiveWindow(mainWindow) || event.sender !== mainWindow.webContents || !isWorkspaceFrame(event) || typeof sessionId !== 'string' || !SESSION_ID_PATTERN.test(sessionId)) return false;
@@ -253,13 +261,29 @@ async function openWorkspace() {
   mainWindow = window;
   configureWorkspaceWindow(window, new URL(url).origin);
   await window.loadURL(url);
+  projectInvitationDispatcher.markWorkspaceReady();
 }
+
+function receiveProjectInvitation(value) {
+  projectInvitationDispatcher.accept(value);
+}
+
+// Protocol links arrive in argv on Linux/Windows cold launches and in open-url
+// on macOS. Invalid command-line arguments are ignored without logging them.
+for (const argument of process.argv.slice(1)) receiveProjectInvitation(argument);
+app.on('open-url', (event, value) => {
+  event.preventDefault();
+  receiveProjectInvitation(value);
+});
 
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
-  app.on('second-instance', () => {
-    const window = BrowserWindow.getAllWindows()[0];
-    if (window) { if (window.isMinimized()) window.restore(); window.focus(); }
+  if (app.isPackaged && (process.platform === 'linux' || process.platform === 'win32')) {
+    try { app.setAsDefaultProtocolClient('mingle'); } catch { /* Native installers also register the packaged handler. */ }
+  }
+  app.on('second-instance', (_event, argv) => {
+    for (const argument of argv) receiveProjectInvitation(argument);
+    focusMainWindow();
   });
   app.whenReady().then(openWorkspace).catch(error => {
     dialog.showErrorBox('Could not start Mingle', error.message);

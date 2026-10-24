@@ -79,6 +79,7 @@ const appDir = join(stage, 'resources/app');
 await mkdir(appDir, { recursive: true });
 await copyFile(join(root, 'apps/desktop/main.mjs'), join(appDir, 'main.mjs'));
 await copyFile(join(root, 'apps/desktop/browser-preload.cjs'), join(appDir, 'browser-preload.cjs'));
+await copyFile(join(root, 'apps/desktop/project-invitation.mjs'), join(appDir, 'project-invitation.mjs'));
 await writeFile(join(appDir, 'package.json'), JSON.stringify({
   name: 'mingle', productName: 'Mingle', version: pkg.version, type: 'module', main: 'main.mjs',
 }, null, 2) + '\n');
@@ -157,7 +158,7 @@ await copyFile(node, stagedNode);
 if (target !== 'win32-x64') await chmod(stagedNode, 0o755);
 await copyFile(join(root, 'apps/web/public/mingle.svg'), join(stage, 'mingle.svg'));
 if (target === 'linux-x64') {
-  await writeFile(join(stage, 'mingle.desktop'), `[Desktop Entry]\nType=Application\nName=Mingle\nComment=Local workspace for independent coding-agent sessions\nExec=mingle %U\nIcon=mingle\nTerminal=false\nCategories=Development;IDE;\nStartupWMClass=mingle\n`);
+  await writeFile(join(stage, 'mingle.desktop'), `[Desktop Entry]\nType=Application\nName=Mingle\nComment=Local workspace for independent coding-agent sessions\nExec=mingle %u\nIcon=mingle\nTerminal=false\nCategories=Development;IDE;\nMimeType=x-scheme-handler/mingle;\nStartupWMClass=mingle\n`);
 }
 
 const licenses = join(stage, 'resources/licenses');
