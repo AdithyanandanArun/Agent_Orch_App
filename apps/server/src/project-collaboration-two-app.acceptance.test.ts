@@ -46,6 +46,8 @@ it('invites and joins through two real HTTP applications, actual PostgreSQL poli
       expect(created.status).toBe(201);
       projectIds.push(created.json.id);
     }
+    const privateAgent = await leader.api('POST', '/api/sessions', { projectId: projectIds[0], name: 'Private leader session', provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium', policy: 'supervised' });
+    expect(privateAgent.status, JSON.stringify(privateAgent.json)).toBe(201);
     const invitation = await leader.api('POST', `/api/projects/${projectIds[0]}/collaboration/invitations`, { email: users[1]!.email });
     expect(invitation.status, JSON.stringify(invitation.json)).toBe(200);
     expect(invitation.json.delivery.status).toBe('sent');
@@ -64,6 +66,12 @@ it('invites and joins through two real HTTP applications, actual PostgreSQL poli
     expect(roster.status, JSON.stringify(roster.json)).toBe(200);
     expect(roster.json.agents.some((agent: { accountId: string }) => agent.accountId === users[1]!.id)).toBe(true);
     expect(roster.json.members.some((member: { accountId: string }) => member.accountId === users[1]!.id)).toBe(true);
+    expect(roster.json.agents.some((agent: { sessionId: string }) => agent.sessionId === privateAgent.json.id)).toBe(false);
+    const inviteeRoster = await teammate.api('GET', `/api/projects/${projectIds[1]}/collaboration`);
+    expect(inviteeRoster.status, JSON.stringify(inviteeRoster.json)).toBe(200);
+    expect(inviteeRoster.json.project?.sharedProjectId).toBe(joined[0]!.json.sharedProjectId);
+    expect(inviteeRoster.json.members).toHaveLength(2);
+    expect(inviteeRoster.json.agents.some((agent: { sessionId: string }) => agent.sessionId === joined[0]!.json.sessionId)).toBe(true);
     const links = await cloud.pg.query('SELECT * FROM public.mingle_device_links');
     expect(links.rows).toHaveLength(2);
     expect(apps.every(app => app.fake.runs.length === 0)).toBe(true);

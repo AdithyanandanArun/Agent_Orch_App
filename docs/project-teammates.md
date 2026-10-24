@@ -25,6 +25,8 @@ For the selected Gmail route, configure these **Edge Function secrets** in the i
 | --- | --- |
 | `SMTP_USER` | The Gmail address that owns the sender account. |
 | `SMTP_PASSWORD` | A Google app password for that account, entered directly into Supabase's private secret settings. |
+| `MINGLE_INVITE_FROM` | A sender name and the same Gmail address, such as `Mingle invitations <your-account@gmail.com>`. |
+| `MINGLE_INVITE_EMAIL_PROVIDER` | `smtp` for Gmail delivery. |
 | `MINGLE_INVITE_JOIN_URL` | The published HTTPS join page, for example `https://<account>.github.io/Mingle-dev/join/`. |
 
 Gmail submission uses implicit TLS to `smtp.gmail.com:465`. The app password never belongs in the desktop, a checked-in `.env`, logs, an invitation URL or a test fixture with real credentials. This configuration is distinct from Mingle Google sign-in; normal account sign-in does not authorize Gmail sending. Google requires 2-Step Verification for app passwords, and some managed or protected accounts cannot create them. See [Google's app-password guide](https://support.google.com/accounts/answer/185833).
