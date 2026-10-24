@@ -74,25 +74,53 @@ function walletBackend(names) {
   return null;
 }
 
-function chooseBackend(services) {
-  // A running provider is more reliable evidence than an activation file, and avoids
-  // choosing a second keyring when both Secret Service and KWallet are installed.
+function desktopHint(environment) {
+  const values = [environment.XDG_CURRENT_DESKTOP, environment.XDG_SESSION_DESKTOP, environment.DESKTOP_SESSION];
+  for (const value of values) {
+    if (typeof value !== 'string') continue;
+    const tokens = value.toLowerCase().split(/[^a-z0-9_-]+/).filter(Boolean);
+    for (const token of tokens) {
+      if (token === 'gnome' || token === 'gnome-classic' || token === 'gnome-flashback') return 'gnome';
+      if (
+        token === 'kde' || token === 'plasma' || token === 'kde-plasma' ||
+        token === 'kdewayland' || token === 'kdex11' ||
+        token === 'plasmawayland' || token === 'plasmax11' ||
+        token.startsWith('plasma-')
+      ) return 'kde';
+    }
+  }
+  return 'unknown';
+}
+
+function chooseBackend(services, hint = 'unknown') {
   const activeWallet = walletBackend(services.owned);
+  const activatableWallet = walletBackend(services.activatable);
+  const secretServiceAvailable = services.owned.has('org.freedesktop.secrets')
+    || services.activatable.has('org.freedesktop.secrets');
+  const walletAvailable = activeWallet ?? activatableWallet;
+
+  // Desktop hints break ties only when both candidate providers were observed on
+  // this session bus. A hint can never select an absent service.
+  if (secretServiceAvailable && walletAvailable) {
+    if (hint === 'kde') return walletAvailable;
+    if (hint === 'gnome') return 'gnome-libsecret';
+  }
+
+  // Preserve the existing default ordering for unknown compositors and single-provider systems.
   if (services.owned.has('org.freedesktop.secrets')) return 'gnome-libsecret';
   if (activeWallet) return activeWallet;
-
-  const activatableWallet = walletBackend(services.activatable);
   if (services.activatable.has('org.freedesktop.secrets')) return 'gnome-libsecret';
   return activatableWallet;
 }
 
 /**
  * Select Electron's Linux safeStorage provider from actual session-bus services.
- * It never infers a provider from desktop-name or environment variables.
+ * Recognized desktop hints only break ties between providers evidenced on that bus.
  */
 export function selectLinuxPasswordStore({
   platform = process.platform,
   argv = process.argv,
+  environment = process.env,
   run = spawnSync,
 } = {}) {
   if (platform !== 'linux') return { status: 'unchanged', backend: null, explicit: false };
@@ -100,7 +128,7 @@ export function selectLinuxPasswordStore({
 
   const services = probeSessionServices(run);
   if (!services) return { status: 'unavailable', backend: null, explicit: false };
-  const backend = chooseBackend(services);
+  const backend = chooseBackend(services, desktopHint(environment));
   return backend
     ? { status: 'selected', backend, explicit: false }
     : { status: 'unavailable', backend: null, explicit: false };

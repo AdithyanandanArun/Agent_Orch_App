@@ -92,19 +92,58 @@ test('leaves the existing wrapped key untouched while the keyring is unavailable
   assert.equal(manager(fixture)().key, original.key);
 });
 
-test('preserves existing bytes after wrapped-key decryption fails', t => {
+test('preserves existing bytes and allows retry after native decryption fails', t => {
   const fixture = createFixture();
   t.after(() => fs.rmSync(fixture.root, { recursive: true, force: true }));
-  manager(fixture)();
+  const original = manager(fixture)();
   const wrappedBefore = fs.readFileSync(fixture.keyFile);
-  const failing = secureStorage({ decrypt: () => { throw new Error('sensitive native failure'); } });
-  const result = manager(fixture, { safeStorage: failing })();
+  let keyringLocked = true;
+  const temporarilyLocked = secureStorage({ decrypt: bytes => {
+    if (keyringLocked) throw new Error('sensitive native failure');
+    return bytes.toString('utf8').slice('wrapped:'.length);
+  } });
+  const getAccountKey = manager(fixture, { safeStorage: temporarilyLocked });
+  const result = getAccountKey();
 
   assert.equal(result.key, null);
   assert.equal(result.storage.reason, 'key-unreadable');
-  assert.equal(result.storage.retryable, false);
+  assert.equal(result.storage.retryable, true);
   assert.deepEqual(fs.readFileSync(fixture.keyFile), wrappedBefore);
   assert.deepEqual(temporaryFiles(fixture.userData), []);
+
+  keyringLocked = false;
+  assert.deepEqual(getAccountKey(), original);
+  assert.deepEqual(fs.readFileSync(fixture.keyFile), wrappedBefore);
+});
+
+test('reports transient wrapped-key read failures as retryable without replacing bytes', t => {
+  const fixture = createFixture();
+  t.after(() => fs.rmSync(fixture.root, { recursive: true, force: true }));
+  const original = manager(fixture)();
+  const wrappedBefore = fs.readFileSync(fixture.keyFile);
+  let failRead = true;
+  const fileSystem = {
+    existsSync: fs.existsSync,
+    mkdirSync: fs.mkdirSync,
+    readFileSync: (...args) => {
+      if (failRead) {
+        failRead = false;
+        throw new Error('private native read failure');
+      }
+      return fs.readFileSync(...args);
+    },
+    renameSync: fs.renameSync,
+    rmSync: fs.rmSync,
+    writeFileSync: fs.writeFileSync,
+  };
+  const getAccountKey = manager(fixture, { fileSystem });
+  const first = getAccountKey();
+
+  assert.equal(first.storage.reason, 'key-unreadable');
+  assert.equal(first.storage.retryable, true);
+  assert.deepEqual(fs.readFileSync(fixture.keyFile), wrappedBefore);
+  assert.deepEqual(getAccountKey(), original);
+  assert.deepEqual(fs.readFileSync(fixture.keyFile), wrappedBefore);
 });
 
 test('preserves wrapped bytes if decryption returns a noncanonical key', t => {
@@ -117,6 +156,7 @@ test('preserves wrapped bytes if decryption returns a noncanonical key', t => {
 
   assert.equal(result.key, null);
   assert.equal(result.storage.reason, 'key-unreadable');
+  assert.equal(result.storage.retryable, false);
   assert.deepEqual(fs.readFileSync(fixture.keyFile), wrappedBefore);
   assert.deepEqual(temporaryFiles(fixture.userData), []);
 });

@@ -75,15 +75,15 @@ export function createAccountKeyManager({
 
     let existing;
     try { existing = fileSystem.existsSync(keyFile); }
-    catch { return status(backend, 'key-unreadable', false); }
+    catch { return status(backend, 'key-unreadable', true); }
 
     if (existing) {
+      let wrapped;
+      try { wrapped = fileSystem.readFileSync(keyFile); }
+      catch { return status(backend, 'key-unreadable', true); }
       let key;
-      try {
-        key = safeStorage.decryptString(fileSystem.readFileSync(keyFile));
-      } catch {
-        return status(backend, 'key-unreadable', false);
-      }
+      try { key = safeStorage.decryptString(wrapped); }
+      catch { return status(backend, 'key-unreadable', true); }
       if (!isCanonicalAccountKey(key)) return status(backend, 'key-unreadable', false);
       cached = key;
       return available(cached, backend);

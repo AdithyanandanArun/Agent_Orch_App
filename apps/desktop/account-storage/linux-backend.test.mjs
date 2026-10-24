@@ -41,6 +41,45 @@ test('uses the detected KWallet major version when KWallet is the running provid
   assert.deepEqual(selection, { status: 'selected', backend: 'kwallet6', explicit: false });
 });
 
+test('chooses evidenced KWallet for KDE when both native providers are running', () => {
+  const probe = successfulBus({ owned: ['org.freedesktop.secrets', 'org.kde.kwalletd6'] });
+  const selection = selectLinuxPasswordStore({
+    platform: 'linux', argv: [], environment: { XDG_CURRENT_DESKTOP: 'KDE:Plasma' }, run: probe.run,
+  });
+
+  assert.deepEqual(selection, { status: 'selected', backend: 'kwallet6', explicit: false });
+});
+
+test('chooses evidenced Secret Service for GNOME when both native providers are running', () => {
+  const probe = successfulBus({ owned: ['org.freedesktop.secrets', 'org.kde.kwalletd5'] });
+  const selection = selectLinuxPasswordStore({
+    platform: 'linux', argv: [], environment: { XDG_CURRENT_DESKTOP: 'GNOME' }, run: probe.run,
+  });
+
+  assert.deepEqual(selection, { status: 'selected', backend: 'gnome-libsecret', explicit: false });
+});
+
+test('preserves the known-native default for both providers on an unknown compositor', () => {
+  const probe = successfulBus({ owned: ['org.freedesktop.secrets', 'org.kde.kwalletd6'] });
+  const selection = selectLinuxPasswordStore({
+    platform: 'linux', argv: [], environment: { XDG_CURRENT_DESKTOP: 'Hyprland' }, run: probe.run,
+  });
+
+  assert.deepEqual(selection, { status: 'selected', backend: 'gnome-libsecret', explicit: false });
+});
+
+test('desktop hints cannot select a provider without a matching bus service', () => {
+  const secretOnly = successfulBus({ owned: ['org.freedesktop.secrets'] });
+  const walletOnly = successfulBus({ owned: ['org.kde.kwalletd6'] });
+
+  assert.deepEqual(selectLinuxPasswordStore({
+    platform: 'linux', argv: [], environment: { XDG_CURRENT_DESKTOP: 'KDE' }, run: secretOnly.run,
+  }), { status: 'selected', backend: 'gnome-libsecret', explicit: false });
+  assert.deepEqual(selectLinuxPasswordStore({
+    platform: 'linux', argv: [], environment: { XDG_CURRENT_DESKTOP: 'GNOME' }, run: walletOnly.run,
+  }), { status: 'selected', backend: 'kwallet6', explicit: false });
+});
+
 test('detects an installed but activatable KWallet service', () => {
   const probe = successfulBus({ activatable: ['org.kde.kwalletd5'] });
   const selection = selectLinuxPasswordStore({ platform: 'linux', argv: [], run: probe.run });
