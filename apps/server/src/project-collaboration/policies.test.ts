@@ -47,9 +47,12 @@ it('enforces project invitation authority, exact email, hash rotation, expiry an
       GRANT USAGE ON SCHEMA auth TO anon, authenticated;
     `);
     const teamsSql = readFileSync(new URL('../../../../supabase/migrations/20261022100932_mingle_teams.sql', import.meta.url), 'utf8');
-    const collaborationSql = readFileSync(new URL('../../../../supabase/migrations/20261024093221_mingle_project_collaboration.sql', import.meta.url), 'utf8');
+    const collaborationSql = readFileSync(new URL('../../../../supabase/migrations/20261024094104_mingle_project_collaboration.sql', import.meta.url), 'utf8');
     await pg.exec(teamsSql);
     await pg.exec(collaborationSql);
+    await pg.exec(readFileSync(new URL('../../../../supabase/migrations/20261024094433_mingle_invitation_limit_rls.sql', import.meta.url), 'utf8'));
+    const unprotectedTables = await pg.query("SELECT tablename FROM pg_tables WHERE schemaname='public' AND NOT rowsecurity");
+    assert.deepEqual(unprotectedTables.rows, [], 'Every collaboration table in the exposed schema enables RLS');
 
     for (const [key, id] of Object.entries(ids).filter(([key]) => ['owner', 'invitee', 'outsider', 'admin', 'other'].includes(key))) {
       const email = emails[key as keyof typeof emails];

@@ -26,7 +26,8 @@ export class ProjectInvitationCloudFixture {
       GRANT USAGE ON SCHEMA auth TO anon, authenticated;
     `);
     await this.pg.exec(readFileSync(new URL('../../../supabase/migrations/20261022100932_mingle_teams.sql', import.meta.url), 'utf8'));
-    await this.pg.exec(readFileSync(new URL('../../../supabase/migrations/20261024093221_mingle_project_collaboration.sql', import.meta.url), 'utf8'));
+    await this.pg.exec(readFileSync(new URL('../../../supabase/migrations/20261024094104_mingle_project_collaboration.sql', import.meta.url), 'utf8'));
+    await this.pg.exec(readFileSync(new URL('../../../supabase/migrations/20261024094433_mingle_invitation_limit_rls.sql', import.meta.url), 'utf8'));
     for (const user of users) await this.pg.query('INSERT INTO auth.users VALUES ($1,$2,now(),$3)', [user.id, user.email, JSON.stringify({ full_name: 'Example tester' })]);
   }
 
