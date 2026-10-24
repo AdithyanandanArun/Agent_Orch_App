@@ -122,6 +122,7 @@ export const api = {
   accountSignIn: () => json<AccountState>('/api/account/sign-in', 'POST', {}),
   accountCancelSignIn: () => json<AccountState>('/api/account/sign-in', 'DELETE', {}),
   accountSignOut: () => json<AccountState>('/api/account/sign-out', 'POST', {}),
+  accountStorageRetry: () => json<AccountState>('/api/account/storage/retry', 'POST', {}),
   accountPreferences: (signal?: AbortSignal) => json<SavedAccountPreferences | null>('/api/account/preferences', 'GET', undefined, signal),
   saveAccountPreferences: (preferences: AccountPreferences, expectedRevision: number | null) => json<SavedAccountPreferences>('/api/account/preferences', 'PUT', { preferences, expectedRevision }),
   bootstrap: (signal?: AbortSignal) => json<Bootstrap>('/api/bootstrap', 'GET', undefined, signal),

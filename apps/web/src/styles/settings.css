@@ -74,6 +74,18 @@
 .account-settings__identity-copy { flex: 1; min-width: 0; }
 .account-settings__identity-copy h3 { font-size: 14px; font-weight: 500; }
 .account-settings__identity-copy p { margin-top: 5px; font-size: 12px; color: var(--fg-2); overflow-wrap: anywhere; }
+.account-settings__storage { display: flex; align-items: flex-start; gap: 11px; min-width: 0; margin: 18px 0 0; padding: 12px; border: 1px solid var(--line-soft); border-radius: var(--radius-md); background: var(--bg-inset); }
+.account-settings__storage-icon { display: grid; place-items: center; width: 29px; height: 29px; flex: none; border: 1px solid var(--line-soft); border-radius: 8px; color: var(--warn); }
+.account-settings__storage.is-ready .account-settings__storage-icon { color: var(--ok); }
+.account-settings__storage-copy { flex: 1; min-width: 0; }
+.account-settings__storage-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.account-settings__storage-heading h3 { font-size: 12px; font-weight: 550; color: var(--fg-0); }
+.account-settings__storage-heading > span { padding: 2px 7px; border: 1px solid var(--line-soft); border-radius: 999px; color: var(--warn); font-size: 10px; line-height: 1.4; }
+.account-settings__storage.is-ready .account-settings__storage-heading > span { color: var(--ok); }
+.account-settings__storage-copy > p { margin-top: 5px; color: var(--fg-2); font-size: 11px; line-height: 1.55; overflow-wrap: anywhere; }
+.account-settings__storage-copy > .account-settings__storage-backend { color: var(--fg-3); font-size: 10px; }
+.account-settings__storage-copy > .account-settings__storage-progress { color: var(--accent); }
+.account-settings__storage > button { flex: none; margin-left: auto; }
 .account-settings__waiting { padding: 14px 0; font-size: 13px; color: var(--fg-2); line-height: 1.8; }
 .account-settings__waiting a { color: var(--accent); text-underline-offset: 3px; }
 .account-settings__preferences { padding: 12px 0 20px; border-bottom: 1px solid var(--line-soft); }
@@ -87,4 +99,4 @@
 .account-settings__connection form { display: grid; gap: 9px; margin-top: 18px; justify-items: start; }
 .account-settings__connection label { font-size: 12px; color: var(--fg-1); }
 .account-settings__connection input { width: 100%; margin-bottom: 9px; }
-@media (max-width: 620px) { .account-settings__identity { flex-wrap: wrap; } .account-settings__identity > button { margin-left: 54px; } .settings-page__tabs { overflow-x: auto; gap: 20px; } .settings-page__tabs button { flex: none; } }
+@media (max-width: 620px) { .account-settings__identity { flex-wrap: wrap; } .account-settings__identity > button { margin-left: 54px; } .account-settings__storage { flex-wrap: wrap; } .account-settings__storage > button { margin-left: 40px; } .settings-page__tabs { overflow-x: auto; gap: 20px; } .settings-page__tabs button { flex: none; } }
