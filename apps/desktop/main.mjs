@@ -1,15 +1,18 @@
 import { app, BrowserWindow, dialog, ipcMain, shell, safeStorage } from 'electron';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, rmSync } from 'node:fs';
-import { randomBytes, createHash } from 'node:crypto';
+import { existsSync, mkdirSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { dirname, delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createAccountKeyManager } from './account-storage/account-key.mjs';
+import { createAccountKeyIpcHandler } from './account-storage/account-key-ipc.mjs';
+import { configureLinuxPasswordStore } from './account-storage/linux-backend.mjs';
 import { createProjectInvitationDispatcher, isProjectInvitationWorkspaceUrl } from './project-invitation.mjs';
 
 const root = app.isPackaged ? join(process.resourcesPath, 'workspace') : fileURLToPath(new URL('../../', import.meta.url));
 const serverRoot = join(root, 'apps/server');
 app.setName('Mingle');
+configureLinuxPasswordStore({ app });
 const mingleUserData = app.getPath('userData');
 const legacyUserData = join(dirname(mingleUserData), 'Relay');
 const mingleWorkspace = join(mingleUserData, 'workspace');
@@ -194,21 +197,7 @@ async function openWorkspace() {
   mkdirSync(userData, { recursive: true, mode: 0o700 });
   const dataOverride = process.env.MINGLE_DATA_DIR !== undefined ? process.env.MINGLE_DATA_DIR : process.env.RELAY_DATA_DIR;
   const workspaceDataDir = dataOverride?.trim() || join(userData, 'workspace');
-  // Refuse Chromium's plaintext fallback. Unsupported/locked keyrings use memory-only sessions.
-  let accountKey = null;
-  try {
-    if (safeStorage.isEncryptionAvailable() && (process.platform !== 'linux' || !['basic_text', 'unknown'].includes(safeStorage.getSelectedStorageBackend()))) {
-      const scope = createHash('sha256').update(workspaceDataDir).digest('hex').slice(0, 16);
-      const keyFile = join(userData, `account-key-${scope}.enc`);
-      if (existsSync(keyFile)) accountKey = safeStorage.decryptString(readFileSync(keyFile));
-      else {
-        accountKey = randomBytes(32).toString('base64');
-        const temporary = `${keyFile}.tmp`;
-        try { writeFileSync(temporary, safeStorage.encryptString(accountKey), { mode: 0o600, flag: 'wx' }); renameSync(temporary, keyFile); }
-        finally { rmSync(temporary, { force: true }); }
-      }
-    }
-  } catch { accountKey = null; }
+  const getAccountKey = createAccountKeyManager({ userData, workspaceDataDir, safeStorage });
   // Canonical values override any legacy environment inherited from another local server.
   const environment = {
     ...process.env, NODE_ENV: 'production', MINGLE_HOST: '127.0.0.1',
@@ -226,14 +215,14 @@ async function openWorkspace() {
     env: environment,
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
-  const keyReceiver = (message) => {
-    if (message?.type !== 'mingle.account-key.request' || !backend?.connected) return;
-    backend.off('message', keyReceiver);
-    backend.send({ type: 'mingle.account-key', key: accountKey });
-    accountKey = null;
-  };
+  const keyReceiver = createAccountKeyIpcHandler({
+    getAccountKey,
+    send: message => new Promise((resolve, reject) => {
+      if (!backend?.connected) return reject(new Error('IPC unavailable'));
+      backend.send(message, error => error ? reject(error) : resolve());
+    }),
+  });
   backend.on('message', keyReceiver);
-  backend.once('exit', () => { accountKey = null; });
   let startupErrors = '';
   backend.stdout.on('data', chunk => process.stdout.write(chunk));
   backend.stderr.on('data', chunk => {

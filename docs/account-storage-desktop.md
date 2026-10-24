@@ -1,0 +1,26 @@
+# Desktop account-key storage
+
+Electron owns the device-local wrapping key for account sessions. Linux selection happens before Electron is ready and before the child runtime starts:
+
+- An explicit `--password-store` switch is left untouched.
+- Otherwise, Mingle probes the session D-Bus with fixed `busctl` arguments, falling back to fixed `dbus-send` arguments. Both operations have short process timeouts and bounded output. It selects `gnome-libsecret` only when `org.freedesktop.secrets` is owned or activatable, or selects the detected KWallet 4/5/6 provider when its corresponding D-Bus service is owned or activatable.
+- Desktop-name and keyring-related environment variables do not determine the selected provider. If the session bus, probe tools, and known services are unavailable, Electron's default is preserved; Mingle still refuses `basic_text` and `unknown` as secure storage.
+
+The desktop uses Electron `safeStorage` on the main process, after the app is ready. See [Electron's safeStorage API](https://www.electronjs.org/docs/latest/api/safe-storage) for its platform-specific providers and backend identifiers. The currently pinned desktop dependency uses the synchronous API; no plaintext-encryption fallback is enabled.
+
+For a workspace data directory, the existing key path remains `account-key-<first-16-hex-of-SHA-256(workspaceDataDir)>.enc` under Electron user data. The stored value is Electron-wrapped ciphertext for one canonical base64-encoded 32-byte key. New wrapped bytes are written to a unique same-directory temporary file opened exclusively with mode `0600`, then atomically renamed. Existing wrapped bytes are not replaced after an unavailable keyring, read/decryption error, or noncanonical unwrapped value. Temporary files are removed on write/rename failure.
+
+The main process exchanges keys only with its local child through IPC:
+
+```text
+request:  { type: "mingle.account-key.request", requestId: <32 lowercase hex> }
+response: { type: "mingle.account-key", requestId, key: <base64|null>,
+            storage: { status: "available"|"unavailable", backend: <string|null>,
+                       reason: <reason-code|null>, retryable: <boolean> } }
+```
+
+The IPC receiver validates request IDs, serializes keyring operations, ignores duplicate IDs, and remains connected for later explicit retry requests. The account key is not sent to the renderer, environment, or command line. The child/server owns request timing and retry bounds.
+
+`account-storage/account-key.mjs` exports `createAccountKeyManager` for fresh-process persistence checks and `accountKeyFilePath` to identify the scoped target without reading it. A native two-process smoke should supply a newly created disposable user-data directory and workspace path to each process; it must not point at the developer's normal Electron profile.
+
+Unavailable diagnostics use stable codes rather than native exception text: `no-keyring` for a Linux basic/unknown backend, `keyring-unavailable` when Electron cannot access an otherwise selected provider, `key-unreadable` for existing bytes that cannot yield a canonical key, and `storage-write-failed` for failed creation. Native error strings, wrapped bytes and key contents are not included in diagnostics.

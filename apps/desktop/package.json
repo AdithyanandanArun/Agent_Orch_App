@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "main": "main.mjs",
-  "scripts": { "start": "node start.mjs", "typecheck": "node --check main.mjs && node --check browser-preload.cjs && node --check start.mjs" },
+  "scripts": {
+    "start": "node start.mjs",
+    "typecheck": "node --check main.mjs && node --check browser-preload.cjs && node --check start.mjs && node --check account-storage/account-key.mjs && node --check account-storage/account-key-ipc.mjs && node --check account-storage/linux-backend.mjs",
+    "test": "node --test"
+  },
   "devDependencies": { "electron": "^44.9.0" }
 }
