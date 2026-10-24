@@ -36,6 +36,7 @@ class MailboxCloud {
   readonly devices: CloudDevice[] = [];
   readonly links: CloudLink[] = [];
   readonly envelopes: CloudEnvelope[] = [];
+  envelopeWriteError: Result['error'] = null;
   readonly members = new Map<string, Set<string>>([[teamId, new Set([userA, userB])]]);
   now: () => number = Date.now;
   failEnvelopeWrites = 0;
@@ -53,7 +54,8 @@ class MailboxCloud {
   private isoNow(): string { return new Date(this.now()).toISOString(); }
   async execute(user: string, table: string, action: string, values: any, filters: Array<[string, string, unknown]>, range: [number, number] | null, order: Array<[string, boolean]>, returning: boolean): Promise<Result> {
     const rows = this.table(table);
-    if (action === 'upsert' && table === 'mingle_envelopes' && this.failEnvelopeWrites > 0) {
+    if (action === 'insert' && table === 'mingle_envelopes' && this.envelopeWriteError) return { data: null, error: this.envelopeWriteError };
+    if ((action === 'insert' || action === 'upsert') && table === 'mingle_envelopes' && this.failEnvelopeWrites > 0) {
       this.failEnvelopeWrites -= 1;
       return { data: null, error: { code: '503', message: 'simulated offline mailbox' } };
     }
@@ -137,7 +139,7 @@ class MailboxCloud {
       const sender = this.device(item.from_device_id, item.team_id);
       const recipient = this.device(item.to_device_id, item.team_id);
       if (!sender || sender.owner_id !== user || !recipient || sender.revoked_at || recipient.revoked_at || !this.active(recipient.owner_id, item.team_id) || !this.mutual(item.team_id, sender.id, recipient.id)) return { code: '42501', message: 'envelope insert denied' };
-      if (this.envelopes.some((row) => row.team_id === item.team_id && row.from_device_id === item.from_device_id && row.to_device_id === item.to_device_id && row.idempotency_key === item.idempotency_key)) return { code: '23505', message: 'duplicate envelope' };
+      if (this.envelopes.some((row) => row.team_id === item.team_id && row.from_device_id === item.from_device_id && row.to_device_id === item.to_device_id && row.idempotency_key === item.idempotency_key)) return { code: '23505', message: 'duplicate key value violates unique constraint "mingle_envelopes_team_id_from_device_id_to_device_id_idempo_key"' };
       this.envelopes.push({ ...item, received_at: this.isoNow() } as CloudEnvelope);
       return null;
     }
@@ -232,6 +234,16 @@ describe('distributed envelope cryptography', () => {
 });
 
 describe('TransportService authenticated mailbox', () => {
+  it('keeps unrelated uniqueness failures queued instead of claiming successful delivery', async () => {
+    const { cloud, first, second, b } = await pairedServices();
+    try {
+      cloud.envelopeWriteError = { code: '23505', message: 'duplicate key value violates unique constraint "unrelated_future_constraint"' };
+      await first.send({ teamId, toDeviceId: b.id, kind: 'collaboration.message', payload: { content: 'Example queued message' }, idempotencyKey: 'unknown-constraint' });
+      expect(first.snapshot(teamId).outbox[0]).toMatchObject({ status: 'queued', attempts: 1 });
+      expect(cloud.envelopes).toHaveLength(0);
+    } finally { await first.close(); await second.close(); }
+  });
+
   it('requires active membership and mutual fingerprint pins, then durably deduplicates accepted messages', async () => {
     const { cloud, first, second, b } = await pairedServices();
     const received: unknown[] = [];

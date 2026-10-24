@@ -12,6 +12,7 @@ const identifier = (value: string): string => {
 /** A disposable PostgREST-shaped query boundary executing the actual PostgreSQL RLS and RPCs. */
 export class ProjectInvitationCloudFixture {
   readonly pg = new PGlite();
+  readonly errors: Array<{ table: string; code: unknown; message: unknown }> = [];
   private queue: Promise<unknown> = Promise.resolve();
 
   async initialize(users: Array<{ id: string; email: string }>) {
@@ -25,7 +26,7 @@ export class ProjectInvitationCloudFixture {
       GRANT USAGE ON SCHEMA auth TO anon, authenticated;
     `);
     await this.pg.exec(readFileSync(new URL('../../../supabase/migrations/20261022100932_mingle_teams.sql', import.meta.url), 'utf8'));
-    await this.pg.exec(readFileSync(new URL('../../../supabase/migrations/20261024113000_mingle_project_collaboration.sql', import.meta.url), 'utf8'));
+    await this.pg.exec(readFileSync(new URL('../../../supabase/migrations/20261024093221_mingle_project_collaboration.sql', import.meta.url), 'utf8'));
     for (const user of users) await this.pg.query('INSERT INTO auth.users VALUES ($1,$2,now(),$3)', [user.id, user.email, JSON.stringify({ full_name: 'Example tester' })]);
   }
 
@@ -123,7 +124,10 @@ class FixtureQuery implements PromiseLike<{ data: unknown; error: unknown }> {
         if (this.one && (rows.length > 1 || (this.required && !rows.length))) return { data: null, error: { code: 'PGRST116', message: 'Example single row mismatch' } };
         return { data: this.one ? rows[0] ?? null : this.action === 'select' || this.returning ? rows : null, error: null };
       });
-    } catch (error) { return { data: null, error: { code: Reflect.get(error as object, 'code'), message: 'Example PostgreSQL policy rejected' } }; }
+    } catch (error) {
+      this.cloud.errors.push({ table: this.table, code: Reflect.get(error as object, 'code'), message: Reflect.get(error as object, 'message') });
+      return { data: null, error: { code: Reflect.get(error as object, 'code'), message: Reflect.get(error as object, 'message') } };
+    }
   }
 
   then<T = { data: unknown; error: unknown }, U = never>(resolve?: ((value: { data: unknown; error: unknown }) => T | PromiseLike<T>) | null, reject?: ((reason: unknown) => U | PromiseLike<U>) | null): PromiseLike<T | U> {

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { EffortSchema } from './provider-config.ts';
+import { EffortSchema } from './provider-config';
 
 export const ProjectCollaborationRoleSchema = z.enum(['member', 'admin']);
 export type ProjectCollaborationRole = z.infer<typeof ProjectCollaborationRoleSchema>;

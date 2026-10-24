@@ -391,12 +391,16 @@ export class TransportService {
       const envelope = JSON.parse(entry.envelope_json) as SignedEnvelope;
       const record = this.toCloudEnvelope(envelope);
       try {
-        // The mailbox RLS policy intentionally hides sender-side envelope reads. ON CONFLICT DO NOTHING
-        // makes an identical retry after an uncertain network result an accepted idempotent write.
-        const { error } = await client.from('mingle_envelopes').upsert(record, {
-          onConflict: 'team_id,from_device_id,to_device_id,idempotency_key', ignoreDuplicates: true,
-        });
-        if (error) throw new Error('cloud-insert');
+        // Senders cannot SELECT their outbound envelopes. PostgreSQL's conflict
+        // path also applies SELECT RLS, so use an INSERT without RETURNING.
+        // A unique conflict confirms this durable envelope's identity was already
+        // submitted, including a retry after an uncertain network response.
+        const { error } = await client.from('mingle_envelopes').insert(record);
+        const duplicateIdentity = error?.code === '23505' && [
+          'mingle_envelopes_pkey',
+          'mingle_envelopes_team_id_from_device_id_to_device_id_idempo_key',
+        ].some((constraint) => error.message === `duplicate key value violates unique constraint "${constraint}"`);
+        if (error && !duplicateIdentity) throw new Error('cloud-insert');
         this.db.prepare(`UPDATE mingle_transport_outbox SET status = 'delivered', attempts = attempts + 1, next_attempt_at = 0, error = NULL WHERE id = ? AND account_id = ?`)
           .run(entry.id, accountId);
       } catch (error) {

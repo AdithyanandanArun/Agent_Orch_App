@@ -47,7 +47,7 @@ it('enforces project invitation authority, exact email, hash rotation, expiry an
       GRANT USAGE ON SCHEMA auth TO anon, authenticated;
     `);
     const teamsSql = readFileSync(new URL('../../../../supabase/migrations/20261022100932_mingle_teams.sql', import.meta.url), 'utf8');
-    const collaborationSql = readFileSync(new URL('../../../../supabase/migrations/20261024113000_mingle_project_collaboration.sql', import.meta.url), 'utf8');
+    const collaborationSql = readFileSync(new URL('../../../../supabase/migrations/20261024093221_mingle_project_collaboration.sql', import.meta.url), 'utf8');
     await pg.exec(teamsSql);
     await pg.exec(collaborationSql);
 

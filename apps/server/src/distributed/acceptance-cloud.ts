@@ -99,7 +99,7 @@ export class AuthenticatedLocalRelay {
   async execute(ownerId: string, tableName: string, action: string, values: unknown, filters: Filter[], range: [number, number] | null,
     order: Array<[string, boolean]>, returning: boolean, ignoreDuplicates: boolean): Promise<QueryResult> {
     const rows = this.table(tableName);
-    if (action === 'upsert' && tableName === 'mingle_envelopes' && this.failEnvelopeWrites > 0) {
+    if ((action === 'insert' || action === 'upsert') && tableName === 'mingle_envelopes' && this.failEnvelopeWrites > 0) {
       this.failEnvelopeWrites -= 1;
       return { data: null, error: { code: '503', message: 'The local relay is temporarily unavailable.' } };
     }
@@ -208,7 +208,7 @@ export class AuthenticatedLocalRelay {
         return { code: '42501', message: 'Mailbox insert requires an active sender, recipient, and reciprocal verified pins.' };
       }
       if (this.envelopes.some((row) => row.team_id === teamId && row.from_device_id === from.id && row.to_device_id === to.id && row.idempotency_key === item.idempotency_key)) {
-        return { code: '23505', message: 'Mailbox idempotency key already exists.' };
+        return { code: '23505', message: 'duplicate key value violates unique constraint "mingle_envelopes_team_id_from_device_id_to_device_id_idempo_key"' };
       }
       this.envelopes.push({ ...item, received_at: this.nowIso() } as AcceptanceEnvelope);
       return null;

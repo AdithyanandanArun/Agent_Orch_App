@@ -13,6 +13,8 @@ The primary collaboration flow starts from an existing Git project. Advanced tea
 
 Each person still needs Git access to the repository. A Mingle invitation does not grant GitHub access or upload local files. Private repository authentication stays with the person's local Git setup. Joining rejects a different repository checkout rather than silently binding it.
 
+Invitation authority belongs to the existing Mingle project team. Joining does not let a teammate invite people into that team. A separate checkout can have an independent Mingle team using the same repository origin; it receives no membership, devices, agents, messages or authority from the original team. Repository URLs do not establish a global owner across independent workspaces.
+
 Remote execution retains the exceptional-recovery policy in [the implementation contract](implementation-contract.md). Seeing or selecting an agent is not an execution grant. Device-owner approvals, provider-spend consent, Git transfer/import decisions and merge/push approvals remain separate.
 
 ## Email sender setup

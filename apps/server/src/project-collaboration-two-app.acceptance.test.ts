@@ -25,7 +25,7 @@ it('invites and joins through two real HTTP applications, actual PostgreSQL poli
     vi.spyOn(AccountService.prototype, 'withAuthenticatedClient').mockImplementation((async function<T>(this: AccountService, work: (client: SupabaseClient, user: User) => Promise<T>) {
       const user = accounts.get(Reflect.get(this, 'dataDir'));
       if (!user) throw new Error('Explicit fixture account required');
-      return work(cloud.client(user.id), { ...user, email_confirmed_at: '2026-01-01T00:00:00Z', is_anonymous: false, app_metadata: { providers: ['google'] }, user_metadata: { full_name: 'Example account' } } as User);
+      return work(cloud.client(user.id), { ...user, aud: 'authenticated', created_at: '2026-01-01T00:00:00Z', email_confirmed_at: '2026-01-01T00:00:00Z', is_anonymous: false, app_metadata: { providers: ['google'] }, user_metadata: { full_name: 'Example account' } } as User);
     }) as AccountService['withAuthenticatedClient']);
     const emailSender = {
       async status() { return { configured: true }; },
@@ -61,10 +61,20 @@ it('invites and joins through two real HTTP applications, actual PostgreSQL poli
     for (const result of joined) expect(result.status, JSON.stringify(result.json)).toBe(200);
     expect(joined[0]!.json.sessionId).toBe(joined[1]!.json.sessionId);
     expect(teammate.app.store.listSessions(projectIds[1])).toHaveLength(1);
+    // Model a lost acknowledgement after PostgreSQL accepted the envelope.
+    teammate.app.store.db.prepare("UPDATE mingle_transport_outbox SET status='queued',next_attempt_at=0 WHERE kind='execution.agents'").run();
+    await teammate.app.distributed.transport.sync();
+    expect(teammate.app.store.db.prepare('SELECT status FROM mingle_transport_outbox').all()).toEqual([{ status: 'delivered' }]);
+    expect((await cloud.pg.query('SELECT id FROM public.mingle_envelopes')).rows).toHaveLength(1);
     await leader.app.distributed.transport.sync();
     const roster = await leader.api('GET', `/api/projects/${projectIds[0]}/collaboration`);
     expect(roster.status, JSON.stringify(roster.json)).toBe(200);
-    expect(roster.json.agents.some((agent: { accountId: string }) => agent.accountId === users[1]!.id)).toBe(true);
+    expect(roster.json.agents.some((agent: { accountId: string }) => agent.accountId === users[1]!.id), JSON.stringify({
+      roster: roster.json,
+      outgoing: teammate.app.store.db.prepare('SELECT kind,status,error FROM mingle_transport_outbox').all(),
+      incoming: leader.app.store.db.prepare('SELECT kind,status,error FROM mingle_transport_inbox').all(),
+      cloudErrors: cloud.errors,
+    })).toBe(true);
     expect(roster.json.members.some((member: { accountId: string }) => member.accountId === users[1]!.id)).toBe(true);
     expect(roster.json.agents.some((agent: { sessionId: string }) => agent.sessionId === privateAgent.json.id)).toBe(false);
     const inviteeRoster = await teammate.api('GET', `/api/projects/${projectIds[1]}/collaboration`);

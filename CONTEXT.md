@@ -1,6 +1,6 @@
 # Mingle project context
 
-Handoff updated **2026-10-23**. This file summarizes the integrated project for a new developer or coding agent. [ONBOARDING.md](ONBOARDING.md) covers setup; [AGENTS.md](AGENTS.md) supplies contributor instructions. Source and dated validation records take precedence over older roadmap prose.
+Handoff updated **2026-10-24**. This file summarizes the integrated project for a new developer or coding agent. [ONBOARDING.md](ONBOARDING.md) covers setup; [AGENTS.md](AGENTS.md) supplies contributor instructions. Source and dated validation records take precedence over older roadmap prose.
 
 ## Product and operating principles
 
@@ -58,6 +58,8 @@ Git conflict inspection is conservative and may require manual review where text
 The new project-first implementation adds **Add teammates** beside **Add agent**, email invitation creation, a private-fragment HTTPS join page, installed-app invitation links, checkout/clone and initial-provider selection, and combined local/remote project agent controls. It reuses the distributed services rather than changing remote execution authority. See [project teammates](docs/project-teammates.md), [the API](docs/project-collaboration-api.md) and [desktop link handling](docs/project-invitation-links.md).
 
 The invitation delivery function supports a cloud-configured Gmail sender over implicit TLS or an optional verified-domain Resend sender. No sender credentials ship in the desktop app. The static page and cloud changes require publication/deployment and private sender configuration before real email invitations are usable; local fixture checks alone do not establish live delivery.
+
+Local acceptance passed 267 server tests, 21 invitation/mail boundary tests, eight project-onboarding browser checks, 24 existing distributed-browser checks, the production build and runtime smoke. See [dated acceptance and remaining release checks](docs/project-collaboration-acceptance.md). Gmail credentials were entered privately into Supabase, but real email delivery and the new cloud/static-page deployment remain unverified.
 
 ## Cloud and account status
 
