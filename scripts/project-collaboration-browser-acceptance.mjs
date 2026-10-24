@@ -267,7 +267,7 @@ async function main() {
     if (url.pathname === '/api/project-invitations/preview' && method === 'POST') {
       if (accountMode === 'signed-out') { await jsonResponse(route, 401, { error: 'Google sign-in is required.' }); return; }
       if (previewMode !== 'valid' || accountMode === 'wrong-account') {
-        await jsonResponse(route, 404, { error: 'Invitation is invalid or no longer available.' });
+        await jsonResponse(route, 404, { error: 'The invitation is invalid, expired, revoked, or belongs to another account. Ask a project leader to resend an expired invitation.' });
         return;
       }
       await jsonResponse(route, 200, invitationPreview());
@@ -425,16 +425,25 @@ async function main() {
     await page.getByRole('dialog', { name: 'Project joined' }).getByRole('button', { name: 'Open project', exact: true }).click();
   });
 
-  await test('invited account mismatch and unavailable invitations never reveal project metadata', async () => {
+  await test('generic unavailable response stays neutral and switching accounts resumes the pending invitation', async () => {
     accountMode = 'wrong-account';
     previewMode = 'invalid';
+    const joinsBeforeSwitch = requests.filter((item) => item.method === 'POST' && item.pathname === '/api/project-invitations/join').length;
     await page.evaluate((token) => window.mingleProjectInvitations.emit(token), INVALID_TOKEN);
-    await page.getByRole('heading', { name: 'We couldn’t verify this invitation' }).waitFor();
-    const text = await page.getByRole('dialog', { name: 'Join project' }).innerText();
+    await page.getByRole('heading', { name: 'Invitation unavailable' }).waitFor();
+    const joinDialog = page.getByRole('dialog', { name: 'Join project' });
+    const text = await joinDialog.innerText();
     assert.match(text, /other@example.invalid/);
-    assert.match(text, /expired, revoked, already used or issued to another account/i);
+    assert.match(text, /check which Google account received it, switch accounts, or ask the project owner/i);
+    assert.doesNotMatch(text, /This invitation (?:was revoked|has expired)/i, 'the generic 404 does not claim a particular invitation state');
     assert.doesNotMatch(text, /Example Mingle project/);
     assert.equal(requests.some((item) => item.method === 'POST' && item.pathname === '/api/project-invitations/preview' && item.body.token === INVALID_TOKEN), true);
+    await joinDialog.getByRole('button', { name: 'Switch account' }).click();
+    await joinDialog.getByRole('heading', { name: 'Sign in to join this project' }).waitFor();
+    previewMode = 'valid';
+    await joinDialog.getByRole('button', { name: 'Continue with Google' }).click();
+    await joinDialog.getByText('Example Mingle project', { exact: true }).waitFor();
+    assert.equal(requests.filter((item) => item.method === 'POST' && item.pathname === '/api/project-invitations/join').length, joinsBeforeSwitch, 'switching accounts preserves the invitation without accepting it');
   });
 
   await test('warm desktop invitation opens as an overlay and requires an explicit clone destination', async () => {

@@ -252,7 +252,7 @@ export function ProjectTeammatesDialog({ project, onClose }: { project: Project;
   </Modal>;
 }
 
-type InviteState = 'loading' | 'ready' | 'sign-in' | 'wrong-account' | 'expired' | 'revoked' | 'setup' | 'error';
+type InviteState = 'loading' | 'ready' | 'sign-in' | 'wrong-account' | 'unavailable' | 'expired' | 'revoked' | 'setup' | 'error';
 
 function repoName(url: string): string {
   try {
@@ -269,9 +269,13 @@ function classifyPreviewError(cause: unknown, account: AccountState | null): Inv
   const message = errorMessage(cause).toLowerCase();
   const status = errorStatus(cause);
   if (account?.status !== 'signed-in' && (status === 401 || status === 403)) return 'sign-in';
-  if (/revok/.test(message)) return 'revoked';
-  if (/expir|expired/.test(message) || status === 410) return 'expired';
-  if (/email|account|match|recipient|invited/.test(message) || status === 403) return 'wrong-account';
+  const genericUnavailable = /invitation is invalid, expired, revoked, or belongs to another account/.test(message);
+  const explicitRevocation = /invitation (?:has been )?revoked|revoked invitation/.test(message);
+  const explicitExpiry = /invitation (?:has )?expired|expired invitation/.test(message);
+  if (genericUnavailable || (status === 404 && !explicitRevocation && !explicitExpiry)) return 'unavailable';
+  if (explicitRevocation) return 'revoked';
+  if (explicitExpiry || status === 410) return 'expired';
+  if (/wrong account|email .* does not match|invited account/.test(message) || status === 403) return 'wrong-account';
   return 'error';
 }
 
@@ -452,7 +456,7 @@ export function ProjectInviteJoinDialog({ token, onClose, onOpenAccountSettings,
       setJoined(true);
     } catch (cause) {
       const state = classifyPreviewError(cause, account);
-      if (state === 'expired' || state === 'revoked' || state === 'wrong-account') {
+      if (state === 'unavailable' || state === 'expired' || state === 'revoked' || state === 'wrong-account') {
         setPreviewError(errorMessage(cause));
         setInviteState(state);
       } else setError(errorMessage(cause));
@@ -463,6 +467,7 @@ export function ProjectInviteJoinDialog({ token, onClose, onOpenAccountSettings,
   return <Modal title={joined ? 'Project joined' : 'Join project'} description={joined ? 'Your local agent is ready.' : 'Choose where the project lives on this device, then create your first supervised agent.'} onClose={onClose} width={700}>
     <div className="pc-join" aria-busy={inviteState === 'loading' || joining || workspaceBusy}>
       {inviteState === 'loading' ? <p className="pc-loading" role="status">Checking invitation and Mingle account…</p> : null}
+      {inviteState === 'unavailable' ? <div className="pc-state-card pc-state-card--error"><CircleAlert size={19} /><div><h3>Invitation unavailable</h3><p>This link can’t be verified for the current account. Check which Google account received it, switch accounts, or ask the project owner to send a new invitation.</p>{accountEmail ? <small>Signed in as {accountEmail}</small> : null}<Button size="sm" onClick={() => void switchAccount()}>Switch account</Button><Button size="sm" variant="ghost" onClick={() => setPreviewRetry((value) => value + 1)}>Try again</Button></div></div> : null}
       {inviteState === 'expired' || inviteState === 'revoked' ? <div className="pc-state-card pc-state-card--error"><CircleAlert size={19} /><div><h3>{inviteState === 'revoked' ? 'This invitation was revoked' : 'This invitation has expired'}</h3><p>{previewError || 'Ask the project owner to send a new invitation.'}</p></div></div> : null}
       {inviteState === 'error' ? <div className="pc-state-card pc-state-card--error"><CircleAlert size={19} /><div><h3>We couldn’t verify this invitation</h3><p>{previewError ? `${previewError} It may be expired, revoked, already used or issued to another account. Sign in to the invited account or ask a project leader to send a new invitation.` : 'It may be expired, revoked, already used or issued to another account. Sign in to the invited account or ask a project leader to send a new invitation.'}</p>{accountEmail ? <small>Signed in as {accountEmail}</small> : null}<Button size="sm" onClick={() => setPreviewRetry((value) => value + 1)}>Try again</Button></div></div> : null}
       {inviteState === 'sign-in' ? <div className="pc-state-card"><span className="pc-icon"><Users size={18} /></span><div><h3>Sign in to join this project</h3><p>{preview ? `This invitation is for ${preview.email}. Sign in to that Mingle account to continue.` : 'Sign in with the Mingle account that received this invitation.'} Your invitation stays in this window while sign-in finishes.</p>
