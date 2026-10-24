@@ -2,14 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import { Activity, ArrowDownToLine, ArrowLeftRight, Check, CircleHelp, GitBranch, Laptop, LockKeyhole, MessageSquare, Plus, RefreshCw, Send, Shield, Users, Workflow } from 'lucide-react';
 import type { Project, Session, Task } from '@mingle/contracts';
 import { api } from '../../lib/api';
-import { useMingle } from '../../store/store';
+import { useMingle, type TeamWorkspaceTab } from '../../store/store';
 import { Button, Badge, EmptyState, InlineError } from '../ui';
 import { createIdempotencyKey, distributedApi, DistributedApiError, type DistributedRecord, type DistributedSnapshot } from './api';
 import { asRecord, idOf, nameOf, readList, readText, readValue, unwrap } from './viewModels';
 import '../../styles/distributed.css';
 import { SharedAgentMap } from './SharedAgentMap';
 
-type WorkspaceTab = 'people' | 'projects' | 'devices' | 'agents' | 'conversation' | 'recovery' | 'transfers';
+type WorkspaceTab = TeamWorkspaceTab;
 const TABS: { id: WorkspaceTab; label: string }[] = [
   { id: 'people', label: 'People' }, { id: 'projects', label: 'Projects' }, { id: 'devices', label: 'Devices' },
   { id: 'agents', label: 'Agents' }, { id: 'conversation', label: 'Conversation' }, { id: 'recovery', label: 'Recovery' }, { id: 'transfers', label: 'Transfers' },
@@ -114,7 +114,7 @@ function Disclosure({ title, value }: { title: string; value: string }) {
   return <div className="dw-disclosure"><span>{title}</span><strong>{value || 'Not reported'}</strong></div>;
 }
 
-export function TeamWorkspace() {
+export function TeamWorkspace({ initialTab = 'people' }: { initialTab?: WorkspaceTab }) {
   const boot = useMingle((state) => state.boot);
   const activeProjectId = useMingle((state) => state.activeProjectId);
   const eventCount = useMingle((state) => state.boot?.events.length ?? 0);
@@ -123,7 +123,8 @@ export function TeamWorkspace() {
   const [snapshot, setSnapshot] = useState<DistributedSnapshot | null>(null);
   const [accountIdentity, setAccountIdentity] = useState<{ userId: string; name: string | null; email: string | null } | null>(null);
   const [selectedTeamId, setSelectedTeamId] = useState('');
-  const [tab, setTab] = useState<WorkspaceTab>('people');
+  const [tab, setTab] = useState<WorkspaceTab>(initialTab);
+  useEffect(() => setTab(initialTab), [initialTab]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);

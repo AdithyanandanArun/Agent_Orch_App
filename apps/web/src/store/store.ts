@@ -8,6 +8,7 @@ import { activeMembers, findGroupForSession, groupChildSessionIds } from '../lib
 
 export type View = 'workspace' | 'tasks' | 'activity' | 'map' | 'settings';
 export type SettingsSection = 'account' | 'general' | 'project' | 'agents' | 'team' | 'providers' | 'browser' | 'appearance';
+export type TeamWorkspaceTab = 'people' | 'projects' | 'devices' | 'agents' | 'conversation' | 'recovery' | 'transfers';
 export type ContextTab = 'overview' | 'files' | 'changes' | 'browser';
 export type Scope = 'session' | 'project';
 export type Connection = 'connecting' | 'online' | 'offline';
@@ -26,7 +27,8 @@ export type Dialog =
   | { kind: 'shortcuts' }
   | { kind: 'add-agent'; sessionId: string }
   | { kind: 'group-mode'; groupId: string }
-  | { kind: 'member-settings'; groupId: string; memberId: string };
+  | { kind: 'member-settings'; groupId: string; memberId: string }
+  | { kind: 'project-collaboration'; projectId: string };
 
 export interface Toast { id: number; tone: 'info' | 'success' | 'error'; text: string }
 export interface StreamEntry { sessionId: string; base: string; text: string }
@@ -77,6 +79,7 @@ interface MingleState {
   settingsReturnView: Exclude<View, 'settings'>;
   settingsSection: SettingsSection;
   settingsProjectId: string | null;
+  settingsTeamTab: TeamWorkspaceTab;
   contextTab: ContextTab;
   contextOpen: boolean;
   terminalOpen: boolean;
@@ -101,7 +104,7 @@ interface MingleState {
   refreshNow(): Promise<void>;
   reconnect(): void;
   setView(view: View): void;
-  openSettings(options?: { section?: SettingsSection; projectId?: string }): void;
+  openSettings(options?: { section?: SettingsSection; projectId?: string; teamTab?: TeamWorkspaceTab }): void;
   setSettingsSection(section: SettingsSection): void;
   closeSettings(): void;
   setContextTab(tab: ContextTab): void;
@@ -444,6 +447,7 @@ export const useMingle = create<MingleState>((set, get) => {
     settingsReturnView: 'workspace',
     settingsSection: 'general',
     settingsProjectId: persisted.activeProjectId ?? null,
+    settingsTeamTab: 'people',
     contextTab: persisted.contextTab ?? 'files',
     contextOpen: persisted.contextOpen ?? false,
     terminalOpen: persisted.terminalOpen ?? false,
@@ -522,6 +526,7 @@ export const useMingle = create<MingleState>((set, get) => {
       const view = get().view;
       patch({ view: 'settings', settingsReturnView: view === 'settings' ? get().settingsReturnView : view,
         settingsSection: options?.section ?? 'general', settingsProjectId: options?.projectId ?? get().activeProjectId,
+        settingsTeamTab: options?.teamTab ?? 'people',
         dialog: null, sidebarOpen: false });
       window.requestAnimationFrame(() => document.getElementById('settings-title')?.focus());
     },

@@ -1,4 +1,4 @@
-import { ArrowLeft, Menu as MenuIcon, PanelRight, Pencil, SquareTerminal, MoreHorizontal, Square, ListPlus, UserPlus, Trash2 } from 'lucide-react';
+import { ArrowLeft, Menu as MenuIcon, PanelRight, Pencil, SquareTerminal, MoreHorizontal, Square, ListPlus, UserPlus, Users, Trash2 } from 'lucide-react';
 import type { Session } from '@mingle/contracts';
 import { useMingle, useActiveSession, useActiveGroup, useProject } from '../store/store';
 import { api, errorMessage } from '../lib/api';
@@ -76,6 +76,7 @@ export function Header() {
           ) : null}
           {view === 'workspace' ? (
             <>
+              <Button size="sm" variant="secondary" disabled={!project || project.isExample || connection !== 'online'} why={!project ? 'Open a project first' : project.isExample ? 'Choose a Git project to invite teammates' : connection !== 'online' ? 'Reconnect to the server first' : undefined} onClick={() => project && openDialog({ kind: 'project-collaboration', projectId: project.id })}><Users size={14} /> Add teammates</Button>
               {!group ? <Button size="sm" variant="secondary" disabled={!session || connection !== 'online'} why={!session ? 'Select a session first' : connection !== 'online' ? 'Reconnect to the server first' : undefined} onClick={() => session && openDialog({ kind: 'add-agent', sessionId: session.id })}><UserPlus size={14} /> Add agent</Button> : null}
               <IconButton label={terminalOpen ? 'Hide terminal' : 'Show terminal'} active={terminalOpen} onClick={() => toggleTerminal()}><SquareTerminal size={16} /></IconButton>
               <IconButton label={contextOpen ? 'Hide context pane' : 'Show context pane'} active={contextOpen} onClick={() => toggleContext()}><PanelRight size={16} /></IconButton>

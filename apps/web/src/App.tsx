@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useRef, type ReactNode } from 'react';
+import { Suspense, lazy, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useMingle } from './store/store';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
@@ -16,8 +16,43 @@ import { useRetainedPresence } from './lib/motion';
 import { AddAgentDialog } from './components/group/AddAgentDialog';
 import { GroupModeDialog, MemberSettingsDialog } from './components/group/GroupDialogs';
 import { BrowserPopout } from './components/browser/BrowserPopout';
+import { ProjectInviteJoinDialog, ProjectTeammatesDialog } from './components/project-collaboration/ProjectCollaboration';
+
+declare global {
+  interface Window {
+    mingleProjectInvitations?: {
+      onInvitation(callback: (token: string) => void): () => void;
+    };
+  }
+}
+
+interface ActiveInvitation { token: string; sequence: number }
 
 const AgentMap = lazy(() => import('./views/AgentMap'));
+
+function cleanJoinTokenFromLocation(): string | null {
+  const url = new URL(window.location.href);
+  const token = url.searchParams.get('join') ?? new URLSearchParams(url.hash.replace(/^#/, '')).get('join');
+  if (!token) return null;
+  url.searchParams.delete('join');
+  const hashParams = new URLSearchParams(url.hash.replace(/^#/, ''));
+  hashParams.delete('join');
+  url.hash = hashParams.size ? hashParams.toString() : '';
+  window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+  return token;
+}
+
+function tokenFromDeepLink(value: unknown): string | null {
+  const raw = typeof value === 'string' ? value : value && typeof value === 'object' && 'url' in value && typeof value.url === 'string' ? value.url : null;
+  if (!raw) return null;
+  try {
+    const url = new URL(raw, window.location.origin);
+    if (url.protocol === 'mingle:') return url.hostname === 'join' ? url.searchParams.get('token') : null;
+    const isLoopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+    if (url.origin !== window.location.origin && !(isLoopback && ['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname))) return null;
+    return url.searchParams.get('join') ?? new URLSearchParams(url.hash.replace(/^#/, '')).get('join');
+  } catch { return null; }
+}
 
 function Dialogs() {
   const dialog = useMingle((s) => s.dialog);
@@ -38,6 +73,11 @@ function Dialogs() {
     case 'add-agent': content = <AddAgentDialog sessionId={active.sessionId} />; break;
     case 'group-mode': content = <GroupModeDialog groupId={active.groupId} />; break;
     case 'member-settings': content = <MemberSettingsDialog groupId={active.groupId} memberId={active.memberId} />; break;
+    case 'project-collaboration': {
+      const project = useMingle.getState().boot?.projects.find((item) => item.id === active.projectId);
+      content = project ? <ProjectTeammatesDialog project={project} onClose={() => useMingle.getState().closeDialog()} /> : null;
+      break;
+    }
   }
   return <DialogMotionContext.Provider key={key} value={closing}>{content}</DialogMotionContext.Provider>;
 }
@@ -48,8 +88,46 @@ export function App() {
   const theme = useMingle((s) => s.boot?.settings.theme ?? 'dark');
   const sidebarOpen = useMingle((s) => s.sidebarOpen);
   const previousView = useRef(view);
+  const [activeInvitation, setActiveInvitation] = useState<ActiveInvitation | null>(null);
+  const [joinSuspended, setJoinSuspended] = useState(false);
+  const invitationSequence = useRef(0);
 
   useEffect(() => { useMingle.getState().init(); }, []);
+  useEffect(() => {
+    const openInvitation = (token: string | null) => {
+      if (!token) return;
+      cleanJoinTokenFromLocation();
+      setJoinSuspended(false);
+      setActiveInvitation({ token, sequence: ++invitationSequence.current });
+    };
+    const initialToken = cleanJoinTokenFromLocation();
+    openInvitation(initialToken);
+    // Desktop queues cold/preload links in memory until this listener is installed.
+    const unsubscribeInvitation = window.mingleProjectInvitations?.onInvitation((token) => openInvitation(token));
+    const capture = (event: Event) => {
+      const token = tokenFromDeepLink((event as CustomEvent<unknown>).detail);
+      openInvitation(token);
+    };
+    const captureLocation = () => {
+      const token = cleanJoinTokenFromLocation();
+      openInvitation(token);
+    };
+    // The desktop shell forwards second-instance/custom-protocol opens here; tokens remain in React memory only.
+    window.addEventListener('mingle:deep-link', capture);
+    window.addEventListener('mingle:open-url', capture);
+    window.addEventListener('popstate', captureLocation);
+    window.addEventListener('hashchange', captureLocation);
+    return () => {
+      window.removeEventListener('mingle:deep-link', capture);
+      window.removeEventListener('mingle:open-url', capture);
+      window.removeEventListener('popstate', captureLocation);
+      window.removeEventListener('hashchange', captureLocation);
+      unsubscribeInvitation?.();
+    };
+  }, []);
+  useEffect(() => {
+    if (joinSuspended && view !== 'settings') setJoinSuspended(false);
+  }, [joinSuspended, view]);
   useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
   useEffect(() => {
     if (view === 'settings') document.getElementById('settings-title')?.focus({ preventScroll: true });
@@ -108,6 +186,13 @@ export function App() {
         </div>
       </main>
       <Dialogs />
+      {activeInvitation && !joinSuspended ? <ProjectInviteJoinDialog
+        key={activeInvitation.sequence}
+        token={activeInvitation.token}
+        onClose={() => { setJoinSuspended(false); setActiveInvitation(null); }}
+        onOpenAccountSettings={() => { setJoinSuspended(true); useMingle.getState().openSettings({ section: 'account' }); }}
+        onOpenProviderSettings={() => { setJoinSuspended(true); useMingle.getState().openSettings({ section: 'providers' }); }}
+      /> : null}
       <Toasts />
     </div>
   );

@@ -38,6 +38,7 @@ export function SettingsPage() {
   const boot = useMingle((s) => s.boot);
   const settings = boot?.settings;
   const category = useMingle((s) => s.settingsSection);
+  const teamTab = useMingle((s) => s.settingsTeamTab);
   const projectId = useMingle((s) => s.settingsProjectId ?? s.activeProjectId);
   const project = boot?.projects.find((item) => item.id === projectId);
   const setCategory = useMingle.getState().setSettingsSection;
@@ -121,7 +122,7 @@ export function SettingsPage() {
       </nav>
       {error ? <InlineError>{error}</InlineError> : null}
       {category === 'account' ? <AccountSettings settings={settings} /> : null}
-      {category === 'team' ? <TeamWorkspace /> : null}
+      {category === 'team' ? <TeamWorkspace initialTab={teamTab} /> : null}
       {category === 'general' ? <div className="settings-page__section">
         <div className="settings-page__section-head"><h2>New sessions</h2><p>Defaults for your next session. Existing conversations keep their own settings.</p></div>
         <SettingRow title="Provider" description="The agent used when you start a session." htmlFor="st-provider">
