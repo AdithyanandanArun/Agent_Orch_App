@@ -1,0 +1,4 @@
+project_id = "mingle-local"
+
+[functions.project-invitation-delivery]
+verify_jwt = false
