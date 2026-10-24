@@ -57,6 +57,8 @@ Open **Settings → Account → Continue with Google** to sign in and explicitly
 
 ## Team workspaces and linked devices
 
+Open an existing Git project and choose **Add teammates** beside **Add agent** to invite someone by email. The teammate opens the project invitation in Mingle, chooses a local checkout or explicitly clones the repository, and selects their first provider/model. The project agent controls show local and shared teammate agents together. Joining starts no model run. See [project teammates and sender setup](docs/project-teammates.md) for deployment requirements and validation limits.
+
 **Settings → Team workspace** supports team invitations, shared projects, reciprocal device fingerprint linking, selected Claude/Codex/OpenCode agents, shared messages and tasks, availability, recovery approvals, Git bundle transfers, and restricted Git inspection commands. The Agents view maps the reported developers, devices, agents and tasks. Shared recovery activity also appears in its source group conversation.
 
 Remote execution is reserved for exceptional recovery. Automatic suggestions require a recorded local quota/provider failure and exhausted local alternatives. A human may explicitly request recovery of unpublished committed work. The destination owner reviews the exact request and separately consents to provider use, unknown quota when applicable, and progress sharing. Recovery never copies uncommitted edits: commit and review the source work, transfer it through approved Git sync, and prepare a clean destination session first. Push and merge require separate local approvals.

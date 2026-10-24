@@ -36,9 +36,12 @@ import { AccountConnectionSchema, SaveAccountPreferencesSchema } from '@mingle/c
 import { ATTACHMENT_LIMITS, NativeActionCatalogQuerySchema, nativeActionCommands, nativeActionSkills, unsupportedActionNotes } from '@mingle/contracts';
 import type { DistributedWorkspaceService } from './distributed/service.ts';
 import { registerDistributedRoutes } from './distributed/routes.ts';
+import type { ProjectCollaborationService } from './project-collaboration/service.ts';
+import { registerProjectCollaborationRoutes } from './project-collaboration/routes.ts';
 
 export interface Services {
   distributed: DistributedWorkspaceService;
+  projectCollaboration: ProjectCollaborationService;
   account: AccountService;
   setupSignal: AbortSignal;
   config: ServerConfig; store: Store; hub: Hub; workspace: WorkspaceService; runtime: SessionRuntime; tasks: TaskService; handoffs: HandoffService;
@@ -104,6 +107,7 @@ export function buildRouter(s: Services) {
   const routes: Route[] = [];
   const add = (method: string, pattern: string, handler: Handler) => routes.push({ method, ...compile(pattern), handler });
   registerDistributedRoutes(add, s.distributed);
+  registerProjectCollaborationRoutes(add, s.projectCollaboration);
   const touch = () => s.store.touch();
   const param = (ctx: Ctx, key: string) => {
     const value = ctx.params[key]!;

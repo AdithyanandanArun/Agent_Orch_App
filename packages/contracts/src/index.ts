@@ -253,3 +253,5 @@ export * from './teams';
 export * from './remote-execution';
 export * from './remote-git';
 export * from './devices';
+
+export * from './project-collaboration';

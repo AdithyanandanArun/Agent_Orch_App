@@ -1,0 +1,79 @@
+import { rmSync } from 'node:fs';
+import type { SupabaseClient, User } from '@supabase/supabase-js';
+import { expect, it, vi } from 'vitest';
+import { AccountService } from './account/service.ts';
+import { makeRepo, runGit, startTestApp, tmpDir, type TestApp } from './test-utils.ts';
+import { ProjectInvitationCloudFixture } from './project-collaboration-cloud.test-utils.ts';
+
+it('invites and joins through two real HTTP applications, actual PostgreSQL policies and encrypted transport without inference', async () => {
+  const users = [
+    { id: '21000000-0000-4000-8000-000000000001', email: 'leader@example.test' },
+    { id: '21000000-0000-4000-8000-000000000002', email: 'teammate@example.test' },
+  ];
+  const cloud = new ProjectInvitationCloudFixture();
+  const accounts = new Map<string, typeof users[number]>();
+  const apps: TestApp[] = [], repos: string[] = [];
+  let invitationToken = '';
+  try {
+    await cloud.initialize(users);
+    const nativeSnapshot = AccountService.prototype.snapshot;
+    vi.spyOn(AccountService.prototype, 'snapshot').mockImplementation(function (this: AccountService) {
+      const state = nativeSnapshot.call(this);
+      const user = accounts.get(Reflect.get(this, 'dataDir'));
+      return user ? { ...state, configured: true, status: 'signed-in', user: { id: user.id, email: user.email, name: 'Example account' } } : state;
+    });
+    vi.spyOn(AccountService.prototype, 'withAuthenticatedClient').mockImplementation((async function<T>(this: AccountService, work: (client: SupabaseClient, user: User) => Promise<T>) {
+      const user = accounts.get(Reflect.get(this, 'dataDir'));
+      if (!user) throw new Error('Explicit fixture account required');
+      return work(cloud.client(user.id), { ...user, email_confirmed_at: '2026-01-01T00:00:00Z', is_anonymous: false, app_metadata: { providers: ['google'] }, user_metadata: { full_name: 'Example account' } } as User);
+    }) as AccountService['withAuthenticatedClient']);
+    const emailSender = {
+      async status() { return { configured: true }; },
+      async send(_client: SupabaseClient, input: { token: string }) { invitationToken = input.token; return { status: 'sent' as const, message: 'Example sender accepted the fixture invitation; no real email was sent.' }; },
+    };
+    for (const user of users) {
+      const dataDir = tmpDir('mingle-project-join-app-');
+      accounts.set(dataDir, user);
+      apps.push(await startTestApp({ dataDir, env: {}, exampleWorkspace: false, projectCollaboration: { emailSender } }));
+      const repo = makeRepo();
+      repos.push(repo);
+      runGit(repo, 'remote', 'add', 'origin', 'https://github.com/example/collaboration-acceptance.git');
+    }
+    const [leader, teammate] = apps as [TestApp, TestApp];
+    const projectIds: string[] = [];
+    for (let i = 0; i < apps.length; i++) {
+      const created = await apps[i]!.api('POST', '/api/projects', { name: 'Example shared project', path: repos[i] });
+      expect(created.status).toBe(201);
+      projectIds.push(created.json.id);
+    }
+    const invitation = await leader.api('POST', `/api/projects/${projectIds[0]}/collaboration/invitations`, { email: users[1]!.email });
+    expect(invitation.status, JSON.stringify(invitation.json)).toBe(200);
+    expect(invitation.json.delivery.status).toBe('sent');
+    expect(invitationToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect((await leader.api('POST', '/api/project-invitations/preview', { token: invitationToken })).status).toBe(404);
+    const preview = await teammate.api('POST', '/api/project-invitations/preview', { token: invitationToken });
+    expect(preview.status, JSON.stringify(preview.json)).toBe(200);
+    expect(preview.json.repositoryUrl).toContain('collaboration-acceptance');
+    const join = { token: invitationToken, localProjectId: projectIds[1], agent: { provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium', policy: 'supervised' } };
+    const joined = await Promise.all([teammate.api('POST', '/api/project-invitations/join', join), teammate.api('POST', '/api/project-invitations/join', join)]);
+    for (const result of joined) expect(result.status, JSON.stringify(result.json)).toBe(200);
+    expect(joined[0]!.json.sessionId).toBe(joined[1]!.json.sessionId);
+    expect(teammate.app.store.listSessions(projectIds[1])).toHaveLength(1);
+    await leader.app.distributed.transport.sync();
+    const roster = await leader.api('GET', `/api/projects/${projectIds[0]}/collaboration`);
+    expect(roster.status, JSON.stringify(roster.json)).toBe(200);
+    expect(roster.json.agents.some((agent: { accountId: string }) => agent.accountId === users[1]!.id)).toBe(true);
+    expect(roster.json.members.some((member: { accountId: string }) => member.accountId === users[1]!.id)).toBe(true);
+    const links = await cloud.pg.query('SELECT * FROM public.mingle_device_links');
+    expect(links.rows).toHaveLength(2);
+    expect(apps.every(app => app.fake.runs.length === 0)).toBe(true);
+    const retryWithDifferentAgent = await teammate.api('POST', '/api/project-invitations/join', { ...join, agent: { ...join.agent, effort: 'high' } });
+    expect(retryWithDifferentAgent.status).toBe(409);
+    expect(teammate.app.store.listSessions(projectIds[1])).toHaveLength(1);
+  } finally {
+    while (apps.length) await apps.pop()!.cleanup();
+    vi.restoreAllMocks();
+    for (const repo of repos) rmSync(repo, { recursive: true, force: true });
+    await cloud.close();
+  }
+}, 60_000);

@@ -53,6 +53,12 @@ The distributed stage implements the requested scope below. Implementation and f
 
 Git conflict inspection is conservative and may require manual review where textual merging could succeed. The restricted command runner and Git worktrees are not OS sandboxes. See [distributed implementation plan](docs/distributed-implementation-plan.md), [implementation contract](docs/implementation-contract.md), and [acceptance report](docs/distributed-acceptance.md).
 
+## Project-first teammate onboarding
+
+The new project-first implementation adds **Add teammates** beside **Add agent**, email invitation creation, a private-fragment HTTPS join page, installed-app invitation links, checkout/clone and initial-provider selection, and combined local/remote project agent controls. It reuses the distributed services rather than changing remote execution authority. See [project teammates](docs/project-teammates.md), [the API](docs/project-collaboration-api.md) and [desktop link handling](docs/project-invitation-links.md).
+
+The invitation delivery function supports a cloud-configured Gmail sender over implicit TLS or an optional verified-domain Resend sender. No sender credentials ship in the desktop app. The static page and cloud changes require publication/deployment and private sender configuration before real email invitations are usable; local fixture checks alone do not establish live delivery.
+
 ## Cloud and account status
 
 Google sign-in uses Supabase PKCE and verified identity. Account preferences synchronize only an allowlist of portable defaults. The Google consent screen was last verified in Testing mode, so additional testers need deployment-owner access. Provider authentication remains local and separate.
